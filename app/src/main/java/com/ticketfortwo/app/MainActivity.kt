@@ -1,4 +1,4 @@
-package com.ticket2.app
+package com.ticketfortwo.app
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -21,7 +21,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import com.ticket2.app.ui.theme.Ticket2Theme
+import com.ticketfortwo.app.ui.theme.TicketForTwoTheme
 
 /**
  * 双人票 / Ticket² —— 手机屏幕分享 + 1v1 连麦。
@@ -34,7 +34,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContent {
-            Ticket2Theme {
+            TicketForTwoTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     ScaffoldScreen(innerPadding)
                 }
@@ -75,7 +75,7 @@ private fun ScaffoldScreen(innerPadding: PaddingValues) {
 @Preview(showBackground = true)
 @Composable
 private fun ScaffoldScreenPreview() {
-    Ticket2Theme(darkTheme = true) {
+    TicketForTwoTheme(darkTheme = true) {
         ScaffoldScreen(PaddingValues(0.dp))
     }
 }

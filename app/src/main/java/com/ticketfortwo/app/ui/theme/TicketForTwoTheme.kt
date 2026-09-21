@@ -1,4 +1,4 @@
-package com.ticket2.app.ui.theme
+package com.ticketfortwo.app.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
@@ -119,7 +119,7 @@ val LocalDimens = staticCompositionLocalOf { Dimens() }
 val LocalMotion = staticCompositionLocalOf { Motion() }
 
 @Composable
-fun Ticket2Theme(
+fun TicketForTwoTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {

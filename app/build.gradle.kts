@@ -6,11 +6,11 @@ plugins {
 }
 
 android {
-    namespace = "com.ticket2.app"
+    namespace = "com.ticketfortwo.app"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.ticket2.app"
+        applicationId = "com.ticketfortwo.app"
         // 33 是刻意的：backdrop 的 lens 折射与 Highlight 边缘光需要 API 33，
         // 低于 33 库会静默降级成普通半透明层（不报错），整套视觉语言就没了。
         // 屏幕声用的 AudioPlaybackCapture 只要 29，所以不构成下限。
