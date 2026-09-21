@@ -1,0 +1,1138 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>安卓屏幕分享 + 连麦 · 目标效果图（可交互）</title>
+<style>
+/* ============================================================
+   TOKENS
+   来源：Apple / Spotify / Figma 的 DESIGN.md（awesome-design-md）
+   motion 一档全库无来源可抄 → 自定，已在规格表标注
+   ============================================================ */
+:root{
+  /* 三层暗面 + 视频专用纯黑 —— Spotify / Apple */
+  --surface-0:#121212; --surface-1:#181818; --surface-2:#1f1f1f;
+  --video:#000000;                       /* Apple: surface-black 专用于 video player */
+  /* 文本 —— Spotify */
+  --text-hi:#ffffff; --text-mid:#b3b3b3; --text-low:#7a7a7a;
+  /* 强调 —— Apple: 暗底上链接必须换 #2997ff，#0066cc 会消失 */
+  --accent:#2997ff; --accent-solid:#0071e3;
+  /* 语义：发言活跃取 Spotify green；错误/警告/信息取 Spotify 语义色 */
+  --live:#1ed760; --err:#f3727f; --warn:#ffa42b; --info:#539df5;
+  /* 浮层遮罩 —— Figma: 黑 @ ~60% behind video-overlay surfaces */
+  --scrim-video:rgba(0,0,0,.60);
+  --scrim-strong:rgba(0,0,0,.78);
+  /* 玻璃填充：暗底用自有值；亮底用 Apple surface-chip-translucent #d2d2d7 @64% */
+  --glass-fill-d:rgba(255,255,255,.13);
+  --glass-fill-d-2:rgba(255,255,255,.20);
+  --glass-fill-l:rgba(210,210,215,.64);
+  --glass-edge:rgba(255,255,255,.22);
+  --glass-hairline:rgba(255,255,255,.10);
+  --glass-saturate:180%;
+  --glass-blur:22px;
+  /* ---- backdrop / AndroidLiquidGlass 参数（对应库里的真实 API 名） ---- */
+  --lg-blur:18px;          /* blur(radius) */
+  --lg-sat:190%;           /* vibrancy / colorControls(saturation) */
+  --lg-bright:1.06;        /* colorControls(brightness) */
+  --lg-refract:url(#lg-r2);/* lens(refractionHeight, refractionAmount, depthEffect, chromaticAberration) */
+  --lg-rim-w:1px;          /* Highlight(width = 0.5dp，这里按 1px 物理像素显示) */
+  --lg-rim-a:.62;          /* Highlight(alpha) */
+  --lg-depth:10px;         /* lens(depthEffect) → 内阴影强度 */
+  /* Apple 阴影：rgba(0,0,0,.3) 0 8px 8px 量级 + 玻璃内阴影 */
+  --elev-glass:0 8px 24px rgba(0,0,0,.42), 0 1px 0 rgba(255,255,255,.10) inset;
+  --elev-plain:0 8px 8px rgba(0,0,0,.30);
+  /* 圆角 scale —— Apple rounded: xl 16px / pill 9999 */
+  --r-sm:8px; --r-md:12px; --r-lg:16px; --r-xl:20px; --r-card:26px; --pill:9999px;
+  /* 间距 scale —— Apple 4px 基准 4/8/12/16/20/24/32/48/96 */
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px; --sp-6:24px; --sp-8:32px; --sp-12:48px;
+  /* 尺寸 —— Apple button-icon-circular 44×44；icon 22 */
+  --ctl:44px; --ctl-lg:56px; --icon:22px;
+  --hair:1px;
+  /* motion：无 DESIGN.md 来源，自定（弹性按压参考 Starbucks cubic-bezier(.32,2.32,.61,.27)） */
+  --t-fast:120ms; --t-mid:220ms; --t-slow:380ms;
+  --mo:1;                     /* 慢放倍率：1 / 4 = 0.25× */
+  --ease-spring:cubic-bezier(.32,2.32,.61,.27);
+  --ease-std:cubic-bezier(.2,0,0,1);
+  --ease-out:cubic-bezier(0,0,.2,1);
+  /* 页面外壳 */
+  --page:#08080a; --panel:#101013; --panel-2:#16161a; --line:rgba(255,255,255,.08);
+  --ink:#ececef;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+  background:var(--page); color:var(--ink);
+  font-family:system-ui,-apple-system,"Segoe UI","Noto Sans SC","Microsoft YaHei",sans-serif;
+  font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased;
+}
+.app{display:grid; grid-template-columns:296px 1fr; height:100vh; overflow:hidden}
+
+/* ============ 左侧控制台 ============ */
+.side{background:var(--panel); border-right:1px solid var(--line); overflow-y:auto; padding:18px 16px 40px}
+.brand{font-size:15px; font-weight:650; letter-spacing:.2px; margin-bottom:2px}
+.sub{color:var(--text-low); font-size:11.5px; margin-bottom:18px}
+.grp{margin-bottom:20px}
+.grp>h4{margin:0 0 8px; font-size:11px; letter-spacing:.9px; text-transform:uppercase; color:var(--text-low); font-weight:600}
+.row{display:flex; gap:6px; flex-wrap:wrap}
+.btn{
+  appearance:none; border:1px solid var(--line); background:var(--panel-2); color:var(--ink);
+  padding:7px 11px; border-radius:var(--r-sm); font:inherit; font-size:12.5px; cursor:pointer;
+  white-space:nowrap;
+  transition:background var(--t-fast) var(--ease-std), border-color var(--t-fast), transform var(--t-fast) var(--ease-spring);
+}
+.btn:hover{background:#1d1d22}
+.btn:active{transform:scale(.95)}
+.btn[aria-pressed=true],.btn.on{background:var(--accent-solid); border-color:transparent; color:#fff}
+.btn.warn[aria-pressed=true]{background:#8a5a12; border-color:#c98b28}
+.hint{font-size:11px; color:var(--text-low); margin-top:6px; line-height:1.45}
+.steps{list-style:none; margin:0; padding:0; counter-reset:s}
+.steps li{
+  counter-increment:s; position:relative; padding:6px 8px 6px 30px; border-radius:var(--r-sm);
+  font-size:12.5px; cursor:pointer; color:var(--text-mid); transition:background var(--t-fast)
+}
+.steps li:before{
+  content:counter(s); position:absolute; left:7px; top:8px; width:16px; height:16px; border-radius:50%;
+  background:var(--panel-2); border:1px solid var(--line); font-size:10px; display:grid; place-items:center; color:var(--text-low)
+}
+.steps li:hover{background:var(--panel-2)}
+.steps li.cur{background:var(--accent-solid); color:#fff}
+.steps li.cur:before{background:rgba(255,255,255,.22); border-color:transparent; color:#fff}
+.tag{display:inline-block; font-size:10px; padding:1px 6px; border-radius:var(--pill); border:1px solid var(--line); color:var(--text-low); margin-left:4px}
+.legend{font-size:11.5px; color:var(--text-mid); border-top:1px solid var(--line); padding-top:12px; margin-top:4px}
+.legend b{color:var(--ink); font-weight:600}
+.legend p{margin:6px 0 0}
+
+/* ============ 舞台 ============ */
+.stage{overflow:auto; padding:22px 26px 60px; background:
+  radial-gradient(900px 500px at 18% -10%, #14161c 0%, transparent 60%),
+  radial-gradient(700px 460px at 88% 110%, #12151a 0%, transparent 62%), var(--page)}
+.stagehead{display:flex; align-items:baseline; gap:12px; margin-bottom:14px; flex-wrap:wrap}
+.stagehead h2{margin:0; font-size:16px; font-weight:640}
+.stagehead .note{font-size:12px; color:var(--text-low)}
+.devices{display:flex; gap:30px; flex-wrap:wrap; align-items:flex-start}
+.slot{display:flex; flex-direction:column; gap:9px}
+.slot>label{font-size:12px; color:var(--text-mid); display:flex; align-items:center; gap:7px}
+.slot>label i{width:7px; height:7px; border-radius:50%; background:var(--accent); display:inline-block}
+
+/* 机身：393×851，1dp≈1px，外层 frame 按 zoom 收盒子 */
+.frame{position:relative; overflow:hidden}
+.phone{
+  width:393px; height:851px; border-radius:44px; background:#000; padding:5px; position:relative;
+  transform-origin:top left;
+  box-shadow:0 30px 70px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.09);
+}
+.scr{
+  width:100%; height:100%; border-radius:39px; overflow:hidden; position:relative; isolation:isolate;
+  display:flex; flex-direction:column; font-size:15px;
+}
+/* 设备主题：明 / 暗 */
+.scr[data-theme=dark]{background:var(--surface-0); color:var(--text-hi)}
+.scr[data-theme=light]{background:#f5f5f7; color:#1d1d1f}
+.scr[data-theme=light]{--glass-fill-d:var(--glass-fill-l); --glass-edge:rgba(255,255,255,.85); --text-hi:#1d1d1f; --text-mid:#4b4b50; --surface-0:#f5f5f7; --surface-1:#fff; --surface-2:#ececee; --line:rgba(0,0,0,.08)}
+.statusbar{display:flex; justify-content:space-between; padding:11px 22px 2px; font-size:11.5px; letter-spacing:.2px; opacity:.9;
+  position:relative; z-index:26}   /* 必须显式抬层：.video 是 absolute，会盖住 static 的状态栏 */
+.statusbar .r{display:flex; gap:5px; align-items:center}
+.syschip{
+  margin:2px 12px 0; align-self:flex-start; display:inline-flex; gap:6px; align-items:center;
+  font-size:11px; padding:3px 9px; border-radius:var(--pill); background:#1b2a1e; color:#9be0ac; border:1px solid #2f4b36
+}
+.scr[data-theme=light] .syschip{background:#e8f6ea; color:#166a2c; border-color:#bfe3c6}
+.notch{position:absolute; top:7px; left:50%; transform:translateX(-50%); width:104px; height:26px; border-radius:var(--pill); background:#000; z-index:40; pointer-events:none}
+
+/* ============================================================
+   通用玻璃 —— 对齐 Kyant0/backdrop（原 AndroidLiquidGlass）的语言
+   blur(radius) / lens(refractionHeight, refractionAmount, depthEffect, chromaticAberration)
+   Highlight(width .5dp, angle 45°, falloff) / Shadow / InnerShadow
+   硬门槛：blur 需 API 31；lens 与 Highlight 需 API 33；低于则静默降级为半透明层
+   ============================================================ */
+.glass{
+  position:relative; background:var(--glass-fill-d); border-radius:var(--r-card);
+  border:var(--hair) solid var(--glass-hairline); overflow:hidden;
+  /* depthEffect + Shadow：外投影给悬浮感，内阴影给液面厚度 */
+  box-shadow:0 10px 28px rgba(0,0,0,.44), inset 0 0 var(--lg-depth) rgba(255,255,255,.07),
+             inset 0 calc(var(--lg-depth) * -0.4) var(--lg-depth) rgba(0,0,0,.20);
+}
+/* 层1：真 backdrop 采样 = vibrancy 提饱和 + lens 边缘折射（feDisplacementMap） */
+.glass.real{
+  backdrop-filter:blur(var(--lg-blur)) saturate(var(--lg-sat)) brightness(var(--lg-bright)) var(--lg-refract);
+  -webkit-backdrop-filter:blur(var(--lg-blur)) saturate(var(--lg-sat)) brightness(var(--lg-bright)) var(--lg-refract);
+}
+/* 环境底：液态玻璃必须有可折射的内容，纯平暗底会让 lens/vibrancy 完全失效、
+   色散环退化成描边。这里给非视频屏铺一层带高频细节的"壁纸" */
+.wall{position:absolute; inset:0; z-index:0; pointer-events:none;
+  background:
+    radial-gradient(58% 38% at 16% 10%, #2b4d80 0%, transparent 62%),
+    radial-gradient(46% 34% at 86% 24%, #6b2f60 0%, transparent 64%),
+    radial-gradient(66% 44% at 46% 92%, #1e5c53 0%, transparent 66%),
+    radial-gradient(30% 22% at 70% 62%, #7a5320 0%, transparent 70%),
+    linear-gradient(180deg,#0d1017 0%,#12161f 100%)}
+.wall:after{content:""; position:absolute; inset:0; opacity:.55;
+  background-image:radial-gradient(rgba(255,255,255,.13) 1px, transparent 1.4px); background-size:13px 13px}
+.scr[data-theme=light] .wall{
+  background:
+    radial-gradient(58% 38% at 16% 10%, #bcd4f5 0%, transparent 62%),
+    radial-gradient(46% 34% at 86% 24%, #f2c7e2 0%, transparent 64%),
+    radial-gradient(66% 44% at 46% 92%, #bfe8dd 0%, transparent 66%),
+    linear-gradient(180deg,#f4f5f8 0%,#e9ebf0 100%)}
+.scr[data-theme=light] .wall:after{background-image:radial-gradient(rgba(0,0,0,.10) 1px, transparent 1.4px); opacity:.5}
+.body{position:relative; z-index:1}
+
+/* 层2：chromaticAberration —— 折射把边缘拆成青/品红两色，只画在 4dp 环带上，
+   强度必须弱：它是折射的副产物而不是描边 */
+.glass.real:before{
+  content:""; position:absolute; inset:0; border-radius:inherit; pointer-events:none;
+  padding:4px; background:linear-gradient(96deg, rgba(96,224,255,.15), transparent 24%, transparent 76%, rgba(255,116,224,.15));
+  -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite:xor; mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); mask-composite:exclude;
+  opacity:0; transition:opacity var(--t-mid)
+}
+.scr[data-refract="2"] .glass.real:before,.scr[data-refract="3"] .glass.real:before{opacity:1}
+.scr[data-refract="3"] .glass.real:before{padding:7px; background:linear-gradient(96deg, rgba(96,224,255,.30), transparent 24%, transparent 76%, rgba(255,116,224,.30))}
+/* 文字承载卡需要一层暗调 tint 保对比：backdrop-filter 与 background 是分开的，
+   半透明深色底既能压住亮色壁纸又不牺牲透出来的 vibrancy —— 对应库里的 colorControls(brightness)
+   真机上这一步是 AdaptiveLuminanceGlass 按背景亮度自动做的 */
+.glass.card{background:rgba(18,18,24,.36)}
+.scr[data-theme=light] .glass.card{background:rgba(246,246,249,.52)}
+/* 层3：Highlight —— 0.5dp 边缘光，angle=45° 意味着左上最亮、右下收光 */
+.glass:after{
+  content:""; position:absolute; inset:0; border-radius:inherit; pointer-events:none;
+  padding:var(--lg-rim-w);
+  background:linear-gradient(135deg, rgba(255,255,255,var(--lg-rim-a)) 0%, rgba(255,255,255,.10) 30%,
+             rgba(255,255,255,0) 52%, rgba(255,255,255,.16) 76%, rgba(255,255,255,.40) 100%);
+  -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite:xor; mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); mask-composite:exclude;
+}
+/* SurfaceView 不可采样（backdrop 维护者在 #98 亲口确认）：视频上的玻璃退化成实心 scrim，
+   但边缘光仍保留——它不依赖采样，是真机上唯一还能成立的部分 */
+.glass.fake{background:rgba(10,10,12,.72); backdrop-filter:none; -webkit-backdrop-filter:none}
+.glass.fake:before{display:none}
+
+/* ---- API 门槛预览：低于 33 没有 lens/Highlight，低于 31 连 blur 都没有 ---- */
+.scr[data-api="31"] .glass.real{backdrop-filter:blur(var(--lg-blur)) saturate(var(--lg-sat));
+  -webkit-backdrop-filter:blur(var(--lg-blur)) saturate(var(--lg-sat))}
+.scr[data-api="31"] .glass:after,.scr[data-api="31"] .glass.real:before{display:none}
+.scr[data-api="29"] .glass{background:rgba(255,255,255,.10); box-shadow:0 6px 18px rgba(0,0,0,.35)}
+.scr[data-api="29"] .glass.real{backdrop-filter:none; -webkit-backdrop-filter:none}
+.scr[data-api="29"] .glass:after,.scr[data-api="29"] .glass:before{display:none}
+
+/* ---- 折射强度：无 / 弱 / 中 / 强（对应 lens 的 refractionAmount） ---- */
+.scr[data-refract="0"] .glass.real{--lg-refract:none}
+.scr[data-refract="1"] .glass.real{--lg-refract:url(#lg-r1)}
+.scr[data-refract="3"] .glass.real{--lg-refract:url(#lg-r3)}
+/* ---- 无玻璃：Material 3 实心兜底 ---- */
+.scr[data-glass="off"] .glass{background:var(--surface-1); box-shadow:var(--elev-plain); border-color:var(--line)}
+.scr[data-glass="off"] .glass.real{backdrop-filter:none; -webkit-backdrop-filter:none}
+.scr[data-glass="off"] .glass:after,.scr[data-glass="off"] .glass:before{display:none}
+
+/* ============ 控件 ============ */
+.ctl{
+  width:var(--ctl); height:var(--ctl); border-radius:var(--pill); display:grid; place-items:center;
+  border:var(--hair) solid var(--glass-hairline); background:rgba(255,255,255,.14); color:#fff;
+  cursor:pointer; flex:none; transition:transform calc(var(--t-fast)*var(--mo)) var(--ease-spring), background var(--t-fast);
+  box-shadow:0 2px 10px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.22);
+}
+.scr[data-theme=light] .ctl{background:rgba(210,210,215,.64); color:#1d1d1f}
+.ctl svg{width:var(--icon); height:var(--icon); display:block}
+.ctl:active{transform:scale(.90,1.06); box-shadow:0 2px 10px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.55)}
+/* 弹性挤压：demo 里的 squish，横向压扁纵向鼓；按压时内边缘光抬亮 */
+.ctl.on{background:rgba(255,255,255,.92); color:#0a0a0a}
+.ctl.stop{background:#e8382f; border-color:rgba(255,255,255,.28)}
+.ctl.mic-live{background:var(--live); color:#04160a; box-shadow:0 0 0 4px rgba(30,215,96,.18), inset 0 1px 0 rgba(255,255,255,.3)}
+.ctl .dot{position:absolute; margin:-28px 0 0 28px; width:8px; height:8px; border-radius:50%; background:var(--live); box-shadow:0 0 0 3px rgba(30,215,96,.22)}
+.ctl.big{width:var(--ctl-lg); height:var(--ctl-lg)}
+.pill{
+  display:inline-flex; align-items:center; gap:8px; padding:9px 16px; border-radius:var(--pill);
+  font-size:14px; font-weight:600; border:var(--hair) solid var(--glass-hairline); cursor:pointer;
+  background:rgba(255,255,255,.14); color:#fff; position:relative; overflow:hidden;
+  white-space:nowrap;   /* 同 .seg b：pill 圆角 + 文字换行 = 圆盘 */
+  transition:transform calc(var(--t-fast)*var(--mo)) var(--ease-spring), filter var(--t-fast);
+  box-shadow:var(--elev-glass);
+}
+.pill:active{transform:scale(.965,.94)}
+.pill:hover{filter:brightness(1.12)}
+.pill.solid{background:var(--accent-solid); border-color:transparent}
+.pill.ghost{background:transparent; border-color:var(--line); box-shadow:none; color:var(--text-mid)}
+.scr[data-theme=light] .pill{background:rgba(210,210,215,.64); color:#1d1d1f}
+.pill svg{width:18px;height:18px;flex:none}
+
+/* ============ 画面内容（模拟被分享的屏幕）============ */
+.video{position:absolute; inset:0; background:var(--video); overflow:hidden}
+.video .glow{position:absolute; inset:0;
+  background:
+    radial-gradient(120% 55% at 50% 0%, #24304f 0%, #121727 42%, #0a0d16 100%),
+    radial-gradient(46% 26% at 50% 56%, rgba(120,150,255,.30), transparent 72%),
+    radial-gradient(34% 20% at 84% 74%, rgba(255,120,160,.22), transparent 70%)}
+.video.bright .glow{background:
+  radial-gradient(120% 60% at 50% 0%, #cfe3ff 0%, #eaf1f8 46%, #f6f8fb 100%),
+  radial-gradient(46% 26% at 50% 56%, rgba(255,214,120,.55), transparent 72%),
+  radial-gradient(34% 20% at 84% 74%, rgba(120,220,255,.45), transparent 70%)}
+.hud{position:absolute; inset:0; font-size:10.5px; letter-spacing:.5px}
+/* HUD 全部下移到 104dp 以下：顶部条占 36..76，fakelabel 占 82..100 */
+.hud .bar{position:absolute; left:16px; top:118px; width:132px; height:7px; border-radius:var(--pill); background:rgba(255,255,255,.22); overflow:hidden}
+.hud .bar i{display:block; height:100%; width:62%; background:var(--live)}
+.hud .bar.b2{top:130px; width:104px} .hud .bar.b2 i{width:38%; background:var(--warn)}
+.hud .mini{position:absolute; left:16px; top:146px; display:flex; gap:5px}
+.hud .mini span{width:19px; height:19px; border-radius:6px; background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.24); display:grid; place-items:center; font-size:9px; color:rgba(255,255,255,.8)}
+.video.bright .hud .mini span{background:rgba(0,0,0,.08); border-color:rgba(0,0,0,.2); color:#223}
+.hud .score{position:absolute; right:16px; top:116px; text-align:right; color:rgba(255,255,255,.86); font-size:11px}
+.video.bright .hud .score{color:#1b2330}
+.hud .score b{display:block; font-size:22px; font-weight:700; letter-spacing:0}
+.hud .map{position:absolute; right:16px; top:158px; width:62px; height:62px; border-radius:10px;
+  background:rgba(0,0,0,.34); border:1px solid rgba(255,255,255,.22)}
+.hud .map i{position:absolute; width:4px; height:4px; border-radius:50%; background:var(--err)}
+.hud .map i:nth-child(1){left:14px; top:30px} .hud .map i:nth-child(2){left:38px; top:14px; background:var(--warn)}
+.hud .map i:nth-child(3){left:44px; top:44px} .hud .map i:nth-child(4){left:26px; top:26px; background:var(--live); width:6px; height:6px}
+/* 角色与敌人：不要画成大圆圈，会被读成加载转圈 */
+.hud .me{position:absolute; left:50%; top:332px; width:24px; height:32px; margin-left:-12px; border-radius:7px;
+  background:linear-gradient(180deg,#ffffff,#9fb2ff); box-shadow:0 6px 14px rgba(0,0,0,.45)}
+.hud .foe{position:absolute; width:16px; height:16px; border-radius:5px; background:rgba(243,114,127,.9);
+  box-shadow:0 3px 8px rgba(0,0,0,.4); animation:drift 11s var(--ease-std) infinite}
+.hud .foe.f2{background:rgba(255,164,43,.9); animation-duration:14s; animation-delay:-4s}
+.hud .foe.f3{background:rgba(83,157,245,.9); animation-duration:9s; animation-delay:-7s}
+@keyframes drift{
+  0%{transform:translate(0,0)} 25%{transform:translate(-96px,42px)} 50%{transform:translate(74px,-38px)}
+  75%{transform:translate(-44px,-72px)} 100%{transform:translate(0,0)}
+}
+.reticle{position:absolute; width:22px; height:22px; left:50%; top:300px; margin:-11px;
+  border:1.5px solid rgba(255,255,255,.8); border-radius:50%; animation:move 9s var(--ease-std) infinite}
+.reticle:before{content:""; position:absolute; left:50%; top:50%; width:3px; height:3px; margin:-1.5px; border-radius:50%; background:rgba(255,255,255,.9)}
+.reticle:after{content:""; position:absolute; left:50%; top:50%; width:30px; height:30px; margin:-15px;
+  border:1px solid rgba(255,255,255,.22); border-radius:50%}
+.video.bright .reticle{border-color:rgba(20,30,50,.75)}
+@keyframes move{
+  0%{transform:translate(0,0)} 22%{transform:translate(-74px,-96px)} 44%{transform:translate(96px,40px)}
+  66%{transform:translate(-40px,132px)} 84%{transform:translate(120px,-58px)} 100%{transform:translate(0,0)}
+}
+/* 远景剪影：高度必须压在 34dp 左右，之前 17%（≈145dp）让竖条变成了"栅栏" */
+.sky{position:absolute; left:0; right:0; top:calc(47% - 34px); height:34px; opacity:.7;
+  background:
+    repeating-linear-gradient(90deg, rgba(0,0,0,.6) 0 14px, transparent 14px 26px, rgba(0,0,0,.42) 26px 34px, transparent 34px 58px)}
+.video.bright .sky{opacity:.34}
+.horizon{position:absolute; left:0; right:0; top:47%; height:1px; background:linear-gradient(90deg,transparent,rgba(160,190,255,.55),transparent)}
+.video.bright .horizon{background:linear-gradient(90deg,transparent,rgba(60,90,140,.5),transparent)}
+/* 透视地面：真做成游戏地板，别剩一个空洞 */
+.scene{position:absolute; left:-30%; right:-30%; bottom:-4%; height:53%;
+  transform:perspective(320px) rotateX(60deg); transform-origin:bottom center;
+  background:
+    repeating-linear-gradient(90deg, rgba(255,255,255,.10) 0 1px, transparent 1px 46px),
+    repeating-linear-gradient(0deg, rgba(255,255,255,.07) 0 1px, transparent 1px 46px),
+    linear-gradient(180deg, rgba(90,120,255,.10), rgba(0,0,0,.55))}
+.video.bright .scene{background:
+    repeating-linear-gradient(90deg, rgba(20,40,70,.16) 0 1px, transparent 1px 46px),
+    repeating-linear-gradient(0deg, rgba(20,40,70,.12) 0 1px, transparent 1px 46px),
+    linear-gradient(180deg, rgba(120,160,220,.22), rgba(255,255,255,.4))}
+.grain{position:absolute; inset:0; opacity:.05; pointer-events:none;
+  background-image:radial-gradient(rgba(255,255,255,.9) .5px, transparent .6px); background-size:4px 4px}
+/* 内容上的说明条（区分"这是模拟画面"）——顶部条底边 76dp，HUD 从 116dp 起，这里占 82..100 */
+.fakelabel{position:absolute; left:50%; top:82px; transform:translateX(-50%); font-size:10px; color:rgba(255,255,255,.55);
+  background:rgba(0,0,0,.45); padding:2px 9px; border-radius:var(--pill); white-space:nowrap; z-index:5}
+
+/* ============ 屏幕布局原子 ============ */
+.pad{padding:0 20px}
+.stack{display:flex; flex-direction:column}
+.gap2{gap:8px}.gap3{gap:12px}.gap4{gap:16px}.gap6{gap:24px}
+.center{display:grid; place-items:center}
+/* 纵向列里水平居中，同时保留 flex 列的 spacer 行为（.body 上不要用 .center，会退化成 grid 让 spacer 失效） */
+.aimid{align-items:center}
+.aimid>*{max-width:100%}
+.aimid>.glass,.aimid>.pill,.aimid>.row{width:100%}
+.aimid>.row{justify-content:center}
+.spacer{flex:1}
+.h1{font-size:26px; font-weight:700; letter-spacing:-.3px; margin:0}
+.h2{font-size:18px; font-weight:640; margin:0}
+.t-mid{color:var(--text-mid)} .t-low{color:var(--text-low)} .small{font-size:12.5px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:11.5px; letter-spacing:.1px}
+.divider{height:var(--hair); background:var(--line); margin:12px 0}
+.body{flex:1; overflow-y:auto; padding:20px 16px 16px; display:flex; flex-direction:column; gap:12px}
+/* padding-top 20：刘海底边在 33dp，14dp 时正文首行会被刘海压 4dp */
+.card{padding:14px 16px}
+.kv{display:flex; justify-content:space-between; align-items:center; gap:12px; font-size:13.5px}
+.kv>*:first-child{min-width:0}
+.kv .v{color:var(--text-mid); font-size:13px; text-align:right}
+.chip{display:inline-flex; align-items:center; gap:5px; font-size:11px; padding:3px 9px; border-radius:var(--pill);
+  background:rgba(255,255,255,.10); border:var(--hair) solid var(--line); color:var(--text-mid);
+  white-space:nowrap; flex:none}   /* 不给 nowrap+flex:none 会被 .kv 压成一字一行 */
+.chip.ok{color:#9be0ac; background:rgba(30,215,96,.13); border-color:rgba(30,215,96,.3)}
+.chip.bad{color:#ffb4bb; background:rgba(243,114,127,.13); border-color:rgba(243,114,127,.32)}
+.chip.warn{color:#ffd79a; background:rgba(255,164,43,.13); border-color:rgba(255,164,43,.32)}
+.sw{width:44px; height:26px; border-radius:var(--pill); background:rgba(255,255,255,.16); position:relative; cursor:pointer; flex:none; transition:background var(--t-mid)}
+.sw i{position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:#fff; transition:transform calc(var(--t-fast)*var(--mo)) var(--ease-spring)}
+.sw[aria-checked=true]{background:var(--accent-solid)}
+.sw[aria-checked=true] i{transform:translateX(18px)}
+.seg{display:flex; gap:4px; flex-wrap:wrap; padding:4px; border-radius:var(--pill); background:rgba(255,255,255,.07); border:var(--hair) solid var(--line)}
+/* b 必须 nowrap+flex:none：一旦文字换行，pill 圆角会把 80×68 的块渲染成圆盘 */
+.seg b{padding:6px 13px; border-radius:var(--pill); font-weight:500; font-size:12.5px; color:var(--text-mid); cursor:pointer;
+  white-space:nowrap; flex:none; transition:background var(--t-fast)}
+.seg b.on{background:rgba(255,255,255,.16); color:#fff}
+.scr[data-theme=light] .seg b.on{background:#fff; color:#1d1d1f; box-shadow:var(--elev-plain)}
+textarea,input[type=text]{width:100%; background:rgba(0,0,0,.30); color:var(--text-hi); border:var(--hair) solid var(--line);
+  border-radius:var(--r-md); padding:10px 12px; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px; resize:none; line-height:1.4}
+.scr[data-theme=light] textarea{background:rgba(0,0,0,.04)}
+.prog{height:4px; border-radius:var(--pill); background:rgba(255,255,255,.14); overflow:hidden}
+.prog i{display:block; height:100%; background:var(--accent); transition:width var(--t-mid) var(--ease-out)}
+.meter{display:flex; align-items:flex-end; gap:2px; height:16px}
+.meter b{width:3px; border-radius:2px; background:var(--live); opacity:.85; transition:height calc(var(--t-fast)*var(--mo)) linear}
+.muted .meter b{background:var(--text-low)}
+
+/* 悬浮控制岛：绝对定位必须给纵向锚点，否则退到 static position（=屏幕顶部）压住状态栏 */
+.island{
+  position:absolute; left:50%; bottom:24px; transform:translateX(-50%); display:flex; align-items:center; gap:10px;
+  padding:9px 12px; border-radius:var(--pill); z-index:30;
+}
+/* 视频上的浮层卡片：统一锚点，bottom = 岛底 24 + 岛高 64 + 16 间距 */
+.ov-top{position:absolute; top:36px; left:12px; right:12px; z-index:28}
+.ov-card{position:absolute; left:12px; right:12px; bottom:104px; z-index:29}
+.ov-card.hi{bottom:116px}
+.island .sep{width:var(--hair); height:26px; background:rgba(255,255,255,.18)}
+.island .stat{display:flex; flex-direction:column; align-items:flex-start; font-size:10.5px; color:var(--text-mid); line-height:1.25; padding:0 2px}
+.island .stat b{font-size:12.5px; color:#fff; font-weight:640}
+.scr[data-theme=light] .island .stat b{color:#1d1d1f}
+.scr[data-theme=light] .island .stat{color:#5a5a60}
+
+/* 顶部小条 */
+.topbar{position:absolute; top:36px; left:12px; right:12px; display:flex; align-items:center; gap:8px;
+  padding:7px 10px 7px 12px; border-radius:var(--pill); z-index:28; font-size:11.5px}
+.topbar .live{display:inline-flex; align-items:center; gap:5px; color:#ffb4bb}
+.topbar .live i{width:7px; height:7px; border-radius:50%; background:#e8382f; box-shadow:0 0 0 3px rgba(232,56,47,.22); animation:blink 2.4s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
+.topbar .g{flex:1; text-align:right; color:var(--text-mid)}
+
+/* 观众列表小头像 */
+.avatars{display:flex; align-items:center}
+.avatars i{width:24px; height:24px; border-radius:50%; background:linear-gradient(140deg,#5a78ff,#a45aff); display:grid; place-items:center;
+  font-size:10px; font-style:normal; color:#fff; border:2px solid var(--surface-0); margin-left:-7px}
+.avatars i:first-child{margin-left:0}
+
+/* 步骤编号球 */
+.ball{width:34px; height:34px; border-radius:50%; display:grid; place-items:center; font-size:14px; font-weight:700;
+  background:rgba(255,255,255,.12); border:var(--hair) solid var(--glass-hairline); flex:none}
+
+/* 标注层 */
+.annot-on .annot{outline:1.5px dashed var(--accent); outline-offset:2px}
+.annot-on .ring{box-shadow:0 0 0 1.5px dashed var(--accent) !important}
+.dim{position:absolute; z-index:60; font-size:9.5px; color:#fff; background:var(--accent-solid); padding:1px 5px; border-radius:4px; white-space:nowrap; pointer-events:none; display:none}
+.annot-on .dim{display:block}
+
+/* 规格浮层 */
+.insp{position:fixed; z-index:200; max-width:340px; background:#0c0c0f; border:1px solid rgba(255,255,255,.16);
+  border-radius:12px; box-shadow:0 22px 60px rgba(0,0,0,.6); padding:12px 14px; font-size:12px; display:none}
+.insp h5{margin:0 0 6px; font-size:13px}
+.insp pre{margin:6px 0 0; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px; color:#9fd0ff; white-space:pre-wrap; word-break:break-all; line-height:1.5}
+.insp .src{margin-top:8px; padding-top:8px; border-top:1px solid rgba(255,255,255,.1); color:var(--text-low); font-size:11px}
+.insp .x{position:absolute; top:6px; right:9px; cursor:pointer; color:var(--text-low)}
+
+/* 底部规格对照表 */
+.spec{margin-top:34px; border-top:1px solid var(--line); padding-top:20px}
+.spec h3{margin:0 0 4px; font-size:15px}
+.spec p{margin:0 0 14px; color:var(--text-low); font-size:12px}
+table{width:100%; border-collapse:collapse; font-size:12px}
+th,td{text-align:left; padding:7px 9px; border-bottom:1px solid var(--line); vertical-align:top}
+th{color:var(--text-low); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.6px; position:sticky; top:0; background:var(--page)}
+td b{font-weight:600}
+.sw2{display:inline-block; width:11px; height:11px; border-radius:3px; vertical-align:-1px; margin-right:5px; border:1px solid rgba(255,255,255,.2)}
+.warnbox{background:rgba(255,164,43,.08); border:1px solid rgba(255,164,43,.28); border-radius:var(--r-md); padding:10px 12px; font-size:12px; color:#ffd79a; margin-top:12px}
+@media (max-width:1180px){.app{grid-template-columns:1fr}.side{border-right:0;border-bottom:1px solid var(--line);max-height:44vh}}
+</style>
+</head>
+<body>
+<!-- backdrop 的 lens() 在 CSS 里的等价实现：把元素自身 alpha 高斯模糊后当位移图，
+     于是只有边缘发生折射、中心不畸变 —— 探针实测 Edge/Chromium 支持 backdrop-filter: url() -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <filter id="lg-r1" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+    <feGaussianBlur in="SourceAlpha" stdDeviation="6" result="m"/>
+    <feDisplacementMap in="SourceGraphic" in2="m" xChannelSelector="R" yChannelSelector="B" scale="18"/>
+  </filter>
+  <filter id="lg-r2" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+    <feGaussianBlur in="SourceAlpha" stdDeviation="10" result="m"/>
+    <feDisplacementMap in="SourceGraphic" in2="m" xChannelSelector="R" yChannelSelector="B" scale="38"/>
+  </filter>
+  <filter id="lg-r3" x="-25%" y="-25%" width="150%" height="150%" color-interpolation-filters="sRGB">
+    <feGaussianBlur in="SourceAlpha" stdDeviation="15" result="m"/>
+    <feDisplacementMap in="SourceGraphic" in2="m" xChannelSelector="R" yChannelSelector="B" scale="66"/>
+  </filter>
+</defs></svg>
+<div class="app">
+  <!-- ================= 控制台 ================= -->
+  <aside class="side">
+    <div class="brand">安卓屏幕分享 + 连麦</div>
+    <div class="sub">目标效果图 · 可交互 · 非真机 · 2026-09-22</div>
+
+    <div class="grp">
+      <h4>流程剧本</h4>
+      <ol class="steps" id="steps"></ol>
+      <div class="row" style="margin-top:8px">
+        <button class="btn" id="prev">← 上一步</button>
+        <button class="btn on" id="next">下一步 →</button>
+      </div>
+    </div>
+
+    <div class="grp">
+      <h4>对比开关</h4>
+      <div class="row">
+        <button class="btn" id="tTheme" aria-pressed="false">明暗两态</button>
+        <button class="btn" id="tDev" aria-pressed="false">只看房主</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button class="btn warn" id="tSv" aria-pressed="true">SurfaceView 不可采样</button>
+      </div>
+      <div class="hint">开着＝玻璃在视频区退化为 scrim（<b>真机行为</b>）；关掉＝naive 期待（真机做不到，仅用于对比）。</div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn" id="tSlow" aria-pressed="false">0.25× 慢放</button>
+        <button class="btn" id="tAnnot" aria-pressed="false">尺寸标注</button>
+      </div>
+    </div>
+
+    <div class="grp">
+      <h4>lens 折射强度</h4>
+      <div class="seg" id="refractSeg">
+        <b data-v="0">无</b><b data-v="1">弱</b><b class="on" data-v="2">中</b><b data-v="3">强</b>
+      </div>
+      <div class="hint">对应 <code>lens(refractionHeight, refractionAmount)</code>。看条纹在玻璃边缘被扭折的就是它。</div>
+    </div>
+
+    <div class="grp">
+      <h4>系统门槛（backdrop 硬限制）</h4>
+      <div class="seg" id="apiSeg">
+        <b class="on" data-v="33">API 33+</b><b data-v="31">API 31–32</b><b data-v="29">API ≤30</b>
+      </div>
+      <div class="hint">blur 需 31；<b>lens 折射与 Highlight 边缘光需 33</b>；更低版本库会<b>静默降级</b>成普通半透明层，不报错。minSdk 定在 29 就意味着一部分人看不到这个效果。</div>
+    </div>
+
+    <div class="grp">
+      <h4>玻璃总开关</h4>
+      <div class="seg" id="glassSeg">
+        <b class="on" data-v="on">backdrop 玻璃</b><b data-v="off">Material 兜底</b>
+      </div>
+      <div class="hint">关掉＝不用玻璃时的原生 Material 3 实心面，用来对比这套语言到底加了多少分。</div>
+    </div>
+
+    <div class="grp">
+      <h4>显示比例</h4>
+      <div class="seg" id="zoomSeg">
+        <b data-v="1">100%</b><b class="on" data-v="0.85">85%</b><b data-v="0.7">70%</b>
+      </div>
+      <div class="hint">机身按 393×851dp 等比绘制，1dp = 1px。要看真实尺寸就切 100%。</div>
+    </div>
+
+    <div class="grp">
+      <h4>状态注入</h4>
+      <div class="row">
+        <button class="btn" id="tNet" aria-pressed="false">弱网/丢包</button>
+        <button class="btn" id="tMic" aria-pressed="true">观众开麦</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button class="btn" id="tFail" aria-pressed="false">P2P 打洞失败</button>
+      </div>
+      <div class="hint">失败态是纯 P2P 的必然产物，必须一起设计，见方案 §5。</div>
+    </div>
+
+    <div class="legend">
+      <b>怎么读这张图</b>
+      <p>· 点任意界面元素 → 弹出它的规格与 token 出处</p>
+      <p>· 画面区是 <b>CSS 模拟</b>的"游戏画面"，不是真视频；有亮/暗内容切换用于验证 scrim 可读性</p>
+      <p>· 左手机＝房主 Android（MediaProjection 端）；右手机＝观众（网页 / 同一 APK 通用）</p>
+      <div class="row" style="margin-top:10px">
+        <button class="btn" id="tBright" aria-pressed="false">换成亮内容</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ================= 舞台 ================= -->
+  <main class="stage" id="stage">
+    <div class="stagehead">
+      <h2 id="scrTitle">—</h2>
+      <span class="note" id="scrNote">—</span>
+    </div>
+    <div class="devices" id="devices">
+      <div class="slot" id="slotHost"><label><i></i>房主 · Android（分享端）</label><div id="host"></div></div>
+      <div class="slot" id="slotViewer"><label><i style="background:var(--live)"></i>观众 · 手机浏览器 / 同一 APK</label><div id="viewer"></div></div>
+    </div>
+
+    <!-- ============ 规格对照表 ============ -->
+    <section class="spec">
+      <h3>视觉 token 对照表（每一行都能回指到来源）</h3>
+      <p>抽自 <code>awesome-design-md</code> 的 Apple / Spotify / Figma 三份 DESIGN.md。<b>全库 74 份里没有 Discord/Zoom/Meet/YouTube</b>，也<b>没有任何 motion/duration token</b>，静音与网络质量语义色在库里搜 <code>mute|latency|waveform|PiP</code> 零命中 —— 下表凡标"自定"的都是我们自己定的，别误以为有出处。</p>
+      <table id="specTable"></table>
+      <div class="warnbox"><b>换到 backdrop 之后仍然成立的三件事：</b>①&nbsp;<b>SurfaceView 的内容抓不到</b>——backdrop 维护者在 issue #98 亲口确认，haze 文档同一结论，所以玻璃只能盖顶栏/控制岛/弹层/抽屉，视频区之上只有 <code>rgba(0,0,0,.60)</code> scrim；把左上"SurfaceView 不可采样"关掉看到的效果图在真机上<b>不可能出现</b>。②&nbsp;<b>lens 折射与 Highlight 需要 API 33</b>，blur 需要 31，更低版本库会静默降级成普通半透明层——切上面"系统门槛"就能看到差别，这直接决定 minSdk 该定 29 还是 33。③&nbsp;<b>库本身不提供 GlassCard / GlassGroup / LiquidTabRow / GlassCapChip / LiquidPillButton 这些高层组件</b>，它们在仓库的 <code>:app</code> demo 模块里；HaoAI 的 <code>ui/common/Glass.kt</code>(1461 行) 就是照那套语言自建的，这次是<b>搬代码</b>而不是搬规格。<br>字体（SF Pro / SpotifyMixUI / figmaSans）均为专有，不可打进 APK；中文用系统默认。awesome-design-md 的 MIT 只覆盖文档本身，不授予任何站点视觉识别的使用权。</div>
+    </section>
+  </main>
+</div>
+
+<div class="insp" id="insp"><span class="x" onclick="hideInsp()">✕</span><h5 id="iTitle"></h5><div id="iBody"></div><div class="src" id="iSrc"></div></div>
+
+<script>
+/* ==========================================================
+   规格数据：token → 值 → 出处（可回指）
+   ========================================================== */
+const SPECS = [
+  ["视频区底色","var(--video)","<span class='sw2' style='background:#000'></span>#000000","Apple · surface-black，DESIGN.md 明确“专用于 video player 背景”"],
+  ["控制浮层 scrim","var(--scrim-video)","<span class='sw2' style='background:rgba(0,0,0,.6)'></span>黑 @60%","Figma · “Black used at ~60% opacity behind modal / video-overlay surfaces”"],
+  ["三层暗面","--surface-0/1/2","#121212 / #181818 / #1f1f1f","Spotify · 暗面分层"],
+  ["主文 / 次文","--text-hi / --text-mid","#FFFFFF / #B3B3B3","Spotify"],
+  ["暗底强调色","--accent","#2997FF","Apple · on-dark link；#0066CC 在暗底会消失，故必须换"],
+  ["圆形图标按钮","--ctl","44×44dp","Apple · button-icon-circular 44×44px（= 触控最小尺寸，Material 亦要求 48dp 命中区）"],
+  ["半透明 chip","--glass-fill-l","#D2D2D7 @~64%","Apple · surface-chip-translucent（亮态；暗态用白 @13–20%）"],
+  ["按压反馈","scale(.95)","120ms · cubic-bezier(.32,2.32,.61,.27)","缩放来自 Apple；曲线借用库内唯一一条 spring（Starbucks），时长自定"],
+  ["圆角 scale","--r-sm…--r-card","8 / 12 / 16 / 20 / 26 / pill 9999","Apple · rounded.xl 16px、pill 9999px；中间档自定"],
+  ["间距 scale","--sp-1…--sp-12","4 8 12 16 20 24 32 48 96","Apple · 4px 基准"],
+  ["玻璃阴影","--elev-glass","0 8px 24px rgba(0,0,0,.42)","Spotify 阴影量级 rgba(0,0,0,.3) 0 8px 8px 为基准加深"],
+  ["lens 折射","--lg-refract","feDisplacementMap scale 18 / 38 / 66","backdrop <code>lens(refractionHeight, refractionAmount, depthEffect, chromaticAberration)</code>；<b>需 API 33</b>"],
+  ["vibrancy 提饱和","--lg-sat","saturate(190%) brightness(1.06)","backdrop <code>colorControls(brightness,contrast,saturation)</code> / vibrancy"],
+  ["Highlight 边缘光","--lg-rim-w / --lg-rim-a","0.5dp（此处 1px）· angle 45° · alpha .62","backdrop <code>Highlight(width, blurRadius, alpha, HighlightStyle.Default(45))</code>，BlendMode.Plus；<b>需 API 33</b>"],
+  ["色散边",".glass:before 环带","左青 rgba(96,224,255,.30) / 右品红 rgba(255,116,224,.30)","backdrop <code>lens(chromaticAberration)</code> 的视觉等价"],
+  ["depthEffect","--lg-depth","inset 0 0 10px 白 .07 + inset 底部黑 .20","backdrop <code>lens(depthEffect)</code> + <code>InnerShadow</code>"],
+  ["弹性挤压",".ctl:active","scale(.90,1.06) · cubic-bezier(.32,2.32,.61,.27)","backdrop demo 的 squish；曲线借用库内唯一一条 spring（Starbucks）"],
+  ["API 降级","data-api","33+ 全量 / 31 仅 blur / ≤30 纯半透明","backdrop <code>Platform.kt</code>：<code>isRenderEffectSupported()=SDK≥31</code>、<code>isRuntimeShaderSupported()=SDK≥33</code>，不满足时静默 return"],
+  ["发言中 / 活跃","--live","#1ED760","Spotify green（库里只用来表示“正在播放”，我们延伸为“正在说话”）"],
+  ["错误 / 断连","--err","#F3727F","Spotify semantic.error"],
+  ["弱网警告","--warn","#FFA42B","Spotify semantic.warning"],
+  ["信息","--info","#539DF5","Spotify semantic.info"],
+  ["静音状态色","—","白 @14% 底 + 斜杠图标","<b>自定</b>：74 份 DESIGN.md 里没有任何 mute 语义"],
+  ["网络质量条","—","4 格柱 + 阈值变色","<b>自定</b>：库里搜 latency/quality 零命中"],
+  ["动效时长","--t-fast/mid/slow","120 / 220 / 380ms","<b>自定</b>：全库仅 Starbucks 给过 0.2s ease + 一条 cubic-bezier"],
+  ["中文字体","—","系统默认","专有字体不可分发；不打包 MiSans 之类（授权需另查）"],
+];
+
+/* ==========================================================
+   屏幕
+   ========================================================== */
+const ICON = {
+  share:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 16V4m0 0L8 8m4-4 4 4"/><path d="M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></svg>',
+  mic:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/></svg>',
+  mute:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l16 16"/><path d="M9 5a3 3 0 0 1 6 0v5M6 11a6 6 0 0 0 9 5.2M12 17v4"/></svg>',
+  stop:'<svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2.5"/></svg>',
+  copy:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M15 6H6a2 2 0 0 0-2 2v9"/></svg>',
+  gear:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v2m0 14v2M4.2 7.2l1.7 1m12.2 7.6 1.7 1M4.2 16.8l1.7-1m12.2-7.6 1.7-1M3 12h2m14 0h2"/></svg>',
+  chev:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>',
+  wave:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 12h2l2-5 3 12 3-9 2 4h6"/></svg>',
+  pic:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M11 19l8-8M4 9l5 5"/></svg>',
+  pip:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><rect x="12" y="11" width="7" height="6" rx="1.5" fill="currentColor" stroke="none"/></svg>',
+  full:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg>',
+  vol:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 10v4h3l4 3V4L7 7H4z"/><path d="M17 9a4 4 0 0 1 0 6"/></svg>',
+  hook:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 18V8a4 4 0 0 1 8 0v6"/><circle cx="17.5" cy="15" r="2.5"/></svg>',
+  ok:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 13l4 4 10-10"/></svg>',
+  warn:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 4l9 16H3l9-16zM12 11v4M12 17.6v.4"/></svg>',
+  link:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M10 14a4 4 0 0 1 0-5.6l2-2a4 4 0 0 1 5.6 5.6l-1 1"/><path d="M14 10a4 4 0 0 1 0 5.6l-2 2A4 4 0 0 1 6.4 12l1-1"/></svg>',
+  qr:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h6v6H4V4zm2 2v2h2V6H6zm8-2h6v6h-6V4zm2 2v2h2V6h-2zM4 14h6v6H4v-6zm2 2v2h2v-2H6zm9-3h5v3h-5v-3zm-3 0h2v2h-2v-2zm3 4h2v2h-2v-2zm3 0h2v2h-2v-2z"/></svg>',
+  back:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M15 6l-6 6 6 6"/></svg>',
+};
+const $ = s=>document.querySelector(s);
+let S = { theme:'dark', refract:2, api:33, glass:'on', slow:false, annot:false, sv:true, oneDev:false, net:'good', micOn:true, fail:false, bright:false, zoom:.85 };
+
+function statusbar(t){ return `<div class="statusbar"><span>${t||'21:04'}</span><span class="r">
+  <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor"><rect x="0" y="7" width="2.4" height="4" rx="1"/><rect x="3.6" y="5" width="2.4" height="6" rx="1"/><rect x="7.2" y="2.6" width="2.4" height="8.4" rx="1"/><rect x="10.8" y="0" width="2.4" height="11" rx="1"/></svg>
+  <span style="font-size:10.5px">${S.net==='good'?'WiFi':'弱网'}</span>
+  <svg width="22" height="11" viewBox="0 0 22 11" fill="none" stroke="currentColor"><rect x=".6" y=".6" width="17" height="9.8" rx="2.6" opacity=".5"/><rect x="2" y="2" width="${S.net==='good'?12:5}" height="7" rx="1.4" fill="currentColor" stroke="none"/><path d="M19.6 4v3.4" stroke-width="1.6" stroke-linecap="round" opacity=".5"/></svg>
+</span></div>`; }
+const notch = '<div class="notch"></div>';
+
+/* 模拟被分享的画面：CSS 画的假游戏界面 */
+function fakeScreen(label){
+  return `<div class="video ${S.bright?'bright':''}">
+    <div class="glow"></div><div class="sky"></div><div class="horizon"></div><div class="scene"></div>
+    <div class="hud">
+      <div class="bar"><i></i></div><div class="bar b2"><i></i></div>
+      <div class="mini"><span>A</span><span>B</span><span>C</span><span>D</span></div>
+      <div class="score"><b>4,120</b>连击 ×12 · 剩 38</div>
+      <div class="map"><i></i><i></i><i></i><i></i></div>
+      <div class="me"></div>
+      <div class="foe" style="left:26%;top:250px"></div>
+      <div class="foe f2" style="left:70%;top:400px"></div>
+      <div class="foe f3" style="left:56%;top:212px"></div>
+      <div class="reticle"></div>
+    </div>
+    <div class="grain"></div>
+    <div class="fakelabel">${label||'模拟画面 · 非真实视频流'}</div>
+  </div>`;
+}
+/* 玻璃层：受 SurfaceView 开关约束。始终保留 .glass —— 关玻璃时由 [data-glass=off] 降级为实心面，
+   否则控制岛会丢背景浮在画面上看不见 */
+function glassBox(cls, inner){
+  const overVideo = cls.includes('over-video');
+  const mode = S.sv ? (overVideo ? 'fake' : 'real') : 'real';
+  return `<div class="glass ${cls} ${mode}">${inner}</div>`;
+}
+const qBars = (q)=>{ const on = S.net==='good'?q:Math.max(1,q-2); const col = S.net==='good'?'var(--live)':'var(--warn)';
+  let s='<span style="display:inline-flex;align-items:flex-end;gap:1.5px;height:13px" title="自定：库内无网络质量语义">';
+  for(let i=0;i<4;i++){ const h=4+i*3; s+=`<i style="width:2.5px;height:${h}px;border-radius:1px;background:${i<on?col:'rgba(255,255,255,.22)'}"></i>`; }
+  return s+'</span>'; };
+const wave = (live)=>{ let s=`<span class="meter ${live?'':'muted'}" data-t="发言指示｜<b>自定</b>：74 份 DESIGN.md 搜 waveform 零命中">`;
+  const hs = live?[6,12,16,10,14,7,11]:[3,3,3,3,3,3,3];
+  hs.forEach(h=>s+=`<b style="height:${h}px"></b>`); return s+'</span>'; };
+
+/* ---------------- 房主端屏幕 ---------------- */
+const HOST = {
+home(){ return `
+${statusbar('21:04')}${notch}
+<div class="body">
+  <div class="stack gap2" style="margin-top:6px">
+    <div class="h1">分享你的手机</div>
+    <div class="small t-mid">最多 1 位朋友实时观看，并且能和你连麦说话。</div>
+  </div>
+
+  ${glassBox('card', `
+    <div class="stack gap3">
+      <div class="kv"><span class="small t-low">上次连接</span><span class="chip ok">${ICON.ok} 直连 P2P · 148ms</span></div>
+      <div class="divider" style="margin:2px 0"></div>
+      <div class="kv"><span>房间码</span><span class="mono" data-t="房间码｜4 位数字，本地生成，不落任何服务器（一期零信令）">K 7 M 2</span></div>
+      <div class="kv"><span>分享画质</span><span class="v small" data-t="默认 720p30｜自定保守值：持续采集+硬编+上行在多数机型 10–20 分钟后温控降帧（需实测）">720p · 30 帧</span></div>
+      <div class="kv"><span>屏幕声音</span><span class="chip ok">已开</span></div>
+      <div class="kv"><span>麦克风</span><span class="chip ok">已开</span></div>
+    </div>`)}
+  <div class="chip warn" style="align-self:flex-start">${ICON.warn} 全程需要保持亮屏，锁屏会自动停止</div>
+  ${glassBox('card', `
+    <div class="stack gap2">
+      <div class="kv"><span class="h2" style="font-size:14.5px">怎么连上</span><span class="chip">三步</span></div>
+      <div class="divider" style="margin:2px 0"></div>
+      <div class="kv"><span class="small">① 复制邀请链接发给朋友</span><span class="chip">自带接入信息</span></div>
+      <div class="kv"><span class="small">② 朋友回传一条应答链接</span><span class="chip">一次往返</span></div>
+      <div class="kv"><span class="small">③ 你点开，画面就通了</span><span class="chip ok">之后不经服务器</span></div>
+    </div>`)}
+  <div class="spacer"></div>
+  <button class="pill solid" style="justify-content:center;height:52px" data-t="开始分享｜pill 9999 / 高 52dp / accent #0071E3（亮底）· #2997FF（暗底）" id="goBtn">
+    ${ICON.share}<span style="margin-left:2px">开始分享</span>
+  </button>
+  <div class="row" style="justify-content:center">
+    <button class="pill ghost" style="height:38px;font-size:12.5px" data-t="设置入口｜重复语义只留一处（沿用 HaoAI 约定）">${ICON.gear} 设置</button>
+    <button class="pill ghost" style="height:38px;font-size:12.5px" data-t="说明｜一期无账号、无服务器、无历史">怎么用</button>
+  </div>
+</div>`; },
+
+consent(){ return `
+${statusbar('21:05')}${notch}
+<div class="body">
+  <button class="ctl" style="width:36px;height:36px;--icon:18px" data-t="返回｜触控 44dp，视觉 36dp + 8dp 外扩命中区">${ICON.back}</button>
+  <div class="stack gap2">
+    <div class="h1">接下来系统会问你两件事</div>
+    <div class="small t-mid">这两步决定朋友能不能看到、能不能听到。</div>
+  </div>
+  <div class="divider"></div>
+
+  ${glassBox('card', `
+    <div class="stack gap3">
+      <div style="display:flex;gap:12px">
+        <div class="ball">1</div>
+        <div><div class="h2" style="font-size:15.5px">选「整个屏幕」</div>
+        <div class="small t-mid" style="margin-top:3px">Android 14 起弹窗会给你「单个应用」选项。选错了，朋友就只能看到你这一个窗口 —— 这是最常见的“他看不到我画面”原因。</div></div>
+      </div>
+      <div class="divider" style="margin:2px 0"></div>
+      <div style="display:flex;gap:12px">
+        <div class="ball">2</div>
+        <div><div class="h2" style="font-size:15.5px">打开「also share audio」</div>
+        <div class="small t-mid" style="margin-top:3px">不打开就没有游戏声 / 视频声。<b>注意：</b>部分 App 主动关掉了共享（游戏内语音、Discord 里的声音），那种情况只能靠你的麦克风收音。</div></div>
+      </div>
+    </div>`)}
+
+  ${glassBox('card', `
+    <div class="stack gap2">
+      <div class="kv"><span class="h2" style="font-size:14.5px">每次分享都要重新授权一次</span><span class="chip">Android 14+</span></div>
+      <div class="small t-mid">这是系统规则，不是本 App 的设置项，也无法绕过。中途锁屏也会<b>自动停止分享</b>（Android 15 QPR1+）。</div>
+      <div class="chip warn" style="align-self:flex-start">${ICON.warn} 请保持亮屏</div>
+    </div>`)}
+  <div class="spacer"></div>
+  <button class="pill solid" style="justify-content:center;height:52px">我知道了，继续</button>
+</div>`; },
+
+settings(){ return `
+${statusbar('21:05')}${notch}
+<div class="body" style="padding-bottom:0">
+  <div style="display:flex;align-items:center;gap:10px">
+    <button class="ctl" style="width:36px;height:36px;--icon:18px">${ICON.back}</button>
+    <div class="h1" style="font-size:22px">分享设置</div>
+  </div>
+  <div class="divider"></div>
+
+  <div class="small t-low" style="margin-bottom:-4px">画质（上限，不是保证值）</div>
+  ${glassBox('card', `
+    <div class="seg" data-t="画质档｜Web 档位选择器，与玻璃无关" style="margin-bottom:10px">
+      <b data-v="720p30" class="on">720p·30</b><b data-v="1080p30">1080p·30</b><b data-v="1080p60">1080p·60</b>
+    </div>
+    <div class="stack gap2">
+      <div class="kv"><span>码率上限</span><span class="mono" data-t="默认 720p30 → 2.0 Mbps｜Piik 用 3 Mbps 上限做 720p30，我们更保守">2.0 Mbps</span></div>
+      <div class="kv"><span>内容类型</span><span class="v small" data-t="motion｜WebRTC contentHint=motion 语义在原生侧对应降低空间平滑、优先帧率">优先帧率（游戏）</span></div>
+      <div class="chip warn" style="align-self:flex-start">${ICON.warn} 1080p60 在多数机型上会因发热降帧，实测后再当默认</div>
+    </div>`)}
+
+  <div class="small t-low" style="margin:6px 0 -4px">音频</div>
+  ${glassBox('card', `
+    <div class="stack gap3">
+      <div class="kv"><span>屏幕声音<span class="small t-low">（独立轨道，不在本机混音）</span></span>
+        <div class="sw" role="switch" aria-checked="true" data-t="双轨设计｜<b>关键决策</b>：麦克风轨必须走 libwebrtc 的 VOICE_COMMUNICATION 采集链才有 AEC，若在房主端先与屏幕声混流，混音点在 AEC 前/后会直接决定啸叫与否。所以推两条轨、在观众端混合。"><i></i></div></div>
+      <div class="kv"><span>麦克风（连麦用）</span><div class="sw" role="switch" aria-checked="true"><i></i></div></div>
+      <div class="kv"><span>硬件回声消除</span><div class="sw" role="switch" aria-checked="true" data-t="AEC｜libwebrtc 默认在设备上报支持时启用硬件 AEC/NS；啸叫时把 setUseHardwareAcousticEchoCanceler(false) 交给用户。Flyme HAL 有效性待实测"><i></i></div></div>
+      <div class="small t-mid">外放连麦时请把手机音量降到 60% 以下，或让朋友戴耳机。</div>
+    </div>`)}
+
+  <div class="small t-low" style="margin:6px 0 -4px">高级</div>
+  ${glassBox('card', `
+    <div class="stack gap3">
+      <div class="kv"><span>NAT 穿透增强<span class="small t-low">（三目的地 STUN 探测）</span></span><div class="sw" role="switch" aria-checked="true" data-t="借鉴 Piik ADR-0009 optional-nat-prediction：bounded 的三次实际连接尝试预算，不做路由打分"><i></i></div></div>
+      <div class="kv"><span>显示采集边框</span><div class="sw" role="switch" aria-checked="false"><i></i></div></div>
+      <div class="kv"><span>编码偏好</span><span class="v small" data-t="H.264 为唯一主链路｜iOS Safari ≤17 不能解 WebRTC HEVC（WebKit 204283 在 18.0 才落地）；AV1 在 iOS 覆盖率约 33%">H.264<span class="chip" style="margin-left:6px">最稳</span></span></div>
+    </div>`)}
+  <div class="spacer"></div>
+</div>`; },
+
+preparing(){ return `
+${statusbar('21:05')}${notch}
+<div class="body aimid" style="text-align:center;gap:14px">
+  <div class="spacer"></div>
+  <div class="ctl big center" style="width:76px;height:76px;--icon:30px" data-t="生成中｜系统授权已完成，正在采集 ICE 候选">${ICON.link}</div>
+  <div class="stack gap2 center">
+    <div class="h1" style="font-size:21px">正在准备邀请链接</div>
+    <div class="small t-mid mono" data-t="必须等 ICE gathering 完成（约 2–3 秒）才能出链接，否则缺少 srflx 候选，跨网必不通">STUN 探测中… 已收集 4 / 6 个候选</div>
+  </div>
+  <div style="width:236px" class="prog"><i style="width:78%"></i></div>
+  <div class="spacer"></div>
+  ${glassBox('card', `
+    <div class="stack gap3" style="text-align:left">
+      <div class="kv"><span class="h2" style="font-size:14.5px">这一步在做什么</span><span class="chip ok">约 2–3 秒</span></div>
+      <div class="divider" style="margin:0"></div>
+      <div class="kv"><span>采集本机地址候选</span>${ICON.ok?`<span class="chip ok">完成</span>`:''}</div>
+      <div class="kv"><span>向 STUN 探测公网地址</span><span class="chip">进行中</span></div>
+      <div class="kv"><span>裁剪并压成链接</span><span class="chip">待办</span></div>
+      <div class="divider" style="margin:0"></div>
+      <div class="small t-mid" data-t="候选裁剪｜丢弃 IPv6 link-local 与 mDNS .local（跨网无意义且泄隐私），host+srflx 上限 6 条。这决定 SDP 能否塞进 URL">链接长度取决于候选数量：6 条 ≈ 1.9 KB。超了会自动退到二维码方式。</div>
+    </div>`)}
+  <div class="spacer"></div><div class="spacer"></div>
+</div>`; },
+
+invite(){
+  const url='https://share.local/?r=K7M2&d=vESm%2Fk9cQ…%28base64%20SDP%29…%3A5&n=1';
+  const ans='https://share.local/?r=K7M2&resp=vESm%2F…%28等待朋友回传%29…';
+  return `
+${statusbar('21:06')}${notch}
+<div class="body">
+  <div class="stack gap2">
+    <div class="h1">把这条发给朋友</div>
+    <div class="small t-mid">一期零服务器：链接里<b>自带</b>我的视频/音频接收信息。朋友打开后会回给你一条「应答链接」，你再点开就连上了。</div>
+  </div>
+
+  ${glassBox('card', `
+    <div class="small t-low mono" style="word-break:break-all;line-height:1.5">${url}</div>
+    <div class="row gap2" style="margin-top:10px">
+      <button class="pill" style="flex:1;justify-content:center" data-t="复制｜一次点击完成；不做任何 nag 气泡">${ICON.copy} 复制邀请</button>
+      <button class="pill ghost" style="width:44px;justify-content:center" data-t="系统分享面板">${ICON.share}</button>
+    </div>`)}
+
+  <div class="row">
+    <button class="pill ghost" style="flex:1;justify-content:center;height:40px" data-t="二维码互扫｜一期零服务器方案的备选（你没选它，但保留入口）">${ICON.qr} 改用二维码</button>
+    <button class="pill ghost" style="flex:1;justify-content:center;height:40px">${ICON.hook} 局域网直连</button>
+  </div>
+
+  <div class="divider"></div>
+  <div class="small t-low">这一步在等什么</div>
+  ${glassBox('card', `
+    <div class="stack gap2 small">
+      <div class="kv"><span>① 朋友打开链接</span><span class="chip">他的浏览器不需要装任何东西</span></div>
+      <div class="kv"><span>② 他点「把这条发回去」</span><span class="chip">生成应答链接</span></div>
+      <div class="kv"><span>③ 你点开他发回的链接</span><span class="chip">连接建立</span></div>
+      <div class="divider" style="margin:4px 0"></div>
+      <div class="kv"><span class="t-mid">全程</span><span class="chip ok" data-t="信令零服务器｜SDP/ICE 文本经微信搬运，画面与声音只在两机之间直连，不经过任何第三方">无任何服务器</span></div>
+    </div>`)}
+  <div class="chip warn" style="align-self:flex-start">${ICON.warn} 邀请链接里就带着接入信息，别转发给不想让看的人</div>
+  <div class="spacer"></div>
+  <div class="small t-low center">粘贴朋友的应答链接</div>
+  <textarea rows="2" data-t="应答接收区｜一期方案的第二次往返。二期换自建 ~100 行 WebSocket 中继后这一屏会消失"></textarea>
+  <button class="pill solid" style="justify-content:center;height:50px">连接</button>
+</div>`; },
+
+sharing(){
+  const island = glassBox('island over-video', `
+    <button class="ctl" data-t="麦克风｜44dp 圆形 · chip 白@14% + 顶缘高光。静音态=底 @14% + 斜杠（自定：库内无 mute 语义）">${S.micOn?ICON.mic:ICON.mute}</button>
+    <div class="sep"></div>
+    <div class="stat" data-t="延迟读数｜自定。P2P 直连目标区间 100–250ms；必须给出明确读数而不是转圈（借 Piik ADR-0001：每条路都要以有界成功或清晰失败结束）"><b>${S.net==='good'?'148':'372'}ms</b><span>${qBars(S.net==='good'?4:2)} ${S.net==='good'?'直连':'抖动大'}</span></div>
+    <div class="stat" data-t="上行码率"><b>${S.net==='good'?'2.0':'0.9'}M</b><span>720p·30</span></div>
+    <div class="sep"></div>
+    <button class="ctl stop" data-t="停止分享｜#E8382F + 44dp。放在最右，拇指落点；不做二次确认（无 nag）">${ICON.stop}</button>`);
+  const top = glassBox('topbar over-video', `
+    <span class="live"><i></i>正在分享</span>
+    <span class="avatars" data-t="观众头像｜1v1 上限，本期只会有 1 个"><i>友</i></span>
+    <span class="g">${S.micOn?'连麦中 · 他说话你能听到':'麦克风已静音'}</span>`);
+  return `
+${statusbar('21:07')}${notch}
+${fakeScreen('← 朋友看到的就是这一块完整画面（含这个界面本身）')}
+${S.sv?`<div class="dim" style="top:44%;left:50%;transform:translateX(-50%)">视频区＝不可玻璃化（SurfaceView 抓不到）</div>`:''}
+${top}
+${island}
+<div class="ov-card">
+  ${glassBox('card over-video', `
+    <div class="stack gap2">
+      <div class="kv"><span class="h2" style="font-size:14.5px">你的 App 界面也在画面里</span><span class="chip warn">${ICON.warn} 系统行为</span></div>
+      <div class="small t-mid">MediaProjection 镜像整个 display，悬浮窗也算。两个办法：<b>①</b> 用 Android 15 的 <span class="mono">setContentSensitivity()</span> 把自己藏起来；<b>②</b> 接受它——控制岛本来就是给自己看的。这条要真机实测取哪个。</div>
+    </div>`)}
+</div>`; },
+
+call(){
+  return `
+${statusbar('21:08')}${notch}
+${fakeScreen('模拟画面')}
+${glassBox('topbar over-video', `
+  <span class="live"><i></i>分享中</span>
+  <span class="g">${S.micOn?'他在说话':'他已静音'} ${wave(S.micOn)}</span>`)}
+<div class="ov-card hi">
+  ${glassBox('card over-video', `
+    <div class="stack gap3">
+      <div style="display:flex;gap:11px;align-items:center">
+        <div style="width:40px;height:40px;border-radius:50%;background:linear-gradient(140deg,#5a78ff,#a45aff);display:grid;place-items:center;font-size:13px;flex:none">友</div>
+        <div class="stack" style="flex:1">
+          <span style="font-size:14.5px;font-weight:600">阿哲</span>
+          <span class="small t-mid">直连 P2P · ${S.net==='good'?'148ms · 2.0M':'372ms · 0.9M（已降档）'}</span>
+        </div>
+        ${S.micOn?`<span class="chip ok">在说话</span>`:`<span class="chip">静音</span>`}
+      </div>
+      <div class="divider" style="margin:0"></div>
+      <div class="kv"><span>他听到的是</span><span class="small t-mid" data-t="双轨在观众端混合｜屏幕声 + 你的麦克风各一条轨，混音交给观众端，避免房主端 AEC 参考错位">屏幕声 + 你的麦克风</span></div>
+      <div class="kv"><span>你听到的是</span><span class="small t-mid" data-t="必须交给 libwebrtc 自己的 AudioTrack 播放｜改用 MediaPlayer/SoundPool 播就废掉 AEC 参考信号，直接啸叫">他的麦克风（走通话音量）</span></div>
+    </div>`)}
+</div>
+${glassBox('island over-video', `
+  <button class="ctl ${S.micOn?'mic-live':''}" data-t="发言中态｜#1ED760 取自 Spotify green（库里只表示“正在播放”，我们延伸为“正在说话”——这一条要标成自定，别当有出处）">${S.micOn?ICON.mic:ICON.mute}</button>
+  <div class="sep"></div>
+  <div class="stat"><b>${S.net==='good'?'148':'372'}ms</b><span>${qBars(S.net==='good'?4:2)} 直连</span></div>
+  <div class="sep"></div>
+  <button class="ctl stop">${ICON.stop}</button>`)}
+`; },
+
+failed(){
+  return `
+${statusbar('21:09')}${notch}
+<div class="body aimid" style="text-align:center">
+  <div class="stack gap4 center" style="max-width:320px">
+    <div class="ctl big center" style="width:74px;height:74px;--icon:32px;color:var(--err);border-color:rgba(243,114,127,.4);background:rgba(243,114,127,.10)">${ICON.warn}</div>
+    <div class="h1" style="font-size:22px">直连连不通</div>
+    <div class="small t-mid" data-t="失败必须收口｜借 Piik ADR-0001 的原则：每一条尝试过的路都要以“有界成功”或“清晰失败”结束，不能让人对着转圈等">你们两家的网络类型对不上（其中一方在对称 NAT 之后）。纯 P2P 没有中继兜底，<b>这是这套架构的固有代价</b>。</div>
+  </div>
+  <div class="divider" style="width:100%"></div>
+  <div class="stack gap3" style="width:100%;text-align:left">
+    <div class="small t-low">按这个顺序试</div>
+    ${glassBox('card', `
+      <div class="stack gap2">
+        <div class="kv"><span class="h2" style="font-size:14.5px">① 让他连你的热点</span><span class="chip ok">几乎必成</span></div>
+        <div class="small t-mid">两端进同一个网络时只用本机地址就能直连，绕开全部打洞问题。</div>
+      </div>`)}
+    ${glassBox('card', `
+      <div class="stack gap2">
+        <div class="kv"><span class="h2" style="font-size:14.5px">② 他换成 WiFi 或换 5G</span><span class="chip warn">一半情况有效</span></div>
+        <div class="small t-mid">公司/校园网常见防火墙是主因；运营商 4G/5G 走 CGNAT，失败率明显更高。</div>
+      </div>`)}
+    ${glassBox('card', `
+      <div class="stack gap2">
+        <div class="kv"><span class="h2" style="font-size:14.5px">③ 重试一次</span><span class="chip">候选顺序会变</span></div>
+        <div class="small t-mid">重发邀请会重新收集候选，偶尔就能通。</div>
+      </div>`)}
+  </div>
+  <div class="spacer"></div>
+  <button class="pill solid" style="width:100%;justify-content:center;height:50px">重试</button>
+  <button class="pill ghost" style="width:100%;justify-content:center;height:42px" data-t="二期口子｜若失败率实测不可接受，加一个 coturn 只在中断时中继。那时才真的引入“中继”，但只在 P2P 失败后启用">了解「加一个中继兜底」</button>
+</div>`; },
+};
+
+/* ---------------- 观众端屏幕 ---------------- */
+const VIEWER = {
+waiting(){
+  return `
+${statusbar('21:06')}${notch}
+<div class="body aimid" style="text-align:center">
+  <div class="stack gap4 center">
+    <div class="ctl big" style="width:74px;height:74px;--icon:30px">${ICON.pic}</div>
+    <div class="h1" style="font-size:22px">阿哲 正在等你</div>
+    <div class="small t-mid">画面和声音直接在你们两台手机之间传，不经过任何服务器。</div>
+    <div class="chip">房间码 K7M2</div>
+  </div>
+  ${glassBox('card', `
+    <div class="stack gap2">
+      <div class="kv"><span>允许麦克风</span><span class="chip ok">用于连麦</span></div>
+      <div class="kv"><span>自动播放</span><span class="chip">可能要点一次播放</span></div>
+      <div class="small t-mid">浏览器会拦一次声音自动播放，出现黑屏点中间就行。</div>
+    </div>`)}
+  <div class="spacer"></div>
+  <button class="pill solid" style="justify-content:center;height:52px">进入房间</button>
+</div>`; },
+
+answer(){
+  const url='https://share.local/?r=K7M2&resp=vESm%2F…%28base64%20SDP%29…';
+  return `
+${statusbar('21:07')}${notch}
+<div class="body">
+  <div class="stack gap2">
+    <div class="h1" style="font-size:23px">把这条发回给他</div>
+    <div class="small t-mid">一期没有服务器，所以靠你把这条<b>原样发回微信</b>。他点开后就连上了，之后画面不再经过任何中转。</div>
+  </div>
+  ${glassBox('card', `
+    <div class="small t-low mono" style="word-break:break-all;line-height:1.5">${url}</div>
+    <div class="row gap2" style="margin-top:10px">
+      <button class="pill solid" style="flex:1;justify-content:center" data-t="复制回传链接｜整个握手过程约 20–40 秒，且要两次消息往返。二期换 ~100 行 WebSocket 信令中继后这一屏消失">${ICON.copy} 复制并回传</button>
+    </div>`)}
+  <div class="divider"></div>
+  <div class="stack gap2">
+    <div class="small t-low">他那边要做的</div>
+    <div class="kv"><span>① 点开你发的链接</span><span class="chip">一次点击</span></div>
+    <div class="kv"><span>② 连接建立</span><span class="chip ok" data-t="SDP/ICE 文本经微信搬运；媒体流始终两端直连">无服务器参与</span></div>
+  </div>
+  <div class="chip warn" style="align-self:flex-start">${ICON.warn} 建议戴耳机，外放会有回声</div>
+  <div class="spacer"></div>
+  <div class="small t-low center">他在准备中… ${qBars(3)}</div>
+  <div style="width:100%" class="prog"><i style="width:64%"></i></div>
+</div>`; },
+
+watching(){
+  const bar = glassBox('island over-video', `
+    <button class="ctl ${S.micOn?'on':''}" data-t="开麦连麦｜观众端 44dp。浏览器侧 echoCancellation/noiseSuppression/autoGainControl 全开">${S.micOn?ICON.mic:ICON.mute}</button>
+    <div class="sep"></div>
+    <div class="stat" data-t="观众侧读数｜自定；WebRTC 亚秒区间。若 5s 内无首帧必须给明确失败页（纯 P2P 无中继）"><b>${S.net==='good'?'0.15s':'0.42s'}</b><span>${qBars(S.net==='good'?4:2)}</span></div>
+    <div class="sep"></div>
+    <button class="ctl" data-t="音量｜Apple 44dp">${ICON.vol}</button>
+    <button class="ctl" data-t="小窗/全屏｜悬浮小窗用 Document PiP，Safari 可能落到系统播控">${ICON.pip}</button>
+    <button class="ctl" data-t="全屏">${ICON.full}</button>`);
+  const top = glassBox('topbar over-video', `
+    <span class="live" style="color:#9be0ac"><i style="background:var(--live);box-shadow:0 0 0 3px rgba(30,215,96,.2)"></i>直连</span>
+    <span class="g">${S.micOn?'你在说话':'你已静音'}</span>`);
+  return `
+${statusbar('21:08')}${notch}
+${fakeScreen('阿哲 的屏幕 · 直连')}
+${top}
+${bar}
+<div class="ov-card">
+  ${glassBox('card over-video', `
+    <div class="stack gap2">
+      <div class="kv"><span class="h2" style="font-size:14.5px">你听到的是两条独立的声音</span>${wave(S.micOn)}</div>
+      <div class="small t-mid">屏幕声和他人麦克风是<b>分开的两条轨</b>，在你的浏览器里混合。好处：他手机上不用碰混音，回声消除才不会错位；你能单独调音量。</div>
+      <div class="chip" style="align-self:flex-start">720p · 30帧 · ${S.net==='good'?'2.0 Mbps':'0.9 Mbps（自动降档）'}</div>
+    </div>`)}
+</div>`; },
+
+vfailed(){
+  return `
+${statusbar('21:09')}${notch}
+<div class="body aimid" style="text-align:center">
+  <div class="stack gap4 center" style="max-width:300px">
+    <div class="ctl big center" style="width:74px;height:74px;--icon:32px;color:var(--warn);border-color:rgba(255,164,43,.4);background:rgba(255,164,43,.10)">${ICON.warn}</div>
+    <div class="h1" style="font-size:21px">连不上他的手机</div>
+    <div class="small t-mid">网页能打开，<b>不代表画面一定连得通</b>。纯直连在部分网络下会失败，且没有中继兜底。</div>
+    <div class="stack gap2" style="text-align:left;width:100%">
+      <div class="chip">让他确认还在分享中</div>
+      <div class="chip">你换成 WiFi 再点一次链接</div>
+      <div class="chip ok">最稳：连他开的热点</div>
+    </div>
+  </div>
+  ${glassBox('card', `
+    <div class="stack gap2" style="text-align:left">
+      <div class="kv"><span class="h2" style="font-size:14px">连接诊断</span><span class="chip bad">失败于 8.4s</span></div>
+      <div class="divider" style="margin:2px 0"></div>
+      <div class="kv"><span class="small">STUN 公网地址</span><span class="chip ok">已获取</span></div>
+      <div class="kv"><span class="small">本机地址候选</span><span class="chip">3 条</span></div>
+      <div class="kv"><span class="small">连通性检查</span><span class="chip bad">无一对通过</span></div>
+      <div class="small t-mid" data-t="纯 P2P 无中继：失败必须收口成明确诊断，不能让人对着转圈。这些读数直接决定他该换网还是该等">两端都拿到公网地址但配对失败，通常是其中一方在对称 NAT 之后。</div>
+    </div>`)}
+  <div class="spacer"></div>
+  <button class="pill solid" style="width:100%;justify-content:center;height:50px">重试</button>
+</div>`; },
+};
+
+/* ==========================================================
+   剧本
+   ========================================================== */
+const FLOW = [
+  {t:'房主 · 首页',           h:'home',      v:null,        n:'未分享态。房间码本地生成，无账号无服务器。'},
+  {t:'房主 · 系统授权指引',    h:'consent',   v:null,        n:'Android 14+「整屏/单应用」二选一 + 15 起锁屏断流，必须在这里教育，不能塞进设置页。'},
+  {t:'房主 · 分享设置',       h:'settings',  v:null,        n:'画质上限 / 双轨音频 / AEC 开关 / NAT 增强。默认 720p30 保守起步。'},
+  {t:'房主 · 生成邀请',       h:'preparing', v:null,        n:'必须等 ICE gathering 完成（2–3s）再出链接，并裁剪候选以塞进 URL。'},
+  {t:'房主 · 邀请面板',       h:'invite',    v:'waiting',   n:'一期零信令：链接自带 SDP，需朋友回传一条应答链接（两次消息往返）。'},
+  {t:'观众 · 回传应答',       h:'invite',    v:'answer',    n:'这一屏是"不要服务器"的直接代价。二期上 ~100 行信令中继后它消失。'},
+  {t:'房主 · 分享中',         h:'sharing',   v:'watching',  n:'核心屏：控制岛 + 顶部小条 + 明确读数。注意"你的界面也在画面里"这条系统事实。'},
+  {t:'房主 · 连麦中',         h:'call',      v:'watching',  n:'双工。他说话你有指示；下行必须走 libwebrtc 自己的播放路径才有 AEC 参考。'},
+  {t:'房主 · 直连失败',       h:'failed',    v:'vfailed',   n:'纯 P2P 必须设计的体面出口：清晰失败 + 同热点兜底，而不是转圈。'},
+  {t:'观众 · 失败兜底',       h:'sharing',   v:'vfailed',   n:'"网页能打开不代表画面连得通"——这句是 Piik 文档原话，同样适用于我们。'},
+];
+let cur=0;
+function renderSteps(){
+  $('#steps').innerHTML = FLOW.map((f,i)=>`<li data-i="${i}" class="${i===cur?'cur':''}">${f.t}</li>`).join('');
+  [...document.querySelectorAll('#steps li')].forEach(li=>li.onclick=()=>{cur=+li.dataset.i; render();});
+}
+function phone(inner, label){
+  if(!inner) return '';
+  const k=S.zoom;
+  // 有视频层的屏不铺壁纸：那块内容本身就是"被分享的屏幕"
+  const wall = inner.includes('class="video') ? '' : '<div class="wall"></div>';
+  return `<div class="frame" style="width:${393*k}px;height:${851*k}px">
+    <div class="phone" style="transform:scale(${k})"><div class="scr" data-theme="${S.theme}" data-api="${S.api}" data-refract="${S.refract}" data-glass="${S.glass}">${wall}${inner}</div></div></div>`;
+}
+function render(){
+  const f=FLOW[cur];
+  $('#scrTitle').textContent=f.t; $('#scrNote').textContent=f.n;
+  $('#host').innerHTML = phone(HOST[f.h]());
+  $('#viewer').innerHTML = f.v? phone(VIEWER[f.v]()) : '';
+  $('#slotViewer').style.display = f.v? '' : 'none';
+  $('#slotHost').style.display = S.oneDev? '' : '';
+  $('#slotViewer').style.display = (S.oneDev||!f.v)? 'none' : '';
+  $('#devices').classList.toggle('annot-on', S.annot);
+  [...document.querySelectorAll('#devices .scr')].forEach(s=>{
+    s.dataset.theme=S.theme; s.dataset.api=S.api; s.dataset.refract=S.refract; s.dataset.glass=S.glass;});
+  bindWidgets();
+  renderSteps();
+}
+function bindWidgets(){
+  const d=document.getElementById('devices');
+  d.querySelectorAll('.sw').forEach(s=>s.onclick=()=>s.setAttribute('aria-checked', s.getAttribute('aria-checked')==='true'?'false':'true'));
+  d.querySelectorAll('.seg').forEach(g=>g.querySelectorAll('b').forEach(b=>b.onclick=()=>{
+    g.querySelectorAll('b').forEach(x=>x.classList.remove('on')); b.classList.add('on');}));
+  const go=$('#goBtn'); if(go) go.onclick=()=>{cur=1; render();};
+}
+/* 规格浮层 */
+document.addEventListener('click', e=>{
+  const el = e.target.closest('[data-t]');
+  if(!el){ if(!e.target.closest('#insp')) hideInsp(); return; }
+  const r=el.getBoundingClientRect(); const p=$('#insp');
+  const parts=el.dataset.t.split('｜');
+  $('#iTitle').textContent=parts[0];
+  $('#iBody').innerHTML=`<pre>${parts[1]||''}</pre>`;
+  $('#iSrc').innerHTML='点外面关闭。带「自定」标记的项在 DESIGN.md 里没有出处，是我定的。';
+  p.style.display='block';
+  p.style.left=Math.min(r.left, innerWidth-360)+'px';
+  p.style.top=Math.min(r.bottom+8, innerHeight-200)+'px';
+});
+function hideInsp(){ $('#insp').style.display='none'; }
+
+/* 控制台 */
+function tog(id,key,after){ $(id).onclick=()=>{ S[key]=!S[key]; $(id).setAttribute('aria-pressed',S[key]); if(after)after(); render(); }; }
+$('#tTheme').onclick=()=>{ S.theme = S.theme==='dark'?'light':'dark'; $('#tTheme').setAttribute('aria-pressed', S.theme==='light'); render(); };
+$('#tDev').onclick=()=>{ S.oneDev=!S.oneDev; $('#tDev').setAttribute('aria-pressed',S.oneDev); render(); };
+$('#tSv').onclick=()=>{ S.sv=!S.sv; $('#tSv').setAttribute('aria-pressed',S.sv); render(); };
+$('#tAnnot').onclick=()=>{ S.annot=!S.annot; $('#tAnnot').setAttribute('aria-pressed',S.annot); render(); };
+$('#tSlow').onclick=()=>{ S.slow=!S.slow; $('#tSlow').setAttribute('aria-pressed',S.slow); document.documentElement.style.setProperty('--mo', S.slow?4:1); };
+$('#tNet').onclick=()=>{ S.net = S.net==='good'?'bad':'good'; $('#tNet').setAttribute('aria-pressed',S.net==='bad'); render(); };
+$('#tMic').onclick=()=>{ S.micOn=!S.micOn; $('#tMic').setAttribute('aria-pressed',S.micOn); render(); };
+$('#tFail').onclick=()=>{ S.fail=!S.fail; $('#tFail').setAttribute('aria-pressed',S.fail); cur = S.fail?8:6; render(); };
+$('#tBright').onclick=()=>{ S.bright=!S.bright; $('#tBright').setAttribute('aria-pressed',S.bright); render(); };
+function seg(id,key,cast){ const el=$(id); if(!el) return;
+  el.onclick=e=>{ const b=e.target.closest('b'); if(!b)return;
+    [...el.children].forEach(x=>x.classList.remove('on')); b.classList.add('on');
+    S[key]=cast?cast(b.dataset.v):b.dataset.v; render(); }; }
+seg('#refractSeg','refract',Number); seg('#apiSeg','api',Number);
+seg('#glassSeg','glass'); seg('#zoomSeg','zoom',parseFloat);
+$('#next').onclick=()=>{ cur=(cur+1)%FLOW.length; render(); };
+$('#prev').onclick=()=>{ cur=(cur-1+FLOW.length)%FLOW.length; render(); };
+document.addEventListener('keydown',e=>{ if(e.key==='ArrowRight'){cur=(cur+1)%FLOW.length;render();} if(e.key==='ArrowLeft'){cur=(cur-1+FLOW.length)%FLOW.length;render();} });
+
+$('#specTable').innerHTML =
+  '<tr><th>用途</th><th>变量</th><th>取值</th><th>出处</th></tr>' +
+  SPECS.map(r=>`<tr><td><b>${r[0]}</b></td><td class="mono">${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td></tr>`).join('');
+
+/* 支持 #屏号 深链：便于逐屏截图与对比，也便于你直接跳到某一屏 */
+(function initHash(){
+  const h=parseInt((location.hash||'').replace('#',''),10);
+  if(!isNaN(h) && h>=0 && h<FLOW.length) cur=h;
+  const q=new URLSearchParams(location.search);
+  if(q.get('api')) S.api=parseInt(q.get('api'),10);
+  if(q.has('refract')) S.refract=parseInt(q.get('refract'),10);
+  if(q.get('glass')) S.glass=q.get('glass');
+  if(q.get('theme')) S.theme=q.get('theme');
+  if(q.get('zoom')) S.zoom=parseFloat(q.get('zoom'));
+  if(q.get('sv')==='0') S.sv=false;
+})();
+render();
+</script>
+</body>
+</html>

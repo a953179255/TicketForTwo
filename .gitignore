@@ -1,0 +1,36 @@
+# Gradle / AGP
+.gradle/
+build/
+app/build/
+.kotlin/
+
+# 机器专属：含本机 sdk.dir，绝不入库
+# 注意：gitignore 不支持行尾注释，注释必须独立成行
+local.properties
+
+# IDE
+*.iml
+.idea/
+.navigation/
+captures/
+
+# 构建产物与签名
+*.apk
+*.aab
+*.keystore
+!debug.keystore
+release-signing.properties
+keystore.properties
+
+# 系统 / 编辑器
+.DS_Store
+Thumbs.db
+*.swp
+
+# 原生构建中间物
+.externalNativeBuild/
+.cxx/
+
+# 多 agent 共享调试暂存区，勿入库
+.test-work/
+tmp/

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 中文名「双人票」是主名称，场景感强；英文名 TicketForTwo 用于仓库/包名/
+         跨平台标识等 ASCII 场景。曾用 Ticket²（Ticket Squared，数学梗「快乐 ×2」），
+         因上标 ² 在目录名、部分启动器标签、Git 仓库名里会出问题而弃用。 -->
+    <string name="app_name">双人票</string>
+    <string name="app_name_latin">TicketForTwo</string>
+    <string name="app_slogan">两张票，一个厅，管它隔着几座城</string>
+</resources>

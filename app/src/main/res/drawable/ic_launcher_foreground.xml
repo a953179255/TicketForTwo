@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 两张票错开叠放：蓝 + 绿（绿取自"发言中"语义色） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#2997FF"
+        android:pathData="M44,34 L76,34 Q82,34 82,40 L82,56 Q82,62 76,62 L44,62 Q38,62 38,56 L38,40 Q38,34 44,34 Z" />
+    <path
+        android:fillColor="#1ED760"
+        android:pathData="M32,44 L64,44 Q70,44 70,50 L70,66 Q70,72 64,72 L32,72 Q26,72 26,66 L26,50 Q26,44 32,44 Z" />
+    <path
+        android:fillColor="#0D1017"
+        android:fillAlpha="0.35"
+        android:pathData="M31,52 L31,64 M57,52 L57,64" />
+    <path
+        android:strokeColor="#0D1017"
+        android:strokeWidth="1.6"
+        android:strokeLineCap="round"
+        android:pathData="M31,52 L31,64" />
+    <path
+        android:strokeColor="#0D1017"
+        android:strokeWidth="1.6"
+        android:strokeLineCap="round"
+        android:pathData="M65,48 L65,60" />
+</vector>

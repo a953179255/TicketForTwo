@@ -1,0 +1,45 @@
+[versions]
+agp = "9.4.0"
+# AGP 9.0 起内置 Kotlin 支持，不再需要 org.jetbrains.kotlin.android 插件；
+# 这里 kotlin 版本只给 compose 编译器插件与 serialization 插件用
+kotlin = "2.4.10"
+coreKtx = "1.16.0"
+activityCompose = "1.11.0"
+composeBom = "2026.09.00"
+lifecycle = "2.9.1"
+coroutines = "1.10.2"
+serializationJson = "1.9.0"
+# 液态玻璃底座（原 Kyant0/AndroidLiquidGlass，已改名 Backdrop）。
+# 门槛：blur 需 API 31，lens 折射与 Highlight 需 API 33 ⇒ 本项目 minSdk 定 33
+backdrop = "2.0.1"
+# 预编译 libwebrtc（MIT）。含 org.webrtc.ScreenCapturerAndroid
+webrtc = "150.7871.01"
+junit = "4.13.2"
+androidxJunit = "1.2.1"
+espresso = "3.6.1"
+
+[libraries]
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-ui = { group = "androidx.compose.ui", name = "ui" }
+androidx-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+androidx-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
+androidx-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
+androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+androidx-lifecycle-service = { group = "androidx.lifecycle", name = "lifecycle-service", version.ref = "lifecycle" }
+coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "serializationJson" }
+backdrop = { group = "io.github.kyant0", name = "backdrop", version.ref = "backdrop" }
+webrtc = { group = "io.github.webrtc-sdk", name = "android", version.ref = "webrtc" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxJunit" }
+androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espresso" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
