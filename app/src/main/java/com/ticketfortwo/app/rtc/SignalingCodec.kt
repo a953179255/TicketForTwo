@@ -106,7 +106,31 @@ object SignalingCodec {
             keptCandidates = keepIdx.size,
             droppedCandidates = dropped,
             hadCandidates = seenCandidate,
+            typeSummary = candidateTypeBreakdown(lines),
         )
+    }
+
+    /**
+     * 收集到的候选**按类型统计**，例如 `srflx=1 hostPriv=5 mdns=2`。
+     *
+     * 为什么要单独统计：真机第一次实测就出现过"收集 8 秒超时、只出 6 条候选"，
+     * 而跨 NAT 能不能成就取决于**那一条 srflx 到底有没有拿到**。
+     * 只有 kept/had 两个数字时，"打洞失败"和"根本没收集到公网候选"这两种
+     * 完全不同的病看起来是一样的 —— 分不清就只能瞎猜。
+     */
+    private fun candidateTypeBreakdown(lines: List<String>): String {
+        val n = linkedMapOf("srflx" to 0, "hostPub" to 0, "hostPriv" to 0, "relay" to 0, "丢弃" to 0)
+        for (line in lines) {
+            if (!line.startsWith("a=candidate:")) continue
+            when (rankOf(line)) {
+                CandRank.Srflx -> n["srflx"] = n.getValue("srflx") + 1
+                CandRank.HostPublic -> n["hostPub"] = n.getValue("hostPub") + 1
+                CandRank.HostPrivate -> n["hostPriv"] = n.getValue("hostPriv") + 1
+                CandRank.Relay -> n["relay"] = n.getValue("relay") + 1
+                CandRank.Useless -> n["丢弃"] = n.getValue("丢弃") + 1
+            }
+        }
+        return n.filterValues { it > 0 }.entries.joinToString(" ") { (k, v) -> "$k=$v" }
     }
 
     /** 裁剪结果与诊断计数。 */
@@ -115,6 +139,8 @@ object SignalingCodec {
         val keptCandidates: Int,
         val droppedCandidates: Int,
         val hadCandidates: Int,
+        /** 形如 `srflx=1 hostPriv=5 丢弃=2`；空串表示一条候选都没有。 */
+        val typeSummary: String = "",
     )
 
     /** `a=candidate:... 123456 typ ...` 里 priority 是 generation 之后的那个数字。 */

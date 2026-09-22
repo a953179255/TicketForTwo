@@ -190,8 +190,12 @@ class Peer(
             TAG,
             "signal ready kind=${env.kind} kept=${pruned.keptCandidates} " +
                 "dropped=${pruned.droppedCandidates} had=${pruned.hadCandidates} " +
-                "wire=${SignalingCodec.wireLength(env)}ch",
+                "候选[${pruned.typeSummary}] wire=${SignalingCodec.wireLength(env)}ch",
         )
+        // 没有 srflx 的 offer 基本注定跨不了 NAT —— 单独喊出来，别混在正常日志里。
+        if (!pruned.typeSummary.contains("srflx")) {
+            Log.w(TAG, "本次没有收集到任何 srflx 公网候选，跨 NAT 直连大概率失败")
+        }
         listener.onSignalReady(env)
     }
 
