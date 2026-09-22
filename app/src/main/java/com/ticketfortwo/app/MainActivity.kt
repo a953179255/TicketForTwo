@@ -38,7 +38,9 @@ import com.ticketfortwo.app.ui.app.PreparingScreen
 import com.ticketfortwo.app.ui.app.TicketForTwoAppRoot
 import com.ticketfortwo.app.ui.app.ViewerAnswerScreen
 import com.ticketfortwo.app.ui.app.ViewerJoinScreen
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 主流程路由。
@@ -127,9 +129,20 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     var paste by remember { mutableStateOf("") }
     var viewerError by remember { mutableStateOf<String?>(null) }
 
+    // 「上次连接」从磁盘读，**不能在组合期读**：getSharedPreferences() 第一次访问会在
+    // 调用线程上同步等磁盘加载完，而组合发生在主线程。这是它自己就该改的理由。
+    // （今天那次「双人票 isn't responding」经排查**不是**它引起的 —— 当时模拟器
+    //  system_server 占了 118% CPU、内存只剩 400MB，是环境病了。别把两件事混成一条因果。）
+    var lastConnected by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        lastConnected = withContext(Dispatchers.IO) { context.prefs().lastSummary() }
+    }
+
     // 连上才记"上次连接"。失败不留痕迹 —— 否则首页会显示一堆没发生的连接。
     LaunchedEffect(state) {
-        if (state is CallSession.State.Connected) context.prefs().markConnected()
+        if (state is CallSession.State.Connected) {
+            withContext(Dispatchers.IO) { context.prefs().markConnected() }
+        }
     }
 
     // ── 权限链 ────────────────────────────────────────────────────────────
@@ -231,7 +244,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
             backdrop = backdrop,
             onStart = { showConsent = true },
             onJoinViewer = { viewerIntent = true; paste = ""; viewerError = null },
-            lastSummary = context.prefs().lastSummary(),
+            lastSummary = lastConnected,
         )
     }
 

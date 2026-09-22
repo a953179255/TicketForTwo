@@ -14,7 +14,8 @@ import sys
 import time
 
 ADB = r"C:\Android\sdk\platform-tools\adb.exe"
-SERIAL = "emulator-5556"
+# 不写死端口：控制台号是"开机时第一个空位"，不是身份。见 t2device.py 的说明。
+SERIAL = None
 PKG = "com.ticketfortwo.app"
 ACT = f"{PKG}/.MainActivity"
 APK = r"G:\工作台\TicketForTwo\app\build\outputs\apk\debug\app-debug.apk"
@@ -94,10 +95,15 @@ def wait_for(pred, tries=12, delay=0.8):
 
 
 def main():
+    global SERIAL
     ap = argparse.ArgumentParser()
     ap.add_argument("--reinstall", action="store_true")
     args = ap.parse_args()
     os.chdir(os.path.dirname(os.path.abspath(__file__)) + "/..")
+    sys.path.insert(0, os.path.join(os.getcwd(), "scripts"))
+    import t2device
+    SERIAL = t2device.resolve()
+    print(f"== 目标设备：{SERIAL}（按 AVD 名 t2test 解析）==")
 
     if args.reinstall:
         print("== install ==")
@@ -184,14 +190,17 @@ def main():
     alive = sh(ADB, "-s", SERIAL, "shell", "pidof", PKG).stdout.strip()
     print("== 进程存活:", alive or "已崩溃")
 
-    # 把邀请链接落到 viewer/invite.txt，便于下一步直接喂给浏览器（含 token，勿入库）
+    # 把邀请链接落到 .dev/invite.txt，便于下一步直接喂给浏览器。
+    # 必须在 .dev/ 而不是 viewer/：viewer/public 是会被打包上传的站点根，
+    # 这条链接里带着真实的 SDP 与候选地址。
     s = ui()
     shot("05-invite")
     urls = [n["text"] for n in nodes(s) if n["text"].startswith("https://share.local/")]
     if urls:
-        path = os.path.join(os.getcwd(), "viewer", "invite.txt")
+        os.makedirs(os.path.join(os.getcwd(), ".dev"), exist_ok=True)
+        path = os.path.join(os.getcwd(), ".dev", "invite.txt")
         open(path, "w", encoding="utf-8").write(urls[0])
-        print("== invite 已写入 viewer/invite.txt (%d 字符)" % len(urls[0]))
+        print("== invite 已写入 .dev/invite.txt (%d 字符)" % len(urls[0]))
     else:
         print("== 界面上没找到邀请链接")
         print("   界面文本：", [n["text"][:40] for n in nodes(s) if n["text"]][:12])

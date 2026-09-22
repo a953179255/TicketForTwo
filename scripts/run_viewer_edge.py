@@ -24,13 +24,18 @@ import time
 
 EDGE = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 ADB = r"C:\Android\sdk\platform-tools\adb.exe"
-SERIAL = "emulator-5556"
+SERIAL = None  # 运行时按 AVD 名解析，不写死端口，见 t2device.py
 ACT = "com.ticketfortwo.app/.MainActivity"
-INVITE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "viewer", "invite.txt")
-REPORTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "viewer", "reports.jsonl")
+INVITE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".dev", "invite.txt")
+REPORTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".dev", "reports.jsonl")
 
 
 def main():
+    global SERIAL
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import t2device
+    SERIAL = t2device.resolve()
+    print(f"== 目标设备：{SERIAL}（按 AVD 名 t2test 解析）==")
     wait = int(sys.argv[1]) if len(sys.argv) > 1 else 30
     url = open(INVITE, encoding="utf-8").read().strip()
     m = re.match(r"https://share\.local/(#t2=.+)", url)

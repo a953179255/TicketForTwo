@@ -31,14 +31,19 @@ fi
 echo "已在后台启动 t2test，日志：$LOG"
 
 ADB='/c/Android/sdk/platform-tools/adb.exe'
-echo "等待开机（上次实测约 97 秒）..."
-for _ in $(seq 1 90); do
-  if "$ADB" -s emulator-5556 shell getprop sys.boot_completed 2>/dev/null | grep -q 1; then
-    echo "t2test 已就绪：emulator-5556"
-    exit 0
+HERE="$(cd "$(dirname "$0")" && pwd)"
+echo "等待开机（冷启动实测 39–97 秒波动）..."
+# 轮询**按 AVD 名**问，不问固定端口：t2test 可能拿到 5554（edgeai 没在跑时），
+# 写死 5556 会既等不到、又在别的机器上误连一台。
+for _ in $(seq 1 120); do
+  if SERIAL=$(python "$HERE/t2device.py" 2>/dev/null) && [ -n "$SERIAL" ]; then
+    if [ "$("$ADB" -s "$SERIAL" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
+      echo "t2test 已就绪：$SERIAL"
+      exit 0
+    fi
   fi
   sleep 4
 done
-echo "超时：sys.boot_completed 未变 1，查看 $LOG" >&2
+echo "超时：没等到 t2test 开机完成，查看 $LOG" >&2
 tail -20 "$LOG"
 exit 1

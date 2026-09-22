@@ -2,7 +2,7 @@
 """开发用静态服务器 + 统计回传接收端。
 
 浏览器页带 ?report=1 时会把 WebRTC 统计 POST 到 /report，这里逐行落到
-viewer/reports.jsonl，便于在无头/半自动场景下取证（内置浏览器拿不到麦克风，
+.dev/reports.jsonl，便于在无头/半自动场景下取证（内置浏览器拿不到麦克风，
 所以连麦验证必须走真 Chromium）。
 
 用法： python scripts/dev_viewer_server.py [port]
@@ -12,8 +12,12 @@ import os
 import sys
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
-ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "viewer")
-OUT = os.path.join(ROOT, "reports.jsonl")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+# 只提供 public/ —— 它就是"可部署的站点根"，与 Qoder Sites 的 webDirectory 同一个口径。
+# 调试产物（token、统计）一律落在 .dev/，绝不进站点目录，否则会被打包上传。
+ROOT = os.path.join(_HERE, "..", "viewer", "public")
+OUT = os.path.join(_HERE, "..", ".dev", "reports.jsonl")
+os.makedirs(os.path.dirname(OUT), exist_ok=True)
 
 
 class Handler(SimpleHTTPRequestHandler):
