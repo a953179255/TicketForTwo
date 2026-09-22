@@ -177,12 +177,15 @@ object CallSession {
 
             override fun onIceState(s: PeerConnection.IceConnectionState) {
                 note("ice=$s")
+                // DISCONNECTED 不在这里判死：Peer 会先等自愈、再 restartIce，
+                // 最终失败通过 onFailure 上来。
                 _state.value = when (s) {
                     PeerConnection.IceConnectionState.CONNECTED,
                     PeerConnection.IceConnectionState.COMPLETED -> State.Connected
-                    PeerConnection.IceConnectionState.FAILED,
+                    PeerConnection.IceConnectionState.FAILED ->
+                        State.Failed("直连失败：一方可能在对称 NAT 之后")
                     PeerConnection.IceConnectionState.DISCONNECTED ->
-                        State.Failed("直连失败：$s（一方可能在对称 NAT 之后）")
+                        State.WaitingPeer("连接抖动，正在尝试自愈")
                     else -> _state.value
                 }
             }

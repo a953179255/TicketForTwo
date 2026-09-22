@@ -47,6 +47,9 @@ class Peer(
 
     /** 等 ICE 收集完成的兜底时限；超时就带着已收到的候选出链接。 */
     private val gatheringTimeoutMs = 8_000L
+
+    /** 断连后的自愈宽限期：先等它自己回来，再 restart，再等一轮才判死。 */
+    private val graceMs = 8_000L
     private var gatheringTimer: Runnable? = null
     private var gatheringDone = false
     private var pendingLocalSdp: SessionDescription? = null
@@ -73,6 +76,7 @@ class Peer(
     }
 
     fun close() {
+        cancelGrace()
         gatheringTimer?.let { handler.removeCallbacks(it) }
         gatheringTimer = null
         runCatching { controlChannel?.close() }
@@ -203,6 +207,45 @@ class Peer(
     override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
         Log.i(TAG, "ice=$state")
         listener.onIceState(state)
+        // DISCONNECTED 不等于死亡：真实网络切换（WiFi↔蜂窝、NAT 映射过期）后，
+        // 已协商好的 candidate pair 常常几十秒内自己恢复。先给它宽限期。
+        //
+        // 这里**故意不调 restartIce()**：ICE restart 会改 ufrag/pwd，必须把新 offer
+        // 再送一次给对端才生效，而一期是零服务器架构、链接靠人工复制粘贴，
+        // 没有通道能投递这份新 offer（DataChannel 本身就在这条将断的连接上）。
+        // 调它只会假装在重连。等有了信令通道（二期 WebSocket 中继）再启用。
+        if (state == PeerConnection.IceConnectionState.DISCONNECTED) {
+            scheduleGrace()
+            return
+        }
+        if (state == PeerConnection.IceConnectionState.CONNECTED ||
+            state == PeerConnection.IceConnectionState.COMPLETED
+        ) {
+            cancelGrace()
+        }
+    }
+
+    private var graceJob: Runnable? = null
+
+    private fun scheduleGrace() {
+        if (graceJob != null) return
+        val job = Runnable {
+            graceJob = null
+            val now = pc?.iceConnectionState()
+            if (now != PeerConnection.IceConnectionState.CONNECTED &&
+                now != PeerConnection.IceConnectionState.COMPLETED
+            ) {
+                Log.w(TAG, "ICE 未在 ${graceMs}ms 内自愈")
+                listener.onFailure("直连中断且未能自愈。一期没有信令通道，无法自动重连，请重新发起分享。")
+            }
+        }
+        graceJob = job
+        handler.postDelayed(job, graceMs)
+    }
+
+    private fun cancelGrace() {
+        graceJob?.let { handler.removeCallbacks(it) }
+        graceJob = null
     }
 
     override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
