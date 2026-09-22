@@ -6,4 +6,9 @@
     <string name="app_name">双人票</string>
     <string name="app_name_latin">TicketForTwo</string>
     <string name="app_slogan">两张票，一个厅，管它隔着几座城</string>
+
+    <string name="notif_channel">屏幕分享</string>
+    <string name="notif_sharing_title">正在分享给朋友</string>
+    <string name="notif_sharing_text">对方能看到你的屏幕，点停止立即结束</string>
+    <string name="notif_stop">停止</string>
 </resources>

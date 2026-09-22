@@ -194,11 +194,69 @@ M0 只做三件事，不写任何产品代码、不做 UI。
 
 **尺寸风险（未实测，属于 M0 要验的第一批）：**4G+WiFi 双栈下 SDP 可能到 2–2.5KB，base64 后约 3KB，作为 URL 塞进微信消息在长度上是可行的，但需要实测确认：① 候选裁剪到 6 条以内是否还能保证跨网连通；② 微信/QQ 对超长文本链接是否会自动截断或折叠成卡片（折叠后 hash 段可能被丢掉）。若②不成立，就自动退到"二维码互扫"那条备选路（效果图里已保留入口）。
 
-## 10. 效果图
+## 10. M0 闸门实测结果（2026-09-22，t2test 模拟器 ↔ 宿主浏览器）
 
-`mockup/index.html` —— 单文件零依赖，10 个屏（房主 6 / 观众 4），`#0`…`#9` 深链到指定屏。
+**① 手机采集 → 直连 → 浏览器出图：通过。** 硬数据：
 
-本地看：`cd mockup && python -m http.server 8791 --bind 127.0.0.1`，开 http://127.0.0.1:8791/index.html
+| 指标 | 实测 |
+| --- | --- |
+| 采集几何 | display 1080×2400 → capture **810×1800@30**（scale 0.75，取偶） |
+| 浏览器解码 | `framesDecoded=1472`，`frameWidth×Height=810×1800`（与采集一致） |
+| 播放状态 | `readyState=4`，`currentTime=29.97s`，画面确实在动 |
+| 传输 | candidate-pair `succeeded`，**RTT 2ms**，抖动缓冲 **8.6ms**，收 774KB |
+| 质量事件 | `nack=0`、`pli=0`（同机回环，无拥塞） |
+| 信令链长 | offer token **1939 字符**（SDP 含 10 条候选，裁剪到 6） |
+
+**② 连麦（双向语音）：未验证，被测试环境挡住。** 内置浏览器 `getUserMedia` 返回
+`NotAllowedError: Permission denied`，因此浏览器侧没有音频上行、App 也没收到远端音轨。
+**不是代码缺陷**——viewer 的降级路径按设计生效（拿不到麦克风就隐藏按钮、继续可看）。
+下一步用**第二个模拟器当观众端 APK** 来验，那本来就是产品的真实路径。
+
+**③ 打洞成功率：只覆盖了"同机模拟器↔宿主浏览器"这一种组合，成功。**
+跨运营商 / CGNAT / 真实两地的数据仍然为零，必须等真机或两台异地设备。
+
+### 过程中修掉的两个真缺陷
+
+1. **前台服务竞态**（崩溃）：`startForegroundService()` 是异步的，在它真正 `startForeground()`
+   之前就调 `getMediaProjection()`，Android 14+ 直接抛
+   `SecurityException: Media projections require a foreground service of type FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION`。
+   ⇒ 修成 `ShareService.awaitReady()`：服务上报已进入前台后上层才开始采集。
+   **方案 §3 第 4 条原来只写"先授权再起服务再取 projection"，不够，顺序之外还要等就绪。**
+2. **offer 里没有候选**（静默失效，最阴的一种）：`emit()` 取了 `onCreateSuccess`
+   回调给的 SDP，那是**收集前**的裸 SDP。表现为"链长 1554 字符看着挺正常，但
+   `kept=0`"，永远连不通。⇒ 改读 `pc.localDescription`。
+   教训：信令负载必须有 `kept/dropped/had` 这类**内容计数**，只看长度会被骗。
+
+### 实测推翻的一条原方案假设
+
+**这个 AAR 没有公开的 Java API 能注入外部 PCM**，所以"屏幕声做成独立第二条音频轨、
+在观众端混合"做不到。`JavaAudioDeviceModule.Builder` 里那个 `setAudioBufferCallback`
+是 fork 私有、GitHub 上搜不到任何文档的钩子，不能当架构地基。
+⇒ 屏幕声降级为独立 spike，三条候选路线待验：① 试 `setAudioBufferCallback`；
+② 屏幕声走 DataChannel（MediaCodec Opus → 浏览器 WebCodecs 解码，Safari 覆盖有风险）；
+③ 兜底是"外放让麦克风收"（零成本，但 NS 会当噪声压掉一部分）。
+双轨设计**仅对麦克风轨保留**（它必须走 VOICE_COMMUNICATION 才有 AEC）。
+
+### 其它实测事实
+
+- 模拟器 `hwAec=false hwNs=false`：不报硬件回声消除，会退回 libwebrtc 的 AEC3。真机需另测。
+- **Android 16 的投屏授权对话框默认落在「Share one app」**，要用户主动展开下拉改成
+  「Share entire screen」；改完后确认按钮文案从 **Next 变成「Share screen」**。
+  授权指引那屏的文案要照这个写。
+- MediaProjection 对话框是**系统进程**的窗口，`am force-stop` 我们的 App 不会关掉它，
+  残留对话框会让下一次流程错位。
+- 单测在 `G:\工作台` 这个非 ASCII 路径下跑不起来：`gradlew testDebugUnitTest` 抛
+  `ClassNotFoundException`，但 classpath 里确实带着编译产物目录。原因未定位。
+  ⇒ 用 `scripts/run-unit-tests.sh`（JUnitCore 直跑已编译 class）代替，等价。
+- 信令格式跨语言字节级校验：`scripts/check-signaling-interop.sh`，
+  Kotlin↔浏览器同源 JS 双向 sha256 比对。
+
+
+## 11. 效果图
+
+`docs/mockup/index.html` —— 单文件零依赖，10 个屏（房主 6 / 观众 4），`#0`…`#9` 深链到指定屏。
+
+本地看：`cd docs/mockup && python -m http.server 8791 --bind 127.0.0.1`，开 http://127.0.0.1:8791/index.html
 
 可交互：点任意元素弹规格与 token 出处；可切 SurfaceView 采样限制、lens 折射四档、系统门槛（API 33+/31/≤30 降级预览）、玻璃/Material 兜底、明暗两态、0.25× 慢放、尺寸标注、弱网/失败注入、亮暗画面、显示比例。
 

@@ -34,3 +34,7 @@ Thumbs.db
 # 多 agent 共享调试暂存区，勿入库
 .test-work/
 tmp/
+
+# 本地调试产物：一次性邀请链接（含接入信息），不入库
+viewer/invite.txt
+viewer/ui_dump.xml
