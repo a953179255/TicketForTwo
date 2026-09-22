@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -33,6 +34,7 @@ import com.ticketfortwo.app.rtc.RtcEngine
 import com.ticketfortwo.app.ui.glass.GlassPanel
 import com.ticketfortwo.app.ui.theme.GlassDimens
 import com.ticketfortwo.app.ui.theme.Ink
+import kotlinx.coroutines.delay
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoTrack
@@ -126,14 +128,28 @@ fun CallScreen(
         } else {
             // 首帧没到之前这块区域是纯黑 —— 用户分不清"对方画面全黑"和"卡住了"，所以必须有等待提示。
             var firstFrame by remember(remoteTrack) { mutableStateOf(false) }
+            // 语音模式：连上 2.5 秒还没有视频轨 → 对方开的是"仅语音"。
+            // 轨一到就立刻撤掉这个判断（effect 以 remoteTrack 为 key 重启）。
+            var voiceMode by remember { mutableStateOf(false) }
+            LaunchedEffect(remoteTrack) {
+                if (remoteTrack == null) {
+                    delay(2_500)
+                    voiceMode = true
+                } else {
+                    voiceMode = false
+                }
+            }
             VideoLayer(
                 track = remoteTrack,
                 modifier = Modifier.fillMaxSize(),
                 onLabel = "remote",
                 onFirstFrame = { firstFrame = true },
             )
-            if (!firstFrame) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            when {
+                voiceMode -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("语音对话中（对方未分享画面）", fontSize = 13.sp, color = Ink.TextMid)
+                }
+                !firstFrame -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("等待对方画面…", fontSize = 13.sp, color = Ink.TextMid)
                 }
             }

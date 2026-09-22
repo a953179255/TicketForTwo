@@ -39,12 +39,18 @@ class ShareService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        val notification = buildNotification()
+        // 类型由启动方给：带画面走 mediaProjection，仅语音走 microphone ——
+        // 两种都必须在 manifest 里声明，传了没声明的类型直接 SecurityException。
+        val type = intent?.getIntExtra(
+            EXTRA_FGS_TYPE,
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION,
+        ) ?: ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+        val notification = buildNotification(type)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIF_ID,
                 notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION,
+                type,
             )
         } else {
             startForeground(NOTIF_ID, notification)
@@ -58,7 +64,7 @@ class ShareService : Service() {
         return START_STICKY
     }
 
-    private fun buildNotification(): Notification {
+    private fun buildNotification(type: Int): Notification {
         val open = PendingIntent.getActivity(
             this, 0,
             Intent(this, MainActivity::class.java),
@@ -69,10 +75,13 @@ class ShareService : Service() {
             Intent(ACTION_STOP).setPackage(packageName),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        val voiceOnly = type == ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(getString(R.string.notif_sharing_title))
-            .setContentText(getString(R.string.notif_sharing_text))
+            .setContentText(
+                getString(if (voiceOnly) R.string.notif_voice_text else R.string.notif_sharing_text)
+            )
             .setOngoing(true)
             .setContentIntent(open)
             .addAction(0, getString(R.string.notif_stop), stop)
@@ -103,6 +112,7 @@ class ShareService : Service() {
         private const val CHANNEL_ID = "share"
         private const val NOTIF_ID = 1001
         const val ACTION_STOP = "com.ticketfortwo.app.action.STOP_SHARE"
+        const val EXTRA_FGS_TYPE = "com.ticketfortwo.app.extra.FGS_TYPE"
 
         private val _foregroundReady = MutableStateFlow(false)
 
@@ -116,10 +126,14 @@ class ShareService : Service() {
         suspend fun awaitReady(timeoutMs: Long = 3_000): Boolean =
             withTimeoutOrNull(timeoutMs) { _foregroundReady.first { it } } != null
 
-        /** 按 Android 14+ 要求的顺序启动：授权之后、getMediaProjection 之前。 */
-        fun start(context: Context) {
+        /** 按 Android 14+ 要求的顺序启动：授权之后、getMediaProjection 之前。
+         *  仅语音模式传 [ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE]。 */
+        fun start(
+            context: Context,
+            type: Int = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION,
+        ) {
             _foregroundReady.value = false
-            val i = Intent(context, ShareService::class.java)
+            val i = Intent(context, ShareService::class.java).putExtra(EXTRA_FGS_TYPE, type)
             context.startForegroundService(i)
         }
 

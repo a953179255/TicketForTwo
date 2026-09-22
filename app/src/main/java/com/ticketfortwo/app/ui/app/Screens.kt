@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kyant.backdrop.backdrops.LayerBackdrop
+import com.ticketfortwo.app.ShareQuality
 import com.ticketfortwo.app.ui.theme.GlassDimens
 import com.ticketfortwo.app.ui.theme.Ink
 
@@ -44,6 +45,8 @@ fun HomeScreen(
     backdrop: LayerBackdrop,
     onStart: () -> Unit,
     onJoinViewer: () -> Unit,
+    onSettings: () -> Unit,
+    quality: ShareQuality,
     lastSummary: String?,
 ) {
     PageScaffold {
@@ -52,7 +55,10 @@ fun HomeScreen(
 
         GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
             Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp3)) {
-                InfoRow("分享画质", "720p · 30 帧")
+                InfoRow("分享画质", quality.summary())
+                if (quality.videoEnabled) {
+                    InfoRow("流量上限", "约 ${quality.estMbPerMinute()} MB/分钟")
+                }
                 InfoRow("麦克风", "开")
                 if (lastSummary != null) InfoRow("上次连接", lastSummary)
             }
@@ -64,18 +70,21 @@ fun HomeScreen(
             Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("怎么连上", fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextHi)
-                    StatusChip("三步")
+                    StatusChip("你只要做一次")
                 }
                 Box(Modifier.fillMaxWidth().height(1.dp).background(Ink.TextLow.copy(alpha = 0.25f)))
-                StepRow("①", "复制邀请链接发给朋友", "自带接入信息")
-                StepRow("②", "朋友回传一条应答链接", "一次往返")
-                StepRow("③", "你点开，画面就通了", "之后不经服务器")
+                StepRow("①", "复制邀请链接发给朋友", "链接里自带接入凭证")
+                StepRow("②", "他点开链接", "浏览器，不用装任何东西")
+                StepRow("③", "画面和声音就通了", "两端直连，不经中转")
             }
         }
 
         SpacerWeight()
         PrimaryPill("开始分享", onStart, backdrop, Modifier.fillMaxWidth())
-        PrimaryPill("以观众进入", onJoinViewer, backdrop, Modifier.fillMaxWidth(), filled = false)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
+            PrimaryPill("以观众进入", onJoinViewer, backdrop, Modifier.weight(1f), filled = false)
+            PrimaryPill("分享设置", onSettings, backdrop, Modifier.weight(1f), filled = false)
+        }
         Spacer(Modifier.height(GlassDimens.sp6))
     }
 }
@@ -97,6 +106,94 @@ internal fun StepRow(no: String, text: String, chip: String) {
     ) {
         Text(text, fontSize = 12.5.sp, color = Ink.TextHi, modifier = Modifier.weight(1f))
         StatusChip(chip)
+    }
+}
+
+// ─────────────────────── 房主 · 分享设置 ───────────────────────
+
+/**
+ * 分享设置：分辨率 / 帧率 / 码率 / 是否带画面。
+ *
+ * 全部是"开始分享时生效"的档位（见 [ShareQuality] 的注释：零服务器没法中途重协商）。
+ * 麦克风开关刻意不在这里 —— 它是通话中的实时动作，已在控制岛上，
+ * 重复语义只留一处（沿用 HaoAI/效果图的约定）。
+ */
+@Composable
+fun QualitySettingsScreen(
+    backdrop: LayerBackdrop,
+    quality: ShareQuality,
+    onChange: (ShareQuality) -> Unit,
+    onBack: () -> Unit,
+) {
+    fun indexOfOr(list: List<*>, value: Any?, default: Int): Int =
+        list.indexOf(value).let { if (it >= 0) it else default }
+
+    // 整页可滚：内容高于一屏（真机 3200px 下「完成」会掉出屏幕外，实测够不到）。
+    // 滚动列里不能用 SpacerWeight（weight 在无限高约束下直接崩），所以这里只垫小间距。
+    PageScaffold(modifier = Modifier.verticalScroll(rememberScrollState())) {
+        Spacer(Modifier.height(GlassDimens.sp6))
+        Headline("分享设置", "这些是上限不是保证值：网络差或发热时会自动再降。开始分享时生效，本场通话内不可改。")
+
+        SectionTitle("画质")
+        GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp3)) {
+                SectionTitle("分辨率")
+                SegmentRow(
+                    options = listOf("540p", "720p", "1080p"),
+                    selected = indexOfOr(ShareQuality.SCALES, quality.scale, default = 1),
+                ) { onChange(quality.copy(scale = ShareQuality.SCALES[it])) }
+
+                SectionTitle("帧率")
+                SegmentRow(
+                    options = listOf("10 帧", "15 帧", "30 帧"),
+                    selected = indexOfOr(ShareQuality.FPSES, quality.fps, default = 2),
+                ) { onChange(quality.copy(fps = ShareQuality.FPSES[it])) }
+
+                SectionTitle("码率上限")
+                SegmentRow(
+                    options = listOf("0.3M", "0.8M", "2M", "5M"),
+                    selected = indexOfOr(ShareQuality.BPS_LIST, quality.maxVideoBps, default = 2),
+                ) { onChange(quality.copy(maxVideoBps = ShareQuality.BPS_LIST[it])) }
+
+                Box(Modifier.fillMaxWidth().height(1.dp).background(Ink.TextLow.copy(alpha = 0.25f)))
+                InfoRow("当前组合", quality.summary())
+                InfoRow("流量上限估算", "约 ${quality.estMbPerMinute()} MB/分钟")
+                StatusChip("省流量测试建议：540p · 10 帧 · 0.3M（约 2–3 MB/分钟）", ChipTone.Ok)
+                StatusChip("1080p 或高码率在多数机型上会发热降帧", ChipTone.Warn)
+            }
+        }
+
+        SectionTitle("分享内容")
+        GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
+                SegmentRow(
+                    options = listOf("画面 + 语音", "仅语音"),
+                    selected = if (quality.videoEnabled) 0 else 1,
+                ) { onChange(quality.copy(videoEnabled = it == 0)) }
+                if (quality.videoEnabled) {
+                    StatusChip("开始分享时会弹系统投屏授权；对方看到的就是你的屏幕", ChipTone.Neutral)
+                } else {
+                    StatusChip("仅语音：不弹投屏授权，几乎不耗流量（约 0.3 MB/分钟），适合纯连麦", ChipTone.Ok)
+                }
+            }
+        }
+
+        SectionTitle("麦克风")
+        GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp1)) {
+                InfoRow("开关位置", "通话中控制岛上的麦克风按钮")
+                Text(
+                    "麦克风随时可静音/取消，不在这里设置 —— 这页只管「开始分享前」定下的画质。",
+                    fontSize = 12.sp,
+                    color = Ink.TextMid,
+                    lineHeight = 17.sp,
+                )
+            }
+        }
+
+        Spacer(Modifier.height(GlassDimens.sp4))
+        PrimaryPill("完成", onBack, backdrop, Modifier.fillMaxWidth())
+        Spacer(Modifier.height(GlassDimens.sp6))
     }
 }
 
@@ -215,65 +312,42 @@ fun PreparingScreen(
 fun InviteScreen(
     backdrop: LayerBackdrop,
     inviteUrl: String,
-    wireChars: Int,
-    /** 网页观众端是否已经部署在真实域名上。假基址时必须说清楚，别让人复制出去才发现。 */
-    linkLive: Boolean,
     onCopy: () -> Unit,
-    pasteValue: String,
-    onPasteChange: (String) -> Unit,
-    onConnect: () -> Unit,
     onStop: () -> Unit,
 ) {
     PageScaffold {
         Spacer(Modifier.height(GlassDimens.sp6))
-        Headline("把这条发给朋友", "一期零服务器：链接里自带我的接收信息。朋友打开后会回给你一条「应答链接」，你再点开就连上了。")
+        Headline("把这条发给朋友", "他点开就能看，不用装东西、也不用回传任何东西给你。")
 
         GlassCardPanel(backdrop, Modifier.fillMaxWidth(), floating = true) {
             Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp3)) {
                 Text(
                     inviteUrl,
-                    fontSize = 11.sp,
+                    fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace,
                     color = Ink.TextMid,
-                    maxLines = 5,
+                    maxLines = 4,
                 )
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
                     PrimaryPill("复制邀请", onCopy, backdrop, Modifier.weight(1f))
-                    StatusChip("链长 $wireChars 字符")
                 }
             }
         }
 
         GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
             Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
-                SectionTitle("这一步在等什么")
-                // 三步的措辞必须跟着"网页端到底在不在"变：
-                // 下面挂着红色那条"网页版还没上线"，这里却写"浏览器免安装"，两句话互相打脸。
-                if (linkLive) {
-                    StepRow("①", "朋友打开链接", "浏览器免安装")
-                    StepRow("②", "他点「把这条发回去」", "生成应答链接")
-                    StepRow("③", "你点开他发回的链接", "连接建立")
-                } else {
-                    StepRow("①", "朋友装好 App，用「以观众进入」粘贴", "当前唯一通路")
-                    StepRow("②", "他回给你一条应答链接", "一次往返")
-                    StepRow("③", "你点开他发回的链接", "连接建立")
-                }
+                SectionTitle("朋友那边会发生什么")
+                StepRow("①", "打开这条链接", "浏览器，免安装")
+                StepRow("②", "点一下开始播放", "浏览器拦自动播放时才需要")
+                StepRow("③", "画面和声音就过来了", "两端直连，不经中转")
             }
         }
-        if (!linkLive) {
-            // 网页观众端还没部署到真实域名 —— 这条链接现在只有"装了这个 APK 的朋友"用得动。
-            // 与其让人发出去才发现打不开，不如在这里就写明，并给出可用的那条路。
-            StatusChip("网页版还没上线：这条链接目前要让朋友装 App，用「以观众进入」粘贴打开", ChipTone.Bad)
-        }
-        StatusChip("邀请链接里就带着接入信息，别转发给不想让看的人", ChipTone.Warn)
+
+        StatusChip("链接里有接入凭证，别转发给不想让看的人", ChipTone.Warn)
+        StatusChip("你可以一直开着，他随时点开都能进", ChipTone.Ok)
 
         SpacerWeight()
-        SectionTitle("粘贴朋友的应答链接")
-        PasteField(pasteValue, onPasteChange, hint = "长按粘贴对方回传的应答链接")
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
-            PrimaryPill("停止", onStop, backdrop, Modifier.weight(1f), filled = false)
-            PrimaryPill("连接", onConnect, backdrop, Modifier.weight(1f))
-        }
+        PrimaryPill("停止分享", onStop, backdrop, Modifier.fillMaxWidth(), filled = false)
         Spacer(Modifier.height(GlassDimens.sp6))
     }
 }

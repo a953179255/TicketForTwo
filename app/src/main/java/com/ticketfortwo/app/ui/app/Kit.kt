@@ -1,6 +1,7 @@
 package com.ticketfortwo.app.ui.app
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -181,6 +183,50 @@ fun StatusChip(
 }
 
 enum class ChipTone { Neutral, Ok, Warn, Bad }
+
+/**
+ * 分段选择器（设置页的档位行）。
+ *
+ * 选中态走强调色实底、未选中透明 —— 与效果图 `seg` 一致。
+ * 命中区 36dp 高、整行铺开，每个分段都 ≥44dp 宽（触控下限按宽度即可满足）。
+ */
+@Composable
+fun SegmentRow(
+    options: List<String>,
+    selected: Int,
+    modifier: Modifier = Modifier,
+    // onSelect 必须是最后一个参数：调用点全部用"命名参数 + 尾随 lambda"写法，
+    // 尾随 lambda 只会绑定到末位参数。
+    onSelect: (Int) -> Unit,
+) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .background(Color.Black.copy(alpha = 0.32f), RoundedCornerShape(percent = 50))
+            .padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        options.forEachIndexed { i, label ->
+            val on = i == selected
+            Box(
+                Modifier
+                    .weight(1f)
+                    .height(36.dp)
+                    .clip(RoundedCornerShape(percent = 50))
+                    .background(if (on) Ink.AccentSolid else Color.Transparent)
+                    .clickable { onSelect(i) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    label,
+                    fontSize = 12.5.sp,
+                    fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (on) Color.White else Ink.TextMid,
+                )
+            }
+        }
+    }
+}
 
 /**
  * 悬浮控制岛。

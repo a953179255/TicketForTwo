@@ -8,7 +8,8 @@ import android.util.Log
 import com.ticketfortwo.app.capture.ScreenShareController
 import com.ticketfortwo.app.rtc.Peer
 import com.ticketfortwo.app.rtc.RtcEngine
-import com.ticketfortwo.app.rtc.SignalingCodec
+import com.ticketfortwo.app.signaling.SignalHub
+import com.ticketfortwo.app.tunnel.TunnelManager
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -20,8 +21,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONObject
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
+import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
 import org.webrtc.PeerConnection
 import org.webrtc.RtpParameters
@@ -29,10 +32,23 @@ import org.webrtc.RtpSender
 import org.webrtc.VideoTrack
 
 /**
- * 一次通话的编排：采集 → 轨道 → Peer → 信令 → 状态。
+ * 一次分享的编排：采集 → 传话员 → 门牌 → Peer → 连接。
  *
  * 进程内单例。前台服务只负责保活与"停止"通知，真正的媒体状态在这里，
- * 这样 Activity 被系统回收后通话不会跟着断（断的是 UI，不是流）。
+ * 这样 Activity 被系统回收后分享不会跟着断（断的是 UI，不是流）。
+ *
+ * ## 与上一版最大的不同
+ *
+ * 上一版是"零服务器"：房主把 SDP 塞进链接，观众生成 answer 后**还得人肉回传**，
+ * 一来一回 20–40 秒，而且断了没法重连。
+ *
+ * 现在房主这边有两样东西：
+ *  - [SignalHub] —— 一个跑在 127.0.0.1 上的极小 HTTP + WebSocket 服务（"传话员"）；
+ *  - [TunnelManager] —— 一条**出站**隧道，把它挂到一个临时公网 HTTPS 地址（"门牌"）。
+ *
+ * 于是观众点开链接、连上那条 WebSocket 之后，双方的 SDP 与 ICE 候选自己就交换完了 ——
+ * 房主侧零操作，也不再需要"回传应答"那一屏。
+ * 媒体仍然走两端直连（SRTP），隧道只承载控制信息。
  */
 object CallSession {
 
@@ -41,9 +57,10 @@ object CallSession {
     sealed interface State {
         data object Idle : State
         data class Preparing(val note: String) : State
-        /** 信令已就绪，等待用户把链接发出去 / 等对方回传。 */
-        data class SignalReady(val env: SignalingCodec.Envelope, val wireChars: Int) : State
-        data class WaitingPeer(val note: String) : State
+
+        /** 门牌已就绪，等朋友加入。[inviteUrl] 就是要发出去的那条链接。 */
+        data class WaitingViewer(val inviteUrl: String) : State
+
         data object Connecting : State
         data object Connected : State
         data class Failed(val reason: String) : State
@@ -71,8 +88,8 @@ object CallSession {
     private val _micMuted = MutableStateFlow(false)
     val micMuted: StateFlow<Boolean> = _micMuted.asStateFlow()
 
-    /** 当前这一端在通话里的角色。放这里而不是放 Activity 里：Activity 会被系统回收，
-     *  通话不会 —— 重建后 UI 要能从会话本身恢复出正确的分支。 */
+    /** 当前这一端在分享里的角色。放这里而不是 Activity 里：Activity 会被系统回收，
+     *  分享不会 —— 重建后 UI 要能从会话本身恢复出正确的分支。 */
     private val _role = MutableStateFlow<Role?>(null)
     val role: StateFlow<Role?> = _role.asStateFlow()
 
@@ -90,64 +107,161 @@ object CallSession {
     private var audioTrack: AudioTrack? = null
     private var videoSender: RtpSender? = null
 
-    val isActive: Boolean get() = peer != null
+    /** 采集出来的本地视频轨 —— 观众加入时才 addTrack，所以要先留着。 */
+    private var localVideoTrack: VideoTrack? = null
+    private var quality: ShareQuality = ShareQuality()
+    private var sessionContext: Context? = null
 
-    /** 本次会话的短码，显示在界面上给人肉眼核对（也编在链接里）。 */
-    var roomCode: String? = null
-        private set
+    val isActive: Boolean get() = capture != null || peer != null || SignalHub.port != 0
+
+    init {
+        // 观众侧的一切消息都由这条流驱动。
+        scope.launch {
+            SignalHub.incoming.collect { onViewerMessage(it) }
+        }
+    }
 
     // ---- 房主 ----------------------------------------------------------
 
     /**
      * 房主开始分享。[permissionIntent] 必须是**本次**授权拿到的 Intent ——
      * Android 14 起复用旧 Intent 再次 getMediaProjection 会抛 SecurityException。
+     *
+     * [permissionIntent] 为 null = 仅语音模式：不采集屏幕、不建视频轨，
+     * 但前台服务照常起（保后台麦克风），[quality] 决定分辨率/帧率/码率上限。
      */
-    fun startHost(context: Context, permissionIntent: Intent, code: String) {
-        if (isActive) { note("已有进行中的分享，忽略本次请求"); return }
+    fun startHost(
+        context: Context,
+        permissionIntent: Intent?,
+        quality: ShareQuality = ShareQuality(),
+    ) {
+        if (isActive) {
+            note("已有进行中的分享，忽略本次请求")
+            return
+        }
         RtcEngine.init(context)
         _role.value = Role.Host
-        roomCode = code
-        _state.value = State.Preparing("正在启动屏幕采集")
+        this.quality = quality
+        this.sessionContext = context.applicationContext
+        _state.value = State.Preparing(
+            if (permissionIntent != null) "正在启动屏幕采集" else "正在准备语音通话"
+        )
 
-        val cap = ScreenShareController(context.applicationContext, permissionIntent)
-        cap.onStoppedBySystem = { reason ->
-            note("系统停止：$reason")
-            stop(context)
-        }
-        capture = cap
+        val cap = if (permissionIntent != null) {
+            ScreenShareController(context.applicationContext, permissionIntent).also {
+                it.onStoppedBySystem = { reason ->
+                    note("系统停止：$reason")
+                    stop(context)
+                }
+                capture = it
+            }
+        } else null
 
-        val p = newPeer(context, Peer.Role.Offerer, code)
-        p.open()
-        val vt = cap.start(fps = DEFAULT_VIDEO_FPS, scale = DEFAULT_CAPTURE_SCALE)
+        val vt = cap?.start(fps = quality.fps, scale = quality.scale)
+        localVideoTrack = vt
         _localVideo.value = vt
         val at = ensureMicTrack(context)
-        val senders = p.addLocalTracks(vt, at)
-        videoSender = senders.video
-        applyVideoBitrateCap()
-        p.startOffer()
-        _state.value = State.Preparing("正在收集网络候选（约 2–3 秒）")
+        if (vt == null && at == null) {
+            // 一条媒体都没有：连上也没有任何可传的东西 —— 直接失败好过转圈。
+            stop(context)
+            _state.value = State.Failed("没有麦克风权限，语音模式无法开始；请授予麦克风权限后重试")
+            return
+        }
+
+        // 传话员与门牌都不需要用户操作，但都不是瞬间完成，所以状态机要把这几秒画出来。
+        scope.launch {
+            _state.value = State.Preparing("正在准备接入口")
+            if (!SignalHub.start(context.applicationContext)) {
+                failAndStop(context, "接入口启动失败，请重试")
+                return@launch
+            }
+
+            _state.value = State.Preparing("正在申请临时地址（通常几秒）")
+            TunnelManager.resetState()
+            val ok = TunnelManager.start(context.applicationContext, SignalHub.port)
+            if (!ok) {
+                val reason = (TunnelManager.state.value as? TunnelManager.State.Failed)?.reason
+                    ?: "临时地址申请失败，请检查网络后重试"
+                failAndStop(context, reason)
+                return@launch
+            }
+
+            val origin = TunnelManager.origin
+            if (origin == null) {
+                failAndStop(context, "临时地址不可用，请重试")
+                return@launch
+            }
+
+            val url = "$origin/?k=${SignalHub.accessKey}"
+            // 把完整链接打进日志：脚本化验收要从 logcat 直接取它 ——
+            // 让人手动点复制再粘贴，在无人值守的验收里根本做不到。
+            note("邀请链接已就绪：$url")
+            _state.value = State.WaitingViewer(url)
+        }
     }
 
-    /** 观众点开房主发来的链接后，把房主的 answer 交回给房主用；房主侧调用这个。 */
-    fun acceptPeerSignal(env: SignalingCodec.Envelope) {
-        val p = peer ?: run { note("收到信令但没有进行中的分享"); return }
+    private fun failAndStop(context: Context, reason: String) {
+        note(reason)
+        stop(context)
+        _state.value = State.Failed(reason)
+    }
+
+    // ---- 观众消息处理（全部来自 SignalHub）------------------------------
+
+    private fun onViewerMessage(text: String) {
+        if (_role.value != Role.Host) return
+        val obj = runCatching { JSONObject(text) }.getOrNull() ?: return
+        when (obj.optString("t")) {
+            "hello" -> onViewerJoined()
+
+            "answer" -> {
+                val sdp = obj.optString("sdp")
+                if (sdp.isNotEmpty()) {
+                    note("收到对方应答，完成握手")
+                    _state.value = State.Connecting
+                    peer?.acceptAnswer(sdp)
+                }
+            }
+
+            "cand" -> {
+                val cand = obj.optString("cand")
+                if (cand.isNotEmpty()) {
+                    peer?.addRemoteCandidate(
+                        IceCandidate(
+                            obj.optString("mid").ifEmpty { null },
+                            obj.optInt("mline", 0),
+                            cand,
+                        )
+                    )
+                }
+            }
+
+            "bye" -> {
+                note("观众已离开；链接仍然有效，让他再点一次即可")
+                teardownPeer()
+                val url = (_state.value as? State.WaitingViewer)?.inviteUrl
+                _state.value = if (url != null) State.WaitingViewer(url) else State.Idle
+            }
+        }
+    }
+
+    private fun onViewerJoined() {
+        if (_role.value != Role.Host) return
+        val context = sessionContext ?: return
+        note("观众已加入，开始建立直连")
         _state.value = State.Connecting
-        p.acceptRemote(env)
-    }
 
-    // ---- 观众 ----------------------------------------------------------
+        teardownPeer()
+        val p = newPeer(context, Peer.Role.Offerer)
 
-    /** 观众：吃进房主的 offer，产出 answer（这条 answer 要回传给房主才算连上）。 */
-    fun startViewer(context: Context, offer: SignalingCodec.Envelope) {
-        if (isActive) { note("已在通话中"); return }
-        RtcEngine.init(context)
-        _role.value = Role.Viewer
-        roomCode = offer.room
-        _state.value = State.Preparing("正在准备应答")
-        val p = newPeer(context, Peer.Role.Answerer, offer.room)
-        p.open()
-        ensureMicTrack(context)?.let { p.addLocalTracks(null, it) }
-        p.acceptRemote(offer)
+        val senders = p.addLocalTracks(localVideoTrack, audioTrack)
+        videoSender = senders.video
+        if (senders.video != null) {
+            applyVideoBitrateCap(quality.maxVideoBps)
+        } else {
+            note("仅语音模式：不发送视频")
+        }
+        p.startOffer()
     }
 
     // ---- 公共 ----------------------------------------------------------
@@ -173,10 +287,11 @@ object CallSession {
 
     fun stop(context: Context) {
         stopStatsPump()
-        runCatching { peer?.close() }
-        peer = null
+        teardownPeer()
         runCatching { capture?.release() }
         capture = null
+        runCatching { localVideoTrack?.dispose() }
+        localVideoTrack = null
         runCatching { videoSender?.dispose() }
         videoSender = null
         runCatching { audioTrack?.dispose() }
@@ -186,14 +301,22 @@ object CallSession {
         _localVideo.value = null
         _remoteVideo.value = null
         _role.value = null
-        roomCode = null
         _micMuted.value = false
         _state.value = State.Idle
+        sessionContext = null
+
+        TunnelManager.stop()
+        SignalHub.stop()
+
         context.stopService(Intent(context, ShareService::class.java))
     }
 
-    fun inviteUrl(base: String, env: SignalingCodec.Envelope): String =
-        SignalingCodec.toUrl(base, env)
+    private fun teardownPeer() {
+        stopStatsPump()
+        runCatching { peer?.close() }
+        peer = null
+        _remoteVideo.value = null
+    }
 
     /**
      * 每 2 秒取一次实测连接质量。
@@ -222,17 +345,6 @@ object CallSession {
         _netStats.value = null
     }
 
-    /**
-     * 一次会话的短码，编进链接里当房间标识。
-     *
-     * 去掉 O/0/I/1 这类在聊天窗口里容易看错的字符 —— 这条码会被人肉眼核对。
-     * 一期它是 4 位（约 120 万种组合）：不防恶意，只防"两个人正好同时开"，够用。
-     */
-    fun newRoomCode(): String {
-        val alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-        return (1..4).map { alphabet.random() }.joinToString("")
-    }
-
     /** 给 UI 层记一条事件。授权被取消这类分支必须有痕迹，否则排障只能靠猜。 */
     fun logEvent(msg: String) = note(msg)
 
@@ -241,36 +353,49 @@ object CallSession {
         _log.value = (_log.value + msg).takeLast(60)
     }
 
-    private fun newPeer(context: Context, role: Peer.Role, roomCode: String): Peer {
-        val p = Peer(role, roomCode, listener = object : Peer.Listener {
-            override fun onSignalReady(env: SignalingCodec.Envelope) {
-                val wire = SignalingCodec.wireLength(env)
-                note("信令就绪 kind=${env.kind} 链长=${wire}ch")
-                _state.value = State.SignalReady(env, wire)
+    private fun newPeer(context: Context, role: Peer.Role): Peer {
+        val p = Peer(role, "t2", listener = object : Peer.Listener {
+            override fun onLocalDescription(kind: Peer.Kind, sdp: String) {
+                // 有了通道就不再等候选收集完成 —— 立刻发走，候选随后 trickle。
+                val t = if (kind == Peer.Kind.Offer) "offer" else "answer"
+                val sent = SignalHub.sendToViewer(
+                    JSONObject().apply {
+                        put("t", t)
+                        put("sdp", sdp)
+                    }.toString()
+                )
+                note("已发送 $t（${sdp.length} 字符，送出=$sent）")
+            }
+
+            override fun onLocalCandidate(candidate: IceCandidate) {
+                SignalHub.sendToViewer(
+                    JSONObject().apply {
+                        put("t", "cand")
+                        put("cand", candidate.sdp)
+                        put("mid", candidate.sdpMid ?: "")
+                        put("mline", candidate.sdpMLineIndex)
+                    }.toString()
+                )
             }
 
             override fun onIceState(s: PeerConnection.IceConnectionState) {
                 note("ice=$s")
-                // DISCONNECTED 不在这里判死：Peer 会先等自愈、再 restartIce，
-                // 最终失败通过 onFailure 上来。
+                // DISCONNECTED 不在这里判死：Peer 会先等自愈，最终失败通过 onFailure 上来。
                 _state.value = when (s) {
                     PeerConnection.IceConnectionState.CONNECTED,
                     PeerConnection.IceConnectionState.COMPLETED -> {
                         startStatsPump()
                         State.Connected
                     }
-                    PeerConnection.IceConnectionState.FAILED -> {
-                        stopStatsPump()
+
+                    PeerConnection.IceConnectionState.FAILED ->
                         State.Failed("直连失败：一方可能在对称 NAT 之后")
-                    }
+
                     PeerConnection.IceConnectionState.DISCONNECTED -> {
                         stopStatsPump()
-                        // 标题由界面给（"连接抖动，正在尝试自愈"），这里只补充值信息：
-                        // 宽限期多长、超时会怎样。两处文字重复是排版缺陷。
-                        State.WaitingPeer("网络切换或 NAT 映射过期时常见；8 秒内未恢复即判失败")
+                        State.Connecting
                     }
-                    // CHECKING 是"正在逐对试候选"，画成 Connecting 而不是继续转上一步的圈：
-                    // 房主点了「连接」之后必须看到界面动了，否则他会重复粘贴、反复点。
+
                     PeerConnection.IceConnectionState.CHECKING -> State.Connecting
                     else -> _state.value
                 }
@@ -329,13 +454,13 @@ object CallSession {
      * 用"读出现有参数、只改 maxBitrateBps、再写回"的方式设上限。
      * 从零构造 RtpParameters 会丢掉 codec 与 ssrc，直接断流。
      */
-    private fun applyVideoBitrateCap() {
+    private fun applyVideoBitrateCap(bps: Int) {
         val sender = videoSender ?: run { note("拿不到视频 sender，码率上限未生效"); return }
         runCatching {
             val params: RtpParameters = sender.parameters ?: return
-            params.encodings.firstOrNull()?.maxBitrateBps = DEFAULT_MAX_VIDEO_BPS
+            params.encodings.firstOrNull()?.maxBitrateBps = bps
             sender.parameters = params
-            note("码率上限 -> ${DEFAULT_MAX_VIDEO_BPS / 1000} kbps")
+            note("码率上限 -> ${bps / 1000} kbps")
         }.onFailure { note("设置码率失败：${it.message}") }
     }
 }

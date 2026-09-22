@@ -9,18 +9,20 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.ticketfortwo.app.ui.theme.GlassDimens
 import com.ticketfortwo.app.ui.theme.Ink
 
 /**
- * 观众端界面。同一个 APK 的第二个角色 —— 不另开一套设计，
- * 复用 HomeScreen 的骨架与同一批玻璃原子，避免两条路径长歪。
+ * 观众端界面。
+ *
+ * 这一版把观众路径整体让给了浏览器：App 不再自己收流，只负责把链接交出去。
+ * 理由很实际 —— 浏览器是观众端的唯一实现，也是唯一被真正测过的路径；
+ * 再在 App 里用 Kotlin 写一遍 WebSocket 客户端，等于凭空多一份要维护、
+ * 要单独验证的实现，而收益是零。
  */
 
 @Composable
@@ -34,7 +36,7 @@ fun ViewerJoinScreen(
 ) {
     PageScaffold {
         Spacer(Modifier.height(GlassDimens.sp6))
-        Headline("进入朋友的房间", "把他发给你的完整链接粘到下面。链接后半截就是接入信息，不需要服务器。")
+        Headline("进入朋友的房间", "把他发来的那条链接粘到下面，我们用浏览器打开它。")
 
         GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
             Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp3)) {
@@ -48,10 +50,10 @@ fun ViewerJoinScreen(
 
         GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
             Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
-                SectionTitle("进入之后还要做一件事")
-                StepRow("①", "允许麦克风", "用于连麦")
-                StepRow("②", "把生成的应答链接发回给他", "一次往返")
-                StepRow("③", "他点开，画面就通了", "之后不经服务器")
+                SectionTitle("打开之后会怎样")
+                StepRow("①", "浏览器载入链接", "不用装任何东西")
+                StepRow("②", "想说话就允许麦克风", "只看不点也行")
+                StepRow("③", "画面直接过来", "两端直连，不经服务器")
             }
         }
 
@@ -63,50 +65,8 @@ fun ViewerJoinScreen(
         SpacerWeight()
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
             PrimaryPill("返回", onBack, backdrop, Modifier.weight(1f), filled = false)
-            PrimaryPill("进入房间", onSubmit, backdrop, Modifier.weight(2f), enabled = value.isNotBlank())
+            PrimaryPill("用浏览器打开", onSubmit, backdrop, Modifier.weight(2f), enabled = value.isNotBlank())
         }
         Spacer(Modifier.height(GlassDimens.sp6))
     }
 }
-
-/** 观众生成应答后：把链接发回房主。这一屏是"零服务器"的直接代价。 */
-@Composable
-fun ViewerAnswerScreen(
-    backdrop: LayerBackdrop,
-    answerUrl: String,
-    wireChars: Int,
-    onCopy: () -> Unit,
-    onWaiting: Boolean,
-    onStop: () -> Unit,
-) {
-    PageScaffold {
-        Spacer(Modifier.height(GlassDimens.sp6))
-        Headline("把这条发回给他", "一期没有服务器，所以靠你把这条原样发回聊天窗口。他点开后就连上了，之后画面不再经过任何中转。")
-
-        GlassCardPanel(backdrop, Modifier.fillMaxWidth(), floating = true) {
-            Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp3)) {
-                Text(
-                    answerUrl,
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = Ink.TextMid,
-                    maxLines = 6,
-                )
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
-                    PrimaryPill("复制并回传", onCopy, backdrop, Modifier.weight(1f))
-                    StatusChip("$wireChars 字符")
-                }
-            }
-        }
-
-        if (onWaiting) {
-            StatusChip("等他点开… 期间可以先确认自己的麦克风没静音", ChipTone.Ok)
-        }
-
-        SpacerWeight()
-        PrimaryPill("取消", onStop, backdrop, Modifier.fillMaxWidth(), filled = false)
-        Spacer(Modifier.height(GlassDimens.sp6))
-    }
-}
-
-

@@ -20,13 +20,19 @@ object RtcEngine {
     private const val TAG = "RtcEngine"
 
     /**
-     * 三个公共 STUN。借 Piik ADR-0009 的思路做多目的地探测：单一 STUN 被墙或被限速时
-     * 仍有备选。一期没有 TURN —— 纯 P2P，对称 NAT 下会直接失败，这是架构的固有代价。
+     * STUN 列表。多目的地并发探测，谁先响应就用谁 —— 单一 STUN 被墙或被限速时仍有备选。
+     *
+     * 前三个是 2026-09-23 逐台实测选出来的：国内可达且延迟最低（22 / 37 / 47 ms）。
+     * 原来的 Google 与 Twilio 退到兜底 —— 它们在本机实测是 59 / 104 ms，
+     * 而且在部分运营商网络下根本不可达，一旦拿不到 srflx 公网候选，跨网直连就必然失败。
+     *
+     * 仍然没有 TURN：纯 P2P，对称 NAT 下会直接失败，这是架构的固有代价。
      */
     val stunServers: List<PeerConnection.IceServer> = listOf(
+        "stun:stun.hitv.com:3478",
+        "stun:stun.chat.bilibili.com:3478",
+        "stun:stun.miwifi.com:3478",
         "stun:stun.l.google.com:19302",
-        "stun:stun1.l.google.com:19302",
-        "stun:global.stun.twilio.com:3478",
     ).map { PeerConnection.IceServer.builder(it).createIceServer() }
 
     lateinit var eglBase: EglBase
@@ -80,9 +86,10 @@ object RtcEngine {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
             rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
-            // 关键：一期信令要把整份 SDP 塞进链接，必须等 ICE 收集完成再出链接，
-            // 所以用 GATHER_ONCE 而不是 GATHER_CONTINUALLY。
-            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_ONCE
+            // 持续收集候选。之前用 GATHER_ONCE 是因为"整份 SDP 要塞进链接，必须等收集完再出链接"，
+            // 现在有了信令通道、候选可以随收随发，那个约束不存在了。改成 CONTINUALLY 之后，
+            // 网络切换（WiFi ↔ 蜂窝）或 NAT 映射变化时补发的新候选能直接续上连接。
+            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
         }
 
     @Synchronized

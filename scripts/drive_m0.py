@@ -23,7 +23,11 @@ ENV = dict(os.environ, ANDROID_ADB_SERVER_PORT="5039", MSYS_NO_PATHCONV="1")
 
 
 def sh(*args, timeout=60):
-    return subprocess.run(args, capture_output=True, text=True, env=ENV, timeout=timeout)
+    # logcat 输出是 UTF-8，Windows 默认 GBK 解码会抛 UnicodeDecodeError
+    # （中文日志里的字节序列不都是合法 GBK），reader 线程一崩 stdout 就是 None，
+    # 下面 `"signal ready" in logs` 直接 TypeError。按 UTF-8 读、非法字节替换。
+    return subprocess.run(args, capture_output=True, encoding="utf-8", errors="replace",
+                          env=ENV, timeout=timeout)
 
 
 def ui():

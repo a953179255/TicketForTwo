@@ -10,5 +10,6 @@
     <string name="notif_channel">屏幕分享</string>
     <string name="notif_sharing_title">正在分享给朋友</string>
     <string name="notif_sharing_text">对方能看到你的屏幕，点停止立即结束</string>
+    <string name="notif_voice_text">语音通话中，点停止立即结束</string>
     <string name="notif_stop">停止</string>
 </resources>

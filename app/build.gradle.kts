@@ -20,16 +20,6 @@ android {
         versionName = "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-
-        // 邀请链接的基址是**构建输入**，不是写死在 Kotlin 里的常量：
-        // 一期零服务器架构下这个 URL 决定朋友点开收不收得到画面，换托管位置不该改源码。
-        // 默认值是占位域名 —— 在真的部署静态页之前，朋友点开会得到"找不到服务器"，
-        // 这一点必须在界面上如实告诉用户（见 InviteScreen 的提示）。
-        // 覆盖：./gradlew assembleDebug -Pt2.inviteBase=https://<托管域名>/
-        buildConfigField(
-            "String", "INVITE_BASE",
-            "\"${project.findProperty("t2.inviteBase") ?: "https://share.local/"}\""
-        )
     }
 
     buildTypes {
@@ -63,6 +53,20 @@ android {
 
     testOptions {
         unitTests.isReturnDefaultValues = true
+    }
+
+    packaging {
+        jniLibs {
+            // 隧道程序（cloudflared）是一个**可执行文件**，按 native 库的方式打包。
+            // 要让它真的能被执行，两个条件缺一不可：
+            //  1) useLegacyPackaging = true —— 让它被**解压到磁盘**。Android 10 起禁止从
+            //     可写目录执行文件，只有只读的 nativeLibraryDir 例外，而只有解压出来的
+            //     才会落在那里；直接 mmap APK 内的版本根本不在文件系统上。
+            //  2) 文件名必须是 lib*.so（见 src/main/jniLibs）—— 系统只把这种命名的条目
+            //     当 native 库处理并赋予执行权限。
+            // 少任何一条，运行时都会得到 "not found" 或 "Permission denied"。
+            useLegacyPackaging = true
+        }
     }
 }
 

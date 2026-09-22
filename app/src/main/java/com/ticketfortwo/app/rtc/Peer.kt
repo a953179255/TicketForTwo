@@ -19,12 +19,15 @@ import kotlin.math.roundToInt
 /**
  * 一条 1v1 的 RTCPeerConnection，角色可翻转 —— 同一个 APK 既能当房主也能当观众。
  *
- * 一期零服务器信令决定了它的形态：**不用 trickle ICE**。必须等 ICE 收集完成，
- * 把全部候选留在 SDP 里，一次性打包进链接；否则链接里缺 srflx 候选，跨网必不通。
- * 代价是出链接前要等 2–3 秒，UI 必须把这个等待显式画出来。
+ * 与上一版的根本差别：**信令不再是"人工搬运的链接"，而是一条实时通道**
+ * （房主手机里的传话员 + 出站隧道，见 signaling/SignalHub.kt）。这解锁了两件以前做不到的事：
  *
- * 每条路都要以"有界成功"或"清晰失败"结束（借 Piik ADR-0001 的原则）：
- * 收集有超时兜底，连接状态全部回调给上层，不允许无限转圈。
+ * 1. **trickle ICE**：候选一收集到就发走，不再等整个收集窗口结束。
+ *    直接效果是"点开链接更快出画面" —— 握手不再被那 2–3 秒的等待卡住。
+ * 2. **候选能随网络变化补发**（配合 GATHER_CONTINUALLY），WiFi 与蜂窝切换后
+ *    连接有机会自己续上，而不是只能让用户重新分享一次。
+ *
+ * 每条路仍然以"有界成功"或"清晰失败"结束：连接状态全部回调给上层，不允许无限转圈。
  */
 class Peer(
     private val role: Role,
@@ -35,9 +38,16 @@ class Peer(
 
     enum class Role { Offerer, Answerer }
 
+    /** 本地描述的种类，告诉信令通道该按 offer 还是 answer 发。 */
+    enum class Kind { Offer, Answer }
+
     interface Listener {
-        /** 一份可以直接编码进链接的完整信令（已裁剪候选）。 */
-        fun onSignalReady(env: SignalingCodec.Envelope)
+        /** 本地 SDP 就绪 —— 立刻交给信令通道发走，**不要**等候选。 */
+        fun onLocalDescription(kind: Kind, sdp: String)
+
+        /** 新收集到的本地候选，随收随发。 */
+        fun onLocalCandidate(candidate: IceCandidate)
+
         fun onIceState(state: PeerConnection.IceConnectionState)
         fun onSignalingState(state: PeerConnection.SignalingState)
         fun onRemoteVideo(track: VideoTrack?)
@@ -49,14 +59,10 @@ class Peer(
     private var pc: PeerConnection? = null
     private var controlChannel: DataChannel? = null
 
-    /** 等 ICE 收集完成的兜底时限；超时就带着已收到的候选出链接。 */
-    private val gatheringTimeoutMs = 8_000L
-
-    /** 断连后的自愈宽限期：先等它自己回来，再 restart，再等一轮才判死。 */
+    /** 断连后的自愈宽限期：先等它自己回来，超时再报可行动的失败。 */
     private val graceMs = 8_000L
-    private var gatheringTimer: Runnable? = null
-    private var gatheringDone = false
-    private var pendingLocalSdp: SessionDescription? = null
+
+    private var graceJob: Runnable? = null
 
     val connectionState: PeerConnection.IceConnectionState
         get() = pc?.iceConnectionState() ?: PeerConnection.IceConnectionState.NEW
@@ -81,8 +87,6 @@ class Peer(
 
     fun close() {
         cancelGrace()
-        gatheringTimer?.let { handler.removeCallbacks(it) }
-        gatheringTimer = null
         runCatching { controlChannel?.close() }
         runCatching { controlChannel?.dispose() }
         controlChannel = null
@@ -92,7 +96,7 @@ class Peer(
     }
 
     /**
-     * 加入本地轨道。必须在 [startOffer] / [acceptRemote] 之前调用。
+     * 加入本地轨道。必须在 [startOffer] / [acceptOffer] 之前调用。
      *
      * 房主传（屏幕视频轨, 麦克风轨）；观众传（null, 麦克风轨）。
      * 两边都始终挂上麦克风轨（静音用 setEnabled(false)，不移除轨道），
@@ -116,87 +120,63 @@ class Peer(
     fun startOffer() {
         if (pc == null) open()
         val p = pc ?: return
-        gatheringDone = false
         // Unified Plan 下 OfferToReceive* 这类 mandatory 约束已被忽略，方向由 transceiver 决定，
         // 所以这里用空约束，不写那些会误导后人的假开关。
         p.createOffer(object : SimpleSdpObserver("createOffer") {
             override fun onCreateSuccess(sdp: SessionDescription) {
                 p.setLocalDescription(object : SimpleSdpObserver("setLocal(offer)") {
-                    override fun onSetSuccess() = awaitGatheringThenEmit(sdp)
+                    override fun onSetSuccess() {
+                        // 立刻发走，不等候选：候选由 onIceCandidate 单独 trickle。
+                        val local = p.localDescription
+                        if (local == null) {
+                            listener.onFailure("offer 就绪但读不到 localDescription")
+                        } else {
+                            listener.onLocalDescription(Kind.Offer, local.description)
+                        }
+                    }
                 }, sdp)
             }
         }, MediaConstraints())
     }
 
-    /** 观众侧：吃进房主的 offer，产出 answer；或房主吃进观众的 answer 完成握手。 */
-    fun acceptRemote(env: SignalingCodec.Envelope) {
+    /** 观众侧：吃进房主的 offer，产出 answer 并立刻发走。 */
+    fun acceptOffer(sdp: String) = setRemote(SessionDescription.Type.OFFER, sdp)
+
+    /** 房主侧：吃进观众的 answer，握手完成。 */
+    fun acceptAnswer(sdp: String) = setRemote(SessionDescription.Type.ANSWER, sdp)
+
+    private fun setRemote(type: SessionDescription.Type, sdp: String) {
         if (pc == null) open()
         val p = pc ?: return
-        val type = if (env.kind == SignalingCodec.Kind.Offer) SessionDescription.Type.OFFER
-        else SessionDescription.Type.ANSWER
-        p.setRemoteDescription(object : SimpleSdpObserver("setRemote(${env.kind})") {
+        p.setRemoteDescription(object : SimpleSdpObserver("setRemote($type)") {
             override fun onSetSuccess() {
-                if (env.kind != SignalingCodec.Kind.Offer) {
+                if (type != SessionDescription.Type.OFFER) {
                     Log.i(TAG, "remote answer applied; handshake complete, waiting for ICE")
                     return
                 }
-                gatheringDone = false
                 p.createAnswer(object : SimpleSdpObserver("createAnswer") {
-                    override fun onCreateSuccess(sdp: SessionDescription) {
+                    override fun onCreateSuccess(answer: SessionDescription) {
                         p.setLocalDescription(object : SimpleSdpObserver("setLocal(answer)") {
-                            override fun onSetSuccess() = awaitGatheringThenEmit(sdp)
-                        }, sdp)
+                            override fun onSetSuccess() {
+                                val local = p.localDescription
+                                if (local == null) {
+                                    listener.onFailure("answer 就绪但读不到 localDescription")
+                                } else {
+                                    listener.onLocalDescription(Kind.Answer, local.description)
+                                }
+                            }
+                        }, answer)
                     }
                 }, MediaConstraints())
             }
-        }, SessionDescription(type, env.sdp))
+        }, SessionDescription(type, sdp))
     }
 
-    // ---- ICE 收集等待 --------------------------------------------------
-
-    private fun awaitGatheringThenEmit(localSdp: SessionDescription) {
-        pendingLocalSdp = localSdp
-        if (gatheringDone) {
-            emit(); return
-        }
-        gatheringTimer?.let { handler.removeCallbacks(it) }
-        val timer = Runnable {
-            if (!gatheringDone) {
-                Log.w(TAG, "ICE gathering timed out after ${gatheringTimeoutMs}ms; emitting what we have")
-                gatheringDone = true
-                emit()
-            }
-        }
-        gatheringTimer = timer
-        handler.postDelayed(timer, gatheringTimeoutMs)
-    }
-
-    private fun emit() {
-        // 必须读 pc.localDescription，不能用 onCreateSuccess 给的那份 ——
-        // 后者是**收集前**的裸 SDP，一条 a=candidate 都没有。
-        // 实测踩过：用回调那份会产出 1554 字符但 kept=0 的空壳 offer，永远连不通。
-        val sdp = pc?.localDescription ?: pendingLocalSdp
-        if (sdp == null) {
-            listener.onFailure("ICE 收集完成但没有 localDescription")
-            return
-        }
-        val pruned = SignalingCodec.prune(sdp.description)
-        val env = SignalingCodec.Envelope(
-            room = room,
-            kind = if (role == Role.Offerer) SignalingCodec.Kind.Offer else SignalingCodec.Kind.Answer,
-            sdp = pruned.sdp,
-        )
-        Log.i(
-            TAG,
-            "signal ready kind=${env.kind} kept=${pruned.keptCandidates} " +
-                "dropped=${pruned.droppedCandidates} had=${pruned.hadCandidates} " +
-                "候选[${pruned.typeSummary}] wire=${SignalingCodec.wireLength(env)}ch",
-        )
-        // 没有 srflx 的 offer 基本注定跨不了 NAT —— 单独喊出来，别混在正常日志里。
-        if (!pruned.typeSummary.contains("srflx")) {
-            Log.w(TAG, "本次没有收集到任何 srflx 公网候选，跨 NAT 直连大概率失败")
-        }
-        listener.onSignalReady(env)
+    /** 收到对方的 ICE 候选。远端描述可能还没设好，libwebrtc 会自行排队，这里直接转交。 */
+    fun addRemoteCandidate(candidate: IceCandidate) {
+        val p = pc ?: return
+        runCatching { p.addIceCandidate(candidate) }
+            .onFailure { Log.w(TAG, "addIceCandidate 失败：${it.message}") }
     }
 
     fun sendControl(text: String) {
@@ -245,11 +225,6 @@ class Peer(
         listener.onIceState(state)
         // DISCONNECTED 不等于死亡：真实网络切换（WiFi↔蜂窝、NAT 映射过期）后，
         // 已协商好的 candidate pair 常常几十秒内自己恢复。先给它宽限期。
-        //
-        // 这里**故意不调 restartIce()**：ICE restart 会改 ufrag/pwd，必须把新 offer
-        // 再送一次给对端才生效，而一期是零服务器架构、链接靠人工复制粘贴，
-        // 没有通道能投递这份新 offer（DataChannel 本身就在这条将断的连接上）。
-        // 调它只会假装在重连。等有了信令通道（二期 WebSocket 中继）再启用。
         if (state == PeerConnection.IceConnectionState.DISCONNECTED) {
             scheduleGrace()
             return
@@ -261,8 +236,6 @@ class Peer(
         }
     }
 
-    private var graceJob: Runnable? = null
-
     private fun scheduleGrace() {
         if (graceJob != null) return
         val job = Runnable {
@@ -272,7 +245,7 @@ class Peer(
                 now != PeerConnection.IceConnectionState.COMPLETED
             ) {
                 Log.w(TAG, "ICE 未在 ${graceMs}ms 内自愈")
-                listener.onFailure("直连中断且未能自愈。一期没有信令通道，无法自动重连，请重新发起分享。")
+                listener.onFailure("直连中断且未能自愈。请让朋友重新点一次邀请链接。")
             }
         }
         graceJob = job
@@ -287,12 +260,20 @@ class Peer(
     override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
 
     override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {
-        if (state == PeerConnection.IceGatheringState.COMPLETE) markGatheringDone()
+        Log.d(TAG, "ice gathering=$state")
     }
 
-    /** 不 trickle：候选已经在 SDP 里，这里只用来判断"收集完了没有"。 */
+    /**
+     * trickle：候选随收随发。
+     *
+     * 收到空候选代表收集结束，这里不用做任何事 —— 只是日志上能看出阶段。
+     */
     override fun onIceCandidate(candidate: IceCandidate) {
-        if (candidate.sdp.isNullOrEmpty()) markGatheringDone()
+        if (candidate.sdp.isNullOrEmpty()) {
+            Log.i(TAG, "候选收集结束")
+            return
+        }
+        handler.post { listener.onLocalCandidate(candidate) }
     }
 
     override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) = Unit
@@ -333,14 +314,6 @@ class Peer(
     override fun onRenegotiationNeeded() = Unit
 
     // ---- helpers -------------------------------------------------------
-
-    private fun markGatheringDone() {
-        if (gatheringDone) return
-        gatheringDone = true
-        gatheringTimer?.let { handler.removeCallbacks(it) }
-        gatheringTimer = null
-        if (pendingLocalSdp != null) handler.post { emit() }
-    }
 
     private open inner class SimpleSdpObserver(private val label: String) : SdpObserver {
         override fun onCreateFailure(error: String) = fail(label, "create", error)
