@@ -195,7 +195,9 @@ def main():
     # 这条链接里带着真实的 SDP 与候选地址。
     s = ui()
     shot("05-invite")
-    urls = [n["text"] for n in nodes(s) if n["text"].startswith("https://share.local/")]
+    # 认 fragment 不认域名：基址现在是构建输入，写死 share.local 会在真实链接上
+    # 直接"找不到邀请链接"。邀请屏上唯一带 #t2= 的文本节点就是它。
+    urls = [n["text"] for n in nodes(s) if "#t2=" in n["text"] and n["text"].startswith("http")]
     if urls:
         os.makedirs(os.path.join(os.getcwd(), ".dev"), exist_ok=True)
         path = os.path.join(os.getcwd(), ".dev", "invite.txt")

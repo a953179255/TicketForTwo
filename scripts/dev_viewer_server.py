@@ -30,9 +30,16 @@ class Handler(SimpleHTTPRequestHandler):
     def end_headers(self):
         # ES module 需要正确的 MIME；同时禁缓存，避免改完页面看不到
         self.send_header("Cache-Control", "no-store")
-        if self.path.endswith(".mjs"):
-            self.headers_map = None
+        # 允许"已部署的页面"把统计 POST 回本机：run_viewer_edge 会用 ?relay= 指到这里，
+        # 这样取证走的是朋友真正点的那条链接，而不是本地 dev 副本。
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
         super().end_headers()
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.end_headers()
 
     def do_POST(self):
         if self.path != "/report":

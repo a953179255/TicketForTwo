@@ -296,6 +296,9 @@ if (_q.get('autojoin') === '1') {
   }, 800);
 }
 if (_q.get('report') === '1') {
+  // ?relay= 让统计可以打到本地采集器，而页面本身跑在**已部署的域名**上 ——
+  // 这样"朋友真实点的那条链接"也能被端到端取证，而不是只测 dev server 那份。
+  const RELAY = _q.get('relay') || '/report';
   setInterval(async () => {
     try {
       const payload = {
@@ -318,7 +321,7 @@ if (_q.get('report') === '1') {
         });
         payload.rtp = kinds;
       }
-      await fetch('/report', { method: 'POST', body: JSON.stringify(payload) });
+      await fetch(RELAY, { method: 'POST', body: JSON.stringify(payload) });
     } catch (e) { /* 服务器没起就算了，不影响观看 */ }
   }, 2000);
 }
