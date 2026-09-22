@@ -198,6 +198,7 @@ async function connect(offer){
   await waitGathering(pc);
 
   const token = await encodeToken({ room: offer.room, kind: 'Answer', sdp: pc.localDescription.sdp });
+  if (window.t2) window.t2.answerToken = token;
   const url = `${location.origin}${location.pathname}#t2=${token}`;
   show(`<h1>把这条发回给房主</h1>
     <p class="muted">一期没有服务器，所以靠你把这条原样发回聊天窗口。房主点开后就连上了，之后画面不再经过任何中转。</p>
@@ -284,6 +285,43 @@ $('btnFull').onclick = () => {
   else document.documentElement.requestFullscreen().catch(()=>{});
 };
 video.addEventListener('click', () => { if (video.paused) video.play(); });
+
+/* 仅调试：?report=1 时把统计 POST 回本地开发服务器，便于无头浏览器里取证。
+   ?autojoin=1 时自动点「进入房间」——无头场景没有用户手势。生产链接不带这些参数。 */
+const _q = new URLSearchParams(location.search);
+if (_q.get('autojoin') === '1') {
+  setInterval(() => {
+    const b = document.getElementById('btnJoin');
+    if (b) b.click();
+  }, 800);
+}
+if (_q.get('report') === '1') {
+  setInterval(async () => {
+    try {
+      const payload = {
+        at: Date.now(),
+        conn: pc && pc.connectionState, ice: pc && pc.iceConnectionState,
+        gathering: pc && pc.iceGatheringState,
+        stats: window.t2 && window.t2.stats,
+        // 调试闭环用：把应答 token 一起回传，脚本可以自动灌回 App，
+        // 不必手工复制粘贴那条 1.7KB 的链接
+        answerToken: (window.t2 && window.t2.answerToken) || null,
+        video: { readyState: video.readyState, w: video.videoWidth, h: video.videoHeight,
+                 t: +video.currentTime.toFixed(2) },
+      };
+      if (pc) {
+        const st = await pc.getStats();
+        const kinds = [];
+        st.forEach(r => {
+          if (r.type === 'outbound-rtp') kinds.push(`out:${r.kind} bytes=${r.bytesSent} dur=${(r.duration||0).toFixed(1)}s`);
+          if (r.type === 'inbound-rtp') kinds.push(`in:${r.kind} bytes=${r.bytesReceived} fps=${r.framesPerSecond}`);
+        });
+        payload.rtp = kinds;
+      }
+      await fetch('/report', { method: 'POST', body: JSON.stringify(payload) });
+    } catch (e) { /* 服务器没起就算了，不影响观看 */ }
+  }, 2000);
+}
 
 main();
 </script>

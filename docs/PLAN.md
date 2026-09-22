@@ -207,10 +207,22 @@ M0 只做三件事，不写任何产品代码、不做 UI。
 | 质量事件 | `nack=0`、`pli=0`（同机回环，无拥塞） |
 | 信令链长 | offer token **1939 字符**（SDP 含 10 条候选，裁剪到 6） |
 
-**② 连麦（双向语音）：未验证，被测试环境挡住。** 内置浏览器 `getUserMedia` 返回
-`NotAllowedError: Permission denied`，因此浏览器侧没有音频上行、App 也没收到远端音轨。
-**不是代码缺陷**——viewer 的降级路径按设计生效（拿不到麦克风就隐藏按钮、继续可看）。
-下一步用**第二个模拟器当观众端 APK** 来验，那本来就是产品的真实路径。
+**② 连麦（双向语音）：轨道与媒体通路已验证；回声效果未验证。**
+内置浏览器 `getUserMedia` 返回 `NotAllowedError`，改用**真实 Chromium + 假媒体设备**
+（`scripts/run_viewer_edge.py`，`--use-fake-ui-for-media-stream --use-fake-device-for-media-stream`）
+跑通闭环，实测：App 侧 `收到对方音频轨`、浏览器 `out:audio bytes=64116`、
+浏览器 `in:audio bytes=74000`、`in:video fps=45`，两侧 ICE `COMPLETED`。
+⇒ **双向音频通路成立**。但假设备**证明不了回声消除效果**——模拟器 `hwAec=false`，
+真机外放连麦是否啸叫仍必须在真机上听。
+
+### 实测发现的一个设计缺口（待修）
+
+App 侧观察到 `ice=CONNECTED → COMPLETED → DISCONNECTED`（对端进程被杀）。
+当前 `CallSession` 把 `DISCONNECTED` 直接映射成 `State.Failed`，但真实网络抖动里
+DISCONNECTED 常常几十秒内自愈。⇒ 应改为**先尝试重连/ICE restart，超时才判死**，
+否则朋友走个神网就"失败"了。
+
+### 过程中修掉的两个真缺陷
 
 **③ 打洞成功率：只覆盖了"同机模拟器↔宿主浏览器"这一种组合，成功。**
 跨运营商 / CGNAT / 真实两地的数据仍然为零，必须等真机或两台异地设备。

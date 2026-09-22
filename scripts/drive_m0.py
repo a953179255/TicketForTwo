@@ -146,6 +146,16 @@ def main():
             print("  " + line.split(":", 2)[-1].strip()[:150])
     alive = sh(ADB, "-s", SERIAL, "shell", "pidof", PKG).stdout.strip()
     print("== 进程存活:", alive or "已崩溃")
+
+    # 把邀请链接落到 viewer/invite.txt，便于下一步直接喂给浏览器（含 token，勿入库）
+    s = ui()
+    urls = [n["text"] for n in nodes(s) if n["text"].startswith("https://share.local/")]
+    if urls:
+        path = os.path.join(os.getcwd(), "viewer", "invite.txt")
+        open(path, "w", encoding="utf-8").write(urls[0])
+        print("== invite 已写入 viewer/invite.txt (%d 字符)" % len(urls[0]))
+    else:
+        print("== 界面上没找到邀请链接")
     return 0
 
 
