@@ -241,8 +241,6 @@ WiFi↔蜂窝切换、NAT 映射过期后常能自己回来），超时才报可
 
 ### 过程中修掉的两个真缺陷
 
-### 过程中修掉的两个真缺陷
-
 1. **前台服务竞态**（崩溃）：`startForegroundService()` 是异步的，在它真正 `startForeground()`
    之前就调 `getMediaProjection()`，Android 14+ 直接抛
    `SecurityException: Media projections require a foreground service of type FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION`。
