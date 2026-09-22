@@ -100,8 +100,14 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** 一期链接由 App 内的假基址生成；真上线时换成实际部署的静态页地址。 */
-private const val INVITE_BASE = "https://share.local/"
+/**
+ * 邀请链接的基址 —— 由构建输入决定（`-Pt2.inviteBase=`），默认是占位域名。
+ *
+ * 占位域名下朋友点开会得到"找不到服务器"，所以 [InviteScreen] 必须把这件事
+ * 明写在界面上，而不是让人复制出去才发现。
+ */
+private val INVITE_BASE: String = BuildConfig.INVITE_BASE
+private const val PLACEHOLDER_BASE = "https://share.local/"
 
 private enum class UiRole { None, Host, Viewer }
 
@@ -278,6 +284,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                     backdrop = backdrop,
                     inviteUrl = url,
                     wireChars = s.wireChars,
+                    linkLive = INVITE_BASE != PLACEHOLDER_BASE,
                     onCopy = { context.copy("邀请链接", url) },
                     pasteValue = paste,
                     onPasteChange = { paste = it },

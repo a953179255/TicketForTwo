@@ -105,11 +105,12 @@ def main():
     sh(ADB, "-s", SERIAL, "shell", "am", "force-stop", PKG)
     sh(ADB, "-s", SERIAL, "logcat", "-c")
     sh(ADB, "-s", SERIAL, "shell", "am", "start", "-n", ACT)
-    time.sleep(10)
 
-    s = ui()
+    # 冷启动要等 Compose 首帧 + backdrop 着色器编译，实测 7–15 秒波动。
+    # 之前是固定 sleep 10，撞上慢的那次就会"找不到开始分享"而误判成界面坏了 ——
+    # 轮询到节点出现为止，比猜一个等待秒数稳。
+    s, start = wait_for(lambda x: find(x, text="开始分享"), tries=20, delay=1.5)
     shot("01-home")
-    start = find(s, text="开始分享")
     if not start:
         print("找不到「开始分享」按钮，界面：", [n["text"] for n in nodes(s) if n["text"]][:10])
         return 1

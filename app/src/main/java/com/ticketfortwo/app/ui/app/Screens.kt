@@ -216,6 +216,8 @@ fun InviteScreen(
     backdrop: LayerBackdrop,
     inviteUrl: String,
     wireChars: Int,
+    /** 网页观众端是否已经部署在真实域名上。假基址时必须说清楚，别让人复制出去才发现。 */
+    linkLive: Boolean,
     onCopy: () -> Unit,
     pasteValue: String,
     onPasteChange: (String) -> Unit,
@@ -245,10 +247,23 @@ fun InviteScreen(
         GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
             Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
                 SectionTitle("这一步在等什么")
-                StepRow("①", "朋友打开链接", "浏览器免安装")
-                StepRow("②", "他点「把这条发回去」", "生成应答链接")
-                StepRow("③", "你点开他发回的链接", "连接建立")
+                // 三步的措辞必须跟着"网页端到底在不在"变：
+                // 下面挂着红色那条"网页版还没上线"，这里却写"浏览器免安装"，两句话互相打脸。
+                if (linkLive) {
+                    StepRow("①", "朋友打开链接", "浏览器免安装")
+                    StepRow("②", "他点「把这条发回去」", "生成应答链接")
+                    StepRow("③", "你点开他发回的链接", "连接建立")
+                } else {
+                    StepRow("①", "朋友装好 App，用「以观众进入」粘贴", "当前唯一通路")
+                    StepRow("②", "他回给你一条应答链接", "一次往返")
+                    StepRow("③", "你点开他发回的链接", "连接建立")
+                }
             }
+        }
+        if (!linkLive) {
+            // 网页观众端还没部署到真实域名 —— 这条链接现在只有"装了这个 APK 的朋友"用得动。
+            // 与其让人发出去才发现打不开，不如在这里就写明，并给出可用的那条路。
+            StatusChip("网页版还没上线：这条链接目前要让朋友装 App，用「以观众进入」粘贴打开", ChipTone.Bad)
         }
         StatusChip("邀请链接里就带着接入信息，别转发给不想让看的人", ChipTone.Warn)
 

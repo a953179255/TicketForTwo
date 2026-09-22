@@ -20,6 +20,16 @@ android {
         versionName = "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // 邀请链接的基址是**构建输入**，不是写死在 Kotlin 里的常量：
+        // 一期零服务器架构下这个 URL 决定朋友点开收不收得到画面，换托管位置不该改源码。
+        // 默认值是占位域名 —— 在真的部署静态页之前，朋友点开会得到"找不到服务器"，
+        // 这一点必须在界面上如实告诉用户（见 InviteScreen 的提示）。
+        // 覆盖：./gradlew assembleDebug -Pt2.inviteBase=https://<托管域名>/
+        buildConfigField(
+            "String", "INVITE_BASE",
+            "\"${project.findProperty("t2.inviteBase") ?: "https://share.local/"}\""
+        )
     }
 
     buildTypes {
@@ -46,6 +56,9 @@ android {
 
     buildFeatures {
         compose = true
+        // 邀请链接的基址走 BuildConfig（见上面 defaultConfig 的 buildConfigField）：
+        // AGP 9 里 buildConfig 默认是关的，不开就没有 BuildConfig 类。
+        buildConfig = true
     }
 
     testOptions {
