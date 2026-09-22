@@ -29,6 +29,23 @@ done
 
 CP="$TEST_CLASSES:$KT_CLASSES:$STDLIB:$JUNIT:$HAMCREST"
 
+# libwebrtc 的 AAR 里 classes.jar 是嵌着的，Gradle 缓存里没有现成的 jar 可指。
+# StatsParseTest 要在 JVM 上直接 new org.webrtc.RTCStats / RTCStatsReport ——
+# 这两个类是纯数据壳（没有 native 方法、不触发 NativeLibrary.initialize），
+# 所以不必真加载 so，只要类能装上就能测 stats 解析。
+WEBRTC_JAR="$PROJECT_DIR/app/build/test-libs/webrtc-classes.jar"
+AAR=$(jar_of "android-150.7871.01.aar")
+if [ -n "$AAR" ]; then
+  mkdir -p "$(dirname "$WEBRTC_JAR")"
+  if [ ! -f "$WEBRTC_JAR" ] || [ "$AAR" -nt "$WEBRTC_JAR" ]; then
+    unzip -o -q -j "$AAR" classes.jar -d "$(dirname "$WEBRTC_JAR")" && mv "$(dirname "$WEBRTC_JAR")/classes.jar" "$WEBRTC_JAR"
+  fi
+  CP="$CP:$WEBRTC_JAR"
+  echo "==> libwebrtc classes: $WEBRTC_JAR"
+else
+  echo "!! 找不到 libwebrtc AAR，StatsParseTest 会因缺类失败" >&2
+fi
+
 # 从 .class 文件名还原出全限定类名，只取带 JUnit @Test 的
 CLASSES=$(cd "$TEST_CLASSES" && find . -name "*Test.class" ! -name "*\$*" \
   | sed 's|^\./||; s|\.class$||; s|/|.|g')

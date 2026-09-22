@@ -43,7 +43,7 @@ import com.ticketfortwo.app.ui.theme.Ink
 fun HomeScreen(
     backdrop: LayerBackdrop,
     onStart: () -> Unit,
-    onOpenSettings: () -> Unit,
+    onJoinViewer: () -> Unit,
     lastSummary: String?,
 ) {
     PageScaffold {
@@ -75,16 +75,13 @@ fun HomeScreen(
 
         SpacerWeight()
         PrimaryPill("开始分享", onStart, backdrop, Modifier.fillMaxWidth())
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
-            PrimaryPill("设置", onOpenSettings, backdrop, Modifier.weight(1f), filled = false)
-            PrimaryPill("怎么用", {}, backdrop, Modifier.weight(1f), filled = false)
-        }
+        PrimaryPill("以观众进入", onJoinViewer, backdrop, Modifier.fillMaxWidth(), filled = false)
         Spacer(Modifier.height(GlassDimens.sp6))
     }
 }
 
 @Composable
-private fun InfoRow(k: String, v: String) {
+internal fun InfoRow(k: String, v: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(k, fontSize = 13.5.sp, color = Ink.TextMid)
         Text(v, fontSize = 13.sp, color = Ink.TextHi)
@@ -92,7 +89,7 @@ private fun InfoRow(k: String, v: String) {
 }
 
 @Composable
-private fun StepRow(no: String, text: String, chip: String) {
+internal fun StepRow(no: String, text: String, chip: String) {
     Row(
         Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -167,14 +164,57 @@ private fun GuideStep(no: String, title: String, body: String) {
     }
 }
 
+// ─────────────────── 通用过渡态（两个角色共用）───────────────────
+
+/**
+ * 一切"正在忙、用户没有别的事可做"的中间态都画在这一屏。
+ *
+ * 单独抽出来是因为房主和观众都会用到它：房主在等 ICE 收集、等打洞，
+ * 观众在等生成应答、等房主点开回传链接。两边只需要换文案，
+ * 不该为了一个标题把整屏布局抄第二遍。
+ */
+@Composable
+fun PreparingScreen(
+    backdrop: LayerBackdrop,
+    title: String,
+    note: String,
+    hint: String? = null,
+    onStop: () -> Unit,
+) {
+    PageScaffold {
+        Spacer(Modifier.height(GlassDimens.sp6))
+        Column(
+            Modifier.fillMaxWidth().weight(1f),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(GlassDimens.sp4),
+            ) {
+                Text(title, fontSize = 21.sp, fontWeight = FontWeight.Bold, color = Ink.TextHi)
+                Text(note, fontSize = 12.5.sp, color = Ink.TextMid)
+                if (hint != null) {
+                    Text(
+                        hint,
+                        fontSize = 11.5.sp,
+                        color = Ink.TextLow,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+            }
+        }
+        PrimaryPill("取消", onStop, backdrop, Modifier.fillMaxWidth(), filled = false)
+        Spacer(Modifier.height(GlassDimens.sp6))
+    }
+}
+
 // ─────────────────────── 房主 · 邀请 / 等待回传 ───────────────────────
 
 @Composable
 fun InviteScreen(
     backdrop: LayerBackdrop,
-    preparing: Boolean,
-    preparingNote: String,
-    inviteUrl: String?,
+    inviteUrl: String,
     wireChars: Int,
     onCopy: () -> Unit,
     pasteValue: String,
@@ -184,66 +224,55 @@ fun InviteScreen(
 ) {
     PageScaffold {
         Spacer(Modifier.height(GlassDimens.sp6))
-        if (preparing) {
-            Column(
-                Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(GlassDimens.sp4),
-            ) {
-                SpacerWeight(0.6f)
-                Text("正在准备邀请链接", fontSize = 21.sp, fontWeight = FontWeight.Bold, color = Ink.TextHi)
-                Text(preparingNote, fontSize = 12.5.sp, color = Ink.TextMid)
+        Headline("把这条发给朋友", "一期零服务器：链接里自带我的接收信息。朋友打开后会回给你一条「应答链接」，你再点开就连上了。")
+
+        GlassCardPanel(backdrop, Modifier.fillMaxWidth(), floating = true) {
+            Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp3)) {
                 Text(
-                    "必须等网络候选收集完才出链接，否则跨网连不通（约 2–3 秒）",
-                    fontSize = 11.5.sp,
-                    color = Ink.TextLow,
+                    inviteUrl,
+                    fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace,
+                    color = Ink.TextMid,
+                    maxLines = 5,
                 )
-                SpacerWeight(1.5f)
-            }
-        } else {
-            Headline("把这条发给朋友", "一期零服务器：链接里自带我的接收信息。朋友打开后会回给你一条「应答链接」，你再点开就连上了。")
-
-            GlassCardPanel(backdrop, Modifier.fillMaxWidth(), floating = true) {
-                Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp3)) {
-                    Text(
-                        inviteUrl ?: "",
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = Ink.TextMid,
-                        maxLines = 5,
-                    )
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
-                        PrimaryPill("复制邀请", onCopy, backdrop, Modifier.weight(1f))
-                        StatusChip("链长 $wireChars 字符")
-                    }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
+                    PrimaryPill("复制邀请", onCopy, backdrop, Modifier.weight(1f))
+                    StatusChip("链长 $wireChars 字符")
                 }
             }
+        }
 
-            GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
-                    SectionTitle("这一步在等什么")
-                    StepRow("①", "朋友打开链接", "浏览器免安装")
-                    StepRow("②", "他点「把这条发回去」", "生成应答链接")
-                    StepRow("③", "你点开他发回的链接", "连接建立")
-                }
+        GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
+                SectionTitle("这一步在等什么")
+                StepRow("①", "朋友打开链接", "浏览器免安装")
+                StepRow("②", "他点「把这条发回去」", "生成应答链接")
+                StepRow("③", "你点开他发回的链接", "连接建立")
             }
-            StatusChip("邀请链接里就带着接入信息，别转发给不想让看的人", ChipTone.Warn)
+        }
+        StatusChip("邀请链接里就带着接入信息，别转发给不想让看的人", ChipTone.Warn)
 
-            SpacerWeight()
-            SectionTitle("粘贴朋友的应答链接")
-            PasteField(pasteValue, onPasteChange)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
-                PrimaryPill("停止", onStop, backdrop, Modifier.weight(1f), filled = false)
-                PrimaryPill("连接", onConnect, backdrop, Modifier.weight(1f))
-            }
+        SpacerWeight()
+        SectionTitle("粘贴朋友的应答链接")
+        PasteField(pasteValue, onPasteChange, hint = "长按粘贴对方回传的应答链接")
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
+            PrimaryPill("停止", onStop, backdrop, Modifier.weight(1f), filled = false)
+            PrimaryPill("连接", onConnect, backdrop, Modifier.weight(1f))
         }
         Spacer(Modifier.height(GlassDimens.sp6))
     }
 }
 
+/**
+ * 链接粘贴区。
+ *
+ * 空白时必须显示提示文字，两个理由：
+ * - 一个纯黑的空框没人知道要往这里放什么；
+ * - 脚本化验证（uiautomator）需要一个可寻址的文本节点，否则只能靠像素坐标点，
+ *   换分辨率就废了。
+ */
 @Composable
-fun PasteField(value: String, onChange: (String) -> Unit) {
+fun PasteField(value: String, onChange: (String) -> Unit, hint: String = "长按粘贴") {
     Box(
         Modifier
             .fillMaxWidth()
@@ -260,6 +289,9 @@ fun PasteField(value: String, onChange: (String) -> Unit) {
             ),
             modifier = Modifier.fillMaxSize(),
         )
+        if (value.isEmpty()) {
+            Text(hint, fontSize = 11.sp, color = Ink.TextLow, fontFamily = FontFamily.Monospace)
+        }
     }
 }
 

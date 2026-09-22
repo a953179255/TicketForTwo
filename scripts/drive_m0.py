@@ -62,6 +62,27 @@ def tap(x, y):
     sh(ADB, "-s", SERIAL, "shell", "input", "tap", str(x), str(y))
 
 
+SHOTS = os.path.join("app", "build", "t2-shots")
+
+
+def shot(name):
+    """存一张当前屏到 build/t2-shots/，供肉眼验收。
+
+    为什么必须有：结构检查（uiautomator 有没有这个节点）全绿，仍然会漏掉
+    重叠、变形、玻璃不折射这类"只有看图才发现"的问题 —— 本项目已经翻过一次车。
+    放 build/ 下：跟着 clean 一起走，不会污染仓库。
+    """
+    os.makedirs(SHOTS, exist_ok=True)
+    path = os.path.join(SHOTS, f"{name}.png")
+    # 必须绕开 sh()：它带 text=True，PNG 是二进制，按文本解码会直接毁掉字节。
+    r = subprocess.run([ADB, "-s", SERIAL, "exec-out", "screencap", "-p"],
+                       capture_output=True, env=ENV, timeout=30)
+    with open(path, "wb") as f:
+        f.write(r.stdout)
+    print(f"   [shot] {path} ({len(r.stdout)} bytes)")
+    return path
+
+
 def wait_for(pred, tries=12, delay=0.8):
     for _ in range(tries):
         s = ui()
@@ -87,6 +108,7 @@ def main():
     time.sleep(10)
 
     s = ui()
+    shot("01-home")
     start = find(s, text="开始分享")
     if not start:
         print("找不到「开始分享」按钮，界面：", [n["text"] for n in nodes(s) if n["text"]][:10])
@@ -94,6 +116,17 @@ def main():
     print("== tap 开始分享 ==")
     tap(start["cx"], start["cy"])
     time.sleep(2)
+
+    # 玻璃化之后多了一屏"授权指引"（ConsentGuideScreen）：系统会连着问两件事，
+    # 不先讲清楚"要选整个屏幕"，用户十次有三次会选成单应用，然后以为 App 坏了。
+    s, consent = wait_for(lambda x: find(x, text="我知道了，继续"), tries=6)
+    if consent:
+        shot("02-consent")
+        print("== 授权指引 → tap 我知道了，继续 ==")
+        tap(consent["cx"], consent["cy"])
+        time.sleep(2)
+    else:
+        print("   没出现授权指引（可能直接进系统对话框了）")
 
     # 系统对话框可能依次出现：通知 / 麦克风 / 投屏。逐个放行。
     for _ in range(4):
@@ -110,6 +143,7 @@ def main():
     # 投屏对话框：默认是「Share one app」，必须改成整屏
     print("== 投屏对话框 ==")
     s = ui()
+    shot("03-projection")
     dd = find(s, text="Share one app")
     if dd:
         print("   默认落在「Share one app」→ 展开下拉")
@@ -132,6 +166,8 @@ def main():
         return 1
     print(f"   点 {nxt['text']!r} @({nxt['cx']},{nxt['cy']})")
     tap(nxt["cx"], nxt["cy"])
+    time.sleep(1.2)
+    shot("04-preparing")
 
     print("== 等信令就绪（最多 20s）==")
     for _ in range(20):
@@ -149,6 +185,7 @@ def main():
 
     # 把邀请链接落到 viewer/invite.txt，便于下一步直接喂给浏览器（含 token，勿入库）
     s = ui()
+    shot("05-invite")
     urls = [n["text"] for n in nodes(s) if n["text"].startswith("https://share.local/")]
     if urls:
         path = os.path.join(os.getcwd(), "viewer", "invite.txt")
@@ -156,6 +193,7 @@ def main():
         print("== invite 已写入 viewer/invite.txt (%d 字符)" % len(urls[0]))
     else:
         print("== 界面上没找到邀请链接")
+        print("   界面文本：", [n["text"][:40] for n in nodes(s) if n["text"]][:12])
     return 0
 
 

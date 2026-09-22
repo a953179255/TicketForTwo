@@ -8,9 +8,13 @@ import org.webrtc.DataChannel
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
 import org.webrtc.PeerConnection
+import org.webrtc.RTCStats
+import org.webrtc.RTCStatsCollectorCallback
+import org.webrtc.RTCStatsReport
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
 import org.webrtc.VideoTrack
+import kotlin.math.roundToInt
 
 /**
  * 一条 1v1 的 RTCPeerConnection，角色可翻转 —— 同一个 APK 既能当房主也能当观众。
@@ -198,6 +202,34 @@ class Peer(
         ch.send(DataChannel.Buffer(java.nio.ByteBuffer.wrap(text.toByteArray()).apply { rewind() }, false))
     }
 
+    // ---- 连接质量观测 ---------------------------------------------------
+
+    /**
+     * 当前这一条通路的实测快照。
+     *
+     * 只报**能从 stats 里真读出来的东西**：RTT 取选中 candidate-pair 的
+     * `currentRoundTripTime`，通路类型取两端 candidate 的 `candidateType`。
+     * 拿不到就是 null，UI 画 "—"，不用估计数填空。
+     */
+    data class NetStats(val rttMs: Int?, val viaLabel: String?)
+
+    /**
+     * 异步取一次 stats。回调在 libwebrtc 的采集线程上，用 [handler] 转回主线程。
+     *
+     * 用新版 `getStats(RTCStatsCollectorCallback)`（给 `RTCStatsReport`），
+     * 不是那个已经废弃、只返回总流量快照的 `getStats(StatsObserver, track)`。
+     */
+    fun collectStats(onResult: (NetStats) -> Unit) {
+        val p = pc ?: run { handler.post { onResult(NetStats(null, null)) }; return }
+        p.getStats(RTCStatsCollectorCallback { report ->
+            val parsed = runCatching { parseStats(report) }.getOrElse {
+                Log.w(TAG, "stats 解析失败：${it.message}")
+                NetStats(null, null)
+            }
+            handler.post { onResult(parsed) }
+        })
+    }
+
     // ---- PeerConnection.Observer --------------------------------------
 
     override fun onSignalingChange(state: PeerConnection.SignalingState) {
@@ -321,4 +353,62 @@ class Peer(
     companion object {
         private const val TAG = "Peer"
     }
+}
+
+// ---- stats 解析（纯函数，可在 JVM 上单测）------------------------------
+
+/**
+ * 从一次 stats 报告里取出"当前在用的那条 candidate-pair"。
+ *
+ * 为什么不能直接取第一条 `candidate-pair`：ICE 会为每组合格都留下**探测过**的
+ * pair，而且 `currentRoundTripTime` 在**所有** succeeded 的 pair 上都有值 ——
+ * 所以"有 RTT"根本不能当作"在用"的证据（第一版就是把它当证据，单测直接把
+ * 这个不可达分支打了出来）。真正的优先级：
+ * ① `selected=true`（旧实现叫 `currentPair`）；
+ * ② 退而求其次取 `bytesSent` 最大的一条 —— 只有它在实际跑流量；
+ * ③ 全为 0（刚连上、还没发出去东西）才退回"任意有 RTT 的一条"。
+ */
+internal fun selectedPair(report: RTCStatsReport?): RTCStats? {
+    val pairs = report?.statsMap?.values?.filter { it.type == "candidate-pair" }.orEmpty()
+    if (pairs.isEmpty()) return null
+    fun bytes(s: RTCStats) = (s.members["bytesSent"] as? Number)?.toDouble() ?: 0.0
+    pairs.firstOrNull { it.members["selected"] == true }?.let { return it }
+    val busiest = pairs.maxByOrNull { bytes(it) }
+    if (busiest != null && bytes(busiest) > 0.0) return busiest
+    // 刚连上、一个字节都还没发出去：这时"有 RTT"是唯一还能用的线索。
+    return pairs.firstOrNull { it.members["currentRoundTripTime"] != null }
+}
+
+/** 一次报告的实测快照；字段缺失一律返回 null，不猜。 */
+internal fun parseStats(report: RTCStatsReport?): Peer.NetStats {
+    val pair = selectedPair(report) ?: return Peer.NetStats(null, null)
+    val rttSec = (pair.members["currentRoundTripTime"] as? Number)?.toDouble()
+    val rttMs = rttSec?.let { (it * 1000).roundToInt() }
+
+    val all = report?.statsMap
+    val localType = candidateType(pair, "localCandidateId", all)
+    val remoteType = candidateType(pair, "remoteCandidateId", all)
+
+    return Peer.NetStats(rttMs, viaLabel(localType, remoteType))
+}
+
+/** candidate-pair 只给 candidateId，类型要回到同一份报告里按 id 查那条 candidate。 */
+private fun candidateType(pair: RTCStats, key: String, all: Map<String, RTCStats>?): String? {
+    val id = pair.members[key] as? String ?: return null
+    return all?.get(id)?.members?.get("candidateType") as? String
+}
+
+/**
+ * 通路类型文案。
+ *
+ * host↔host 才是"同一网络"（只用本机地址就通了，没出网关）；
+ * 任何一端是 srflx 说明经过了公网地址反射，属于跨 NAT 直连。
+ * relay 这一版不会出现 —— 架构里没有 TURN 中继，所以也不写进文案里骗人。
+ */
+internal fun viaLabel(local: String?, remote: String?): String? = when {
+    local == null && remote == null -> null
+    local == "relay" || remote == "relay" -> "中继"
+    local == "host" && remote == "host" -> "同一网络"
+    local == "srflx" || remote == "srflx" -> "跨网直连"
+    else -> "直连"
 }

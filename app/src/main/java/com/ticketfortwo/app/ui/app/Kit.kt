@@ -37,6 +37,7 @@ import com.ticketfortwo.app.ui.glass.rememberAppBackdrop
 import com.ticketfortwo.app.ui.theme.GlassDimens
 import com.ticketfortwo.app.ui.theme.Ink
 import com.ticketfortwo.app.ui.theme.TicketForTwoTheme
+import com.ticketfortwo.app.ui.theme.cardSurfaceAlpha
 import com.kyant.backdrop.backdrops.LayerBackdrop
 
 /**
@@ -131,7 +132,9 @@ fun GlassCardPanel(
         backdrop = backdrop,
         modifier = modifier,
         radius = GlassDimens.radiusCard,
-        surfaceAlpha = GlassDimens.CARD_SURFACE_ALPHA,
+        // 深色主题下必须降档，否则黑雾 0.58×1.8 会封顶成 0.94 —— 玻璃变黑板，
+        // 卡内点阵底纹与折射全部消失。取值出处见 cardSurfaceAlpha() 的注释。
+        surfaceAlpha = cardSurfaceAlpha(),
         floating = floating,
         content = content,
     )
@@ -171,7 +174,9 @@ fun StatusChip(
             .background(bg, RoundedCornerShape(percent = 50))
             .padding(horizontal = 9.dp, vertical = 3.dp)
     ) {
-        Text(text, fontSize = 11.sp, color = fg, maxLines = 1)
+        // maxLines=1 会把超长文案**静默裁掉**（观众屏那句就裁在了半个词上，
+        // 半句话比没有这句话更让人困惑）。宁可撑成两行也不截断。
+        Text(text, fontSize = 11.sp, color = fg, maxLines = 2, textAlign = TextAlign.Center)
     }
 }
 
@@ -193,13 +198,15 @@ fun ControlIsland(
     latencyLabel: String,
     netLabel: String,
     modifier: Modifier = Modifier,
+    /** 底下压着 SurfaceView 时必须 false（抓不到），没有视频层时可以采样环境底。 */
+    refract: Boolean = false,
 ) {
     GlassPanel(
         backdrop = backdrop,
         modifier = modifier,
         radius = GlassDimens.radiusIsland,
         surfaceAlpha = 0.72f,
-        refract = false,
+        refract = refract,
         content = {
             Row(
                 Modifier.padding(horizontal = 12.dp, vertical = 9.dp),

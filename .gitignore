@@ -37,5 +37,6 @@ tmp/
 
 # 本地调试产物：一次性邀请链接（含接入信息），不入库
 viewer/invite.txt
-viewer/ui_dump.xml
+# uiautomator dump 落在**仓库根**（drive_m0.py 的 cwd），写成 viewer/ 下就永远匹配不上
+ui_dump.xml
 viewer/reports.jsonl

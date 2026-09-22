@@ -85,9 +85,25 @@ object MotionTheme {
     fun fade(): AnimationSpec<Float> = tween(fadeMs)
 }
 
-/** 内容卡表面不透明度。保留函数形式以对齐 HaoAI 的调用点。 */
+/**
+ * 内容卡表面不透明度 —— **必须按主题分档**，不能一个数通吃。
+ *
+ * 深色档 0.26 是实测出来的，不是估的：`glassSurfaceColor` 在深色下会把 alpha
+ * 乘 1.8 再封顶 0.94（那倍数是给 0.16 这类**薄表面**补对比度用的，黑雾压在黑底上
+ * 几乎看不出来）。卡片用的 0.58 走同一条路 → 0.58×1.8 封顶成 **0.94**，
+ * 于是"玻璃卡"变成一块 94% 不透明的近黑矩形 —— 截图上卡内的点阵底纹完全消失、
+ * 折射与磨砂一律看不出，只剩一块黑面板。0.26×1.8 = 0.47，磨砂与 lens 才透得出来。
+ *
+ * 注意别改 `glassSurfaceColor` 的封顶值来"顺手修"：CallScreen 顶部条与控制岛
+ * 是压在任意视频内容上的 **scrim**（0.72 → 0.94），那里就是要接近不透明才读得清字。
+ * 所以分档落在"卡片传多少"这一侧。
+ */
 @Composable
-fun cardSurfaceAlpha(): Float = GlassDimens.CARD_SURFACE_ALPHA
+fun cardSurfaceAlpha(): Float =
+    if (isDarkTheme()) DARK_CARD_SURFACE_ALPHA else GlassDimens.CARD_SURFACE_ALPHA
+
+/** 深色主题下的内容卡表面不透明度，理由见 [cardSurfaceAlpha]。 */
+private const val DARK_CARD_SURFACE_ALPHA = 0.26f
 
 @Composable
 fun pageBarSurfaceAlpha(): Float = GlassDimens.PAGE_BAR_SURFACE_ALPHA

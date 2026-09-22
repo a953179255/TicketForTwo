@@ -1,7 +1,10 @@
 package com.ticketfortwo.app.ui.app
 
+import android.util.Log
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -29,6 +33,7 @@ import com.ticketfortwo.app.rtc.RtcEngine
 import com.ticketfortwo.app.ui.glass.GlassPanel
 import com.ticketfortwo.app.ui.theme.GlassDimens
 import com.ticketfortwo.app.ui.theme.Ink
+import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoTrack
 
@@ -43,6 +48,8 @@ import org.webrtc.VideoTrack
 fun VideoLayer(
     track: VideoTrack?,
     modifier: Modifier = Modifier,
+    onLabel: String = "video",
+    onFirstFrame: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     val renderer = remember { SurfaceViewRenderer(context) }
@@ -52,7 +59,22 @@ fun VideoLayer(
         AndroidView(
             factory = {
                 RtcEngine.init(context)
-                renderer.init(RtcEngine.eglBase.eglBaseContext, null)
+                // 传 RendererEvents 而不是 null：首帧到底有没有落到这块 Surface 上，
+                // 是"黑屏"与"还没来帧"唯一的区分依据。没有它，视频区出任何问题都只能靠猜。
+                renderer.init(
+                    RtcEngine.eglBase.eglBaseContext,
+                    object : RendererCommon.RendererEvents {
+                        override fun onFirstFrameRendered() {
+                            Log.i("VideoLayer", "$onLabel first frame rendered")
+                            // 回调在渲染线程上，Compose 状态必须回主线程改
+                            renderer.post { onFirstFrame(true) }
+                        }
+
+                        override fun onFrameResolutionChanged(w: Int, h: Int, rot: Int) {
+                            Log.i("VideoLayer", "$onLabel resolution ${w}x$h rot=$rot")
+                        }
+                    },
+                )
                 ready = true
                 renderer
             },
@@ -68,15 +90,22 @@ fun VideoLayer(
 }
 
 /**
- * 分享中 / 观看中：整屏视频 + 顶部状态条 + 底部控制岛。
+ * 分享中 / 观看中：顶部状态条 + 底部控制岛，中间按角色分两种内容。
  *
- * 房主看到的是自己的采集预览（本地零延迟，只用于"确认到底在播什么"），
- * 观众看到的是远端画面。两者布局一致，省一套 UI 也避免两边长歪。
+ * **房主不给实时自预览** —— 这不是省事的决定，是实测出来的结论：
+ * 采集源就是当前这一块屏，把它的画面再画回这块屏上，画的是"上一帧的自己"，
+ * 递归下去只会得到一片黑，或者一层层错位衰减的残影（两种都在模拟器上截到了）。
+ * 更糟的是它白占一路解码 + 一块 SurfaceView，而编码器正在抢同一块 GPU。
+ * 所以房主中间给的是"对方看到的就是你现在这屏"的确认信息；
+ * 真要"确认到底在播什么"，正确做法是抽**一帧静图**显示，那属于 M4 的诊断页。
+ *
+ * 观众侧才是真视频：远端轨 → SurfaceView。
  */
 @Composable
 fun CallScreen(
     backdrop: LayerBackdrop,
-    track: VideoTrack?,
+    /** 只用于观众侧。房主不给实时自预览，理由见下面的注释。 */
+    remoteTrack: VideoTrack?,
     isHost: Boolean,
     peerLabel: String,
     micOn: Boolean,
@@ -85,10 +114,32 @@ fun CallScreen(
     netLabel: String,
     onStop: () -> Unit,
 ) {
-    Box(Modifier.fillMaxSize().background(Ink.Video)) {
-        VideoLayer(track, Modifier.fillMaxSize())
+    // 这里**不能**给 Box 铺不透明底色：SurfaceView 的合成面在窗口之下，靠"挖洞"显示，
+    // 而 Compose 里父节点的不透明 background 会把那块洞重新填平 ——
+    // 实测现象就是"日志说 first frame rendered、分辨率 810x1800，屏幕上一片纯黑"。
+    // 视频区背后由根层的 AmbientBackground 兜底，首帧到达前显示等待文案。
+    Box(Modifier.fillMaxSize()) {
+        // 房主这屏没有 SurfaceView，玻璃就能正常采样环境底；
+        // 观众那屏视频压在最下面，SurfaceView 的内容抓不到（backdrop issue #98），只能退化成 scrim。
+        if (isHost) {
+            HostStage(backdrop, peerLabel)
+        } else {
+            // 首帧没到之前这块区域是纯黑 —— 用户分不清"对方画面全黑"和"卡住了"，所以必须有等待提示。
+            var firstFrame by remember(remoteTrack) { mutableStateOf(false) }
+            VideoLayer(
+                track = remoteTrack,
+                modifier = Modifier.fillMaxSize(),
+                onLabel = "remote",
+                onFirstFrame = { firstFrame = true },
+            )
+            if (!firstFrame) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("等待对方画面…", fontSize = 13.sp, color = Ink.TextMid)
+                }
+            }
+        }
 
-        // 顶部状态条：浮在视频上 → scrim + 边缘光，不采样
+        // 顶部状态条
         GlassPanel(
             backdrop = backdrop,
             modifier = Modifier
@@ -97,7 +148,7 @@ fun CallScreen(
                 .padding(top = 36.dp, start = 12.dp, end = 12.dp),
             radius = GlassDimens.radiusIsland,
             surfaceAlpha = 0.72f,
-            refract = false,
+            refract = isHost,
             content = {
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -128,9 +179,44 @@ fun CallScreen(
             onStop = onStop,
             latencyLabel = latencyMs?.let { "$it" } ?: "—",
             netLabel = netLabel,
+            refract = isHost,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(bottom = GlassDimens.islandBottom),
         )
+    }
+}
+
+/**
+ * 房主舞台：不画视频，只说清"现在正在播什么"。
+ *
+ * 卡片文案只留用户用得上的事实：**分享跟着你跨应用**。这是这类工具最容易
+ * 翻车的地方 —— 有人以为"退出 App 就停了"，结果相册、聊天窗口全被对方看到了。
+ * 至于"为什么不放实时预览"，那是我们内部的设计取舍，不该出现在用户界面上。
+ */
+@Composable
+private fun HostStage(backdrop: LayerBackdrop, peerLabel: String) {
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = GlassDimens.screenH),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        GlassCardPanel(backdrop, Modifier.fillMaxWidth(), floating = true) {
+            Column(
+                Modifier.padding(GlassDimens.sp5),
+                verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2),
+            ) {
+                Text("正在分享你的手机", fontSize = 19.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextHi)
+                Text(
+                    "对方看到的就是你现在这一屏，而且跟着你走：切到别的应用、打开相册，" +
+                        "他那边也同步换画面。想停就点下面的停止。",
+                    fontSize = 12.5.sp,
+                    color = Ink.TextMid,
+                    lineHeight = 18.sp,
+                )
+                Spacer(Modifier.height(GlassDimens.sp1))
+                Text(peerLabel, fontSize = 11.5.sp, color = Ink.TextLow)
+            }
+        }
     }
 }
