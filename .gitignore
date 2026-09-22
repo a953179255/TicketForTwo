@@ -40,3 +40,7 @@ tmp/
 .dev/
 # uiautomator dump 落在**仓库根**（drive_m0.py 的 cwd），写成 viewer/ 下就永远匹配不上
 ui_dump.xml
+
+# Python 字节码缓存（harness 脚本 import 时生成）
+__pycache__/
+*.pyc
