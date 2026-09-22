@@ -47,6 +47,15 @@ internal object Ink {
     // 浮层遮罩 —— Figma: "Black used at ~60% opacity behind video-overlay surfaces"
     val VideoScrim = Color(0x99000000)
     val StrongScrim = Color(0xC7000000)
+
+    /**
+     * 环境底的四团色相。不属于 DESIGN.md token，是为"让玻璃有东西可折射"而配的
+     * —— 见 ui/app/Ambient.kt 的注释。取色原则：色相拉开、饱和度高于表面但不与语义色撞车。
+     */
+    val AmbientBlue = Color(0xFF2B4D80)
+    val AmbientMagenta = Color(0xFF6B2F60)
+    val AmbientTeal = Color(0xFF1E5C53)
+    val AmbientAmber = Color(0xFF7A5320)
 }
 
 private val DarkColors: ColorScheme = darkColorScheme(
