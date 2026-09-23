@@ -1,8 +1,17 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     // AGP 9 内置 Kotlin 支持：不写 org.jetbrains.kotlin.android
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+}
+
+// 发布签名信息从 local.properties 读取（该文件不进 git），密钥文件本体也在仓库外
+// （G:\Android\keystore\）。这样签名密码不会出现在任何被提交的文件里。
+val keystoreProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
 }
 
 android {
@@ -22,6 +31,19 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        // 只有 local.properties 里配了密钥信息（本机）才创建；
+        // 别人 clone 仓库后没配也能正常构建，只是 release 包不带签名。
+        if (keystoreProps.getProperty("t2.storeFile") != null) {
+            create("release") {
+                storeFile = file(keystoreProps.getProperty("t2.storeFile"))
+                storePassword = keystoreProps.getProperty("t2.storePassword")
+                keyAlias = keystoreProps.getProperty("t2.keyAlias")
+                keyPassword = keystoreProps.getProperty("t2.keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         debug {
             // libwebrtc 每个 ABI 约 7–16MB，四端全打会到 110MB。
@@ -32,6 +54,7 @@ android {
         }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
