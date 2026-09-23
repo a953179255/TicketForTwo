@@ -25,8 +25,8 @@ android {
         // 屏幕声用的 AudioPlaybackCapture 只要 29，所以不构成下限。
         minSdk = 33
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -54,6 +54,12 @@ android {
         }
         release {
             isMinifyEnabled = false
+            // 正式版只留 arm64：它是发给真机用的，而隧道程序（cloudflared）单 x86_64
+            // 那一份就有 43MB —— 模拟器专用的二进制没有理由跟着分发。
+            // 代价：正式包不能再装到 x86_64 模拟器上（真机验证不受影响；模拟器用 debug 包）。
+            ndk {
+                abiFilters += listOf("arm64-v8a")
+            }
             signingConfig = signingConfigs.findByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

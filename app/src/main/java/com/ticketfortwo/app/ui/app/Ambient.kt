@@ -46,20 +46,31 @@ object AppWallpaper {
 }
 
 /**
- * 壁纸压暗层。
+ * 壁纸压暗层 —— 上下深、中间浅的纵向渐变。
  *
- * 默认壁纸是一张细节密集、明暗跨度很大的图案（暗处近乎纯黑、亮处是浅灰黄）。
- * **不在玻璃里的文字**（页面副标题、段落标题）总会有一段落在亮块上 ——
- * 实测设置页副标题的最坏对比度只有 **2.1:1**（可读性标准 4.5:1），那几段字直接糊掉。
- * 加这一层后最坏 **5.3:1** 达标，而图案仍然看得清楚。
+ * 默认壁纸明暗跨度很大（暗处近纯黑、亮处是浅灰黄）。而**不在玻璃里的文字**从上到下都有：
+ * 顶部是页面副标题，中部是「单位 fps，可填 8–120」这类说明，底部是段落标题和底部按钮。
+ * 所以不能只压一头 —— 但也不需要全屏一样黑：
+ *
+ * · 两端压得更深（0.58 / 0.64）：那里叠着标题、段落标签、底部卡片，是最需要压住图案的地方；
+ * · 中间留浅（0.28）：壁纸里那颗黄星落在这一带，是这张图最好看的部分，多留一点亮度；
+ *   而且首页这一带本来就被两个玻璃圆盖住，压不压对文字没影响。
  *
  * 关键是**画在采样宿主内**（壁纸之上、玻璃之下）：这样玻璃采到的是压暗后的底，
  * 玻璃自身的白雾提亮不受影响 ⇒ 底变暗、玻璃不变，字就出来了。
  * 若画在宿主外，会把玻璃连同一起压暗 = 全屏调暗，观感更闷且不解决问题。
  *
- * 这个数就是"看清文字"与"看清壁纸"之间的平衡旋钮：`0f` = 完全关掉。
+ * 每个 stop 都是"黑的不透明度"：调大 = 那张图更暗、字更清楚；`0f` 全组 = 完全关掉。
  */
-private const val WALLPAPER_SCRIM = 0.40f
+private val WALLPAPER_SCRIM = listOf(
+    0.00f to 0.58f,   // 状态栏 / 大标题
+    0.16f to 0.46f,   // 页面副标题
+    0.36f to 0.32f,
+    0.54f to 0.28f,   // 中间最亮（黄星所在），刻意留浅
+    0.72f to 0.38f,
+    0.88f to 0.56f,   // 底部信息卡 / 段落标题 / 按钮
+    1.00f to 0.64f,
+)
 
 /**
  * 环境底：给玻璃提供**可折射的内容**。
@@ -90,7 +101,14 @@ fun AmbientBackground(modifier: Modifier = Modifier) {
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.matchParentSize(),
             )
-            Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = WALLPAPER_SCRIM)))
+            Box(
+                Modifier.matchParentSize().background(
+                    Brush.verticalGradient(
+                        colorStops = WALLPAPER_SCRIM.map { it.first to Color.Black.copy(alpha = it.second) }
+                            .toTypedArray()
+                    )
+                )
+            )
         } else {
             // 程序化底本来就是近黑的，不需要再压暗
             DefaultAmbient(Modifier.matchParentSize())

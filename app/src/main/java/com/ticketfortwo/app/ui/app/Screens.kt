@@ -457,7 +457,8 @@ fun QualitySettingsScreen(
                 ) { onChange(quality.copy(fps = ShareQuality.FPSES[it])) }
                 Text(
                     "单位 fps，可填 ${ShareQuality.FPS_MIN}–${ShareQuality.FPS_MAX}",
-                    fontSize = 11.sp, color = Ink.TextLow,
+                    // TextLow(#7A7A7A) 是为深色实底准备的，压不住现在这张壁纸透出来的亮块
+                    fontSize = 11.sp, color = Ink.TextMid,
                 )
 
                 SectionTitle("码率上限")
@@ -509,7 +510,7 @@ fun QualitySettingsScreen(
                         },
                     ),
                 ) { onChange(quality.copy(maxVideoBps = ShareQuality.BPS_LIST[it])) }
-                Text("单位 Mbps，可填 0.1–50", fontSize = 11.sp, color = Ink.TextLow)
+                Text("单位 Mbps，可填 0.1–50", fontSize = 11.sp, color = Ink.TextMid)
 
                 Box(Modifier.fillMaxWidth().height(1.dp).background(Ink.TextLow.copy(alpha = 0.25f)))
                 InfoRow("当前组合", quality.summary(screenW))

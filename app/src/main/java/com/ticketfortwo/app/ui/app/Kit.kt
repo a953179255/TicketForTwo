@@ -164,6 +164,14 @@ fun GlassCardPanel(
     )
 }
 
+/**
+ * 段落标题。
+ *
+ * 字色用 `TextMid`（#B3B3B3）而不是 `TextLow`（#7A7A7A）——
+ * `TextLow` 的亮度只有 0.19，**即使压在纯白底上对比度也只有 4.4:1**，它是给"深色实底"用的。
+ * 换成默认壁纸之后，这类小标题一半在壁纸亮块上、一半在几乎全透的玻璃卡里，
+ * 实测压在黄色大字上的那一个只有 0.6:1（基本看不见）→ 整档提到 TextMid 才够。
+ */
 @Composable
 fun SectionTitle(text: String, modifier: Modifier = Modifier) {
     Text(
@@ -171,7 +179,7 @@ fun SectionTitle(text: String, modifier: Modifier = Modifier) {
         modifier = modifier,
         fontSize = 12.sp,
         fontWeight = FontWeight.Medium,
-        color = Ink.TextLow,
+        color = Ink.TextMid,
     )
 }
 
