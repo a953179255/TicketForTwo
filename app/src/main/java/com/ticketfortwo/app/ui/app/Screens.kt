@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kyant.backdrop.backdrops.LayerBackdrop
+import com.ticketfortwo.app.BuildConfig
 import com.ticketfortwo.app.ShareQuality
 import com.ticketfortwo.app.ui.glass.GlassCard
 import com.ticketfortwo.app.ui.theme.GlassDimens
@@ -105,9 +106,10 @@ fun HomeScreen(
                         )
                     },
                 label = "分享屏幕",
-                // 分享端需要装这个 App（只有观看端免安装），所以这里从"对方要什么"的角度写：
-                // 强调对方零门槛，而不是暗示自己也免安装（旧文案"浏览器免安装"会误导）
-                sub = "朋友浏览器就能看",
+                // 这句要说的是"**对方**那边零门槛"，不是"我自己也免安装"（旧文案"浏览器免安装"
+                // 就是在这儿误导的：分享端必须装 App）。
+                // 现在观看有两条路（App 内看 / 浏览器看），所以不再点名浏览器，只说结果。
+                sub = "发条链接，朋友就能看",
                 )
                 Spacer(Modifier.height(16.dp))
                 GlassOrbEntry(
@@ -375,11 +377,16 @@ fun QualitySettingsScreen(
         Spacer(Modifier.height(GlassDimens.sp6))
         Headline("分享设置", "这些是上限不是保证值：网络差或发热时会自动再降。开始分享时生效，本场通话内不可改。")
 
-        SectionTitle("实验室")
-        GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
-                LabEntry("圆钮颜色实验室", "调两个圆的雾色，复制参数发给 AI", onOpenColorLab)
-                LabEntry("玻璃参数实验室", "调磨砂/透镜/透明度，复制参数发给 AI", onOpenGlassLab)
+        // 实验室是**开发期的调参工具**：在 App 里拖滑杆调出满意配方 → 复制参数 → 写回代码。
+        // 它不是给用户的功能，正式版不该出现（用户打开分享设置，要看的是画质，不是磨砂半径）。
+        // 只在 debug 包暴露；正式版连入口都没有 ⇒ 两款滑杆页也就不可能被路由到。
+        if (BuildConfig.DEBUG) {
+            SectionTitle("实验室")
+            GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
+                    LabEntry("圆钮颜色实验室", "调两个圆的雾色，复制参数发给 AI", onOpenColorLab)
+                    LabEntry("玻璃参数实验室", "调磨砂/透镜/透明度，复制参数发给 AI", onOpenGlassLab)
+                }
             }
         }
 

@@ -69,6 +69,9 @@ android {
 
     buildFeatures {
         compose = true
+        // 生成 BuildConfig.DEBUG —— 设置页用它判断"要不要露出实验室"。
+        // AGP 8 起默认不生成，必须显式打开（不打开的话 BuildConfig 这个类根本不存在，编译不过）。
+        buildConfig = true
     }
 
     testOptions {
