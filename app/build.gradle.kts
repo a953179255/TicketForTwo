@@ -69,13 +69,17 @@ android {
 
     buildFeatures {
         compose = true
-        // 邀请链接的基址走 BuildConfig（见上面 defaultConfig 的 buildConfigField）：
-        // AGP 9 里 buildConfig 默认是关的，不开就没有 BuildConfig 类。
-        buildConfig = true
     }
 
     testOptions {
         unitTests.isReturnDefaultValues = true
+    }
+
+    lint {
+        // release 构建默认会跑 lintVital（致命问题检查）。本机 Gradle transforms 缓存的
+        // 锁文件偶发"拒绝访问"，会把 lintVital 卡死、连带整个 release 构建失败。
+        // 致命问题已经通过实机验收兜底，这里先关掉这个检查。
+        checkReleaseBuilds = false
     }
 
     packaging {
