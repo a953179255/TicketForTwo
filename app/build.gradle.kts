@@ -55,8 +55,12 @@ android {
         release {
             isMinifyEnabled = false
             // 正式版只留 arm64：它是发给真机用的，而隧道程序（cloudflared）单 x86_64
-            // 那一份就有 43MB —— 模拟器专用的二进制没有理由跟着分发。
-            // 代价：正式包不能再装到 x86_64 模拟器上（真机验证不受影响；模拟器用 debug 包）。
+            // 那一份就有 43MB —— 模拟器专用的二进制没有理由跟着分发。（107.9MB → 71.3MB）
+            //
+            // 一度以为"代价是正式包装不上模拟器"，**实测不成立**：本机模拟器镜像的
+            // abilist 是 `x86_64,arm64-v8a`（镜像自带 ARM 转译），只含 arm64 的正式包照样
+            // 能装能跑，`dumpsys package` 显示 primaryCpuAbi=arm64-v8a、无 UnsatisfiedLink。
+            // 所以正式包可以照常在模拟器上验，只是验的是 arm64 那份二进制。
             ndk {
                 abiFilters += listOf("arm64-v8a")
             }
