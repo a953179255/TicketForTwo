@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""驱动 M0 闸门测试：装机 → 点「开始分享」→ 过系统对话框 → 读日志。
+"""驱动 M0 闸门测试：装机 → 点「开始分享」→ 过系统对话框 → 提取隧道邀请（?k=）。
 
 为什么要脚本化：这段流程要反复跑（改一处就要重测），手点坐标不可复现。
 按 text 内容定位再点中心，比硬编码坐标稳。
@@ -180,35 +180,38 @@ def main():
     time.sleep(1.2)
     shot("04-preparing")
 
-    print("== 等信令就绪（最多 20s）==")
-    for _ in range(20):
+    print("== 等邀请链接出现（隧道注册最长约 30s，上限 45s）==")
+    # 新流程（a0cc901）：邀请是隧道 URL（https://…trycloudflare.com/?k=…），
+    # 要等 SignalHub + cloudflared 就绪（30s 启动闸门）才出现在等待屏上。
+    # 旧的"等 signal ready 日志 20s"判据已失效 —— 以**邀请节点可见**为唯一完成条件。
+    urls = []
+    for _ in range(45):
         time.sleep(1)
-        logs = sh(ADB, "-s", SERIAL, "logcat", "-d",
-                  "-s", "CallSession:V", "Peer:V", "RtcEngine:V", "ScreenShare:V").stdout
-        if "signal ready" in logs or "SecurityException" in logs or "FATAL" in logs:
+        s = ui()
+        urls = [n["text"] for n in nodes(s)
+                if "?k=" in n["text"] and n["text"].startswith("http")]
+        if urls:
             break
+    logs = (sh(ADB, "-s", SERIAL, "logcat", "-d",
+               "-s", "CallSession:V", "Peer:V", "RtcEngine:V", "ScreenShare:V",
+               "SignalHub:V", "TunnelManager:V").stdout) or ""
     print("== 日志 ==")
     for line in logs.splitlines():
-        if re.search(r"(CallSession|Peer|RtcEngine|ScreenShare):", line):
+        if re.search(r"(CallSession|Peer|RtcEngine|ScreenShare|SignalHub|TunnelManager):", line):
             print("  " + line.split(":", 2)[-1].strip()[:150])
     alive = sh(ADB, "-s", SERIAL, "shell", "pidof", PKG).stdout.strip()
     print("== 进程存活:", alive or "已崩溃")
 
-    # 把邀请链接落到 .dev/invite.txt，便于下一步直接喂给浏览器。
-    # 必须在 .dev/ 而不是 viewer/：viewer/public 是会被打包上传的站点根，
-    # 这条链接里带着真实的 SDP 与候选地址。
-    s = ui()
+    # 把隧道邀请落到 .dev/invite.txt，供 run_viewer_edge 原样打开。
+    # 链接只带 ?k= 凭证不含 SDP；一次性产物仍放 .dev/（不进站点目录）。
     shot("05-invite")
-    # 认 fragment 不认域名：基址现在是构建输入，写死 share.local 会在真实链接上
-    # 直接"找不到邀请链接"。邀请屏上唯一带 #t2= 的文本节点就是它。
-    urls = [n["text"] for n in nodes(s) if "#t2=" in n["text"] and n["text"].startswith("http")]
     if urls:
         os.makedirs(os.path.join(os.getcwd(), ".dev"), exist_ok=True)
         path = os.path.join(os.getcwd(), ".dev", "invite.txt")
         open(path, "w", encoding="utf-8").write(urls[0])
         print("== invite 已写入 .dev/invite.txt (%d 字符)" % len(urls[0]))
     else:
-        print("== 界面上没找到邀请链接")
+        print("== 界面上没找到隧道邀请（?k=）")
         print("   界面文本：", [n["text"][:40] for n in nodes(s) if n["text"]][:12])
     return 0
 

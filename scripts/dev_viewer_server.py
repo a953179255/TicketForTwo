@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""开发用静态服务器 + 统计回传接收端。
+"""统计落盘端 + 观众页静态预览（a0cc901 隧道单轮后的主要职责）。
 
-浏览器页带 ?report=1 时会把 WebRTC 统计 POST 到 /report，这里逐行落到
-.dev/reports.jsonl，便于在无头/半自动场景下取证（内置浏览器拿不到麦克风，
-所以连麦验证必须走真 Chromium）。
+观众页本身由 SignalHub 经出站隧道提供（WS 绑 location.host，必须原样打开）；
+这里①接收页面 ?relay= 指来的 WebRTC 统计 POST（SignalHub 没有 /report），逐行落
+.dev/reports.jsonl；②静态服务 app/src/main/assets/viewer 仅用于本地预览页面
+（信令仍需隧道，dev 预览连不上房主）。
 
 用法： python scripts/dev_viewer_server.py [port]
 """
@@ -13,9 +14,9 @@ import sys
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-# 只提供 public/ —— 它就是"可部署的站点根"，与 Qoder Sites 的 webDirectory 同一个口径。
-# 调试产物（token、统计）一律落在 .dev/，绝不进站点目录，否则会被打包上传。
-ROOT = os.path.join(_HERE, "..", "viewer", "public")
+# 只服务 assets/viewer（观众页源文件，SignalHub 也从这里取）；统计与一次性产物
+# 一律落 .dev/，与页面目录隔离。
+ROOT = os.path.join(_HERE, "..", "app", "src", "main", "assets", "viewer")
 OUT = os.path.join(_HERE, "..", ".dev", "reports.jsonl")
 os.makedirs(os.path.dirname(OUT), exist_ok=True)
 
@@ -30,8 +31,8 @@ class Handler(SimpleHTTPRequestHandler):
     def end_headers(self):
         # ES module 需要正确的 MIME；同时禁缓存，避免改完页面看不到
         self.send_header("Cache-Control", "no-store")
-        # 允许"已部署的页面"把统计 POST 回本机：run_viewer_edge 会用 ?relay= 指到这里，
-        # 这样取证走的是朋友真正点的那条链接，而不是本地 dev 副本。
+        # 允许隧道里的观众页把统计 POST 回本机：run_viewer_edge 用 ?relay= 指到这里
+        # （SignalHub 本身没有 /report），取证走朋友真正点的那条隧道链接。
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
