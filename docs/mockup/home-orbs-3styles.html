@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>双人票 · 磨砂玻璃圆三方案对比（A 发光描边 / B 弧形光泽 / C 双环玻璃）</title>
+<style>
+*{box-sizing:border-box;margin:0}
+:root{
+  --page:#08090c;
+  --tx:#f4f4f7; --tx-mid:rgba(255,255,255,.60); --tx-low:rgba(255,255,255,.38);
+  --chip-bg:rgba(255,255,255,.055); --chip-bd:rgba(255,255,255,.18);
+  --label:#fff;
+}
+body.light{
+  --tx:#101218; --tx-mid:rgba(0,0,0,.58); --tx-low:rgba(0,0,0,.34);
+  --chip-bg:rgba(255,255,255,.5); --chip-bd:rgba(255,255,255,.8);
+  --label:#101218;
+}
+body{min-height:100vh;background:var(--page);color:var(--tx);
+  font-family:system-ui,-apple-system,"Segoe UI","Noto Sans SC",sans-serif;
+  display:flex;flex-direction:column;align-items:center;padding:36px 20px 60px;gap:30px;
+  transition:background .4s}
+h1{font-size:19px;font-weight:650;text-align:center}
+h1 small{display:block;font-size:12.5px;font-weight:400;color:var(--tx-mid);margin-top:6px;letter-spacing:.3px}
+.stage{display:flex;gap:30px;align-items:flex-start;flex-wrap:wrap;justify-content:center}
+
+.phone-wrap{display:flex;flex-direction:column;align-items:center;gap:14px}
+.tag{font-size:14px;font-weight:650;color:var(--tx);letter-spacing:.5px}
+.tag small{display:block;font-size:11.5px;font-weight:400;color:var(--tx-mid);text-align:center;margin-top:3px}
+
+/* ── 手机壳（×3） ── */
+.phone{width:330px;height:714px;border-radius:42px;position:relative;overflow:hidden;
+  border:9px solid #17171c;box-shadow:0 28px 70px rgba(0,0,0,.6)}
+body.light .phone{border-color:#c9ccd6;box-shadow:0 28px 70px rgba(30,40,80,.25)}
+.wallpaper{position:absolute;inset:0;
+  background:
+    radial-gradient(62% 42% at 80% 40%, rgba(45,85,165,.24) 0%, transparent 62%),
+    radial-gradient(50% 34% at 18% 76%, rgba(70,60,150,.14) 0%, transparent 60%),
+    radial-gradient(rgba(150,185,255,.06) 1px, transparent 1.5px),
+    linear-gradient(180deg, #090c15, #04060c);
+  background-size: auto, auto, 11px 11px, auto;
+  background-repeat: no-repeat, no-repeat, repeat, no-repeat}
+body.light .wallpaper{background:
+    radial-gradient(62% 42% at 80% 40%, rgba(120,170,255,.20) 0%, transparent 62%),
+    radial-gradient(rgba(30,60,140,.10) 1px, transparent 1.5px),
+    linear-gradient(180deg, #e9edf6, #d5dcea);
+  background-size: auto, 11px 11px, auto;
+  background-repeat: no-repeat, repeat, no-repeat}
+
+.app{position:absolute;inset:0;display:flex;flex-direction:column}
+.statusbar{height:40px;flex:none;display:flex;justify-content:space-between;align-items:flex-end;
+  padding:0 22px 5px;font-size:12px;font-weight:650;color:var(--tx)}
+.head{padding:12px 22px 0;flex:none}
+.head h2{font-size:18.5px;font-weight:700;letter-spacing:.4px;color:var(--tx);
+  text-shadow:0 1px 8px rgba(0,0,0,.35)}
+.head p{font-size:11.5px;color:var(--tx-mid);margin-top:4px}
+
+.orbs{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px;padding:0 20px}
+.orb-wrap{display:flex;flex-direction:column;align-items:center;position:relative}
+.orb{width:126px;height:126px;border-radius:50%;border:0;padding:0;cursor:pointer;position:relative;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;color:#fff;
+  transition:transform .38s cubic-bezier(.32,2.32,.61,.27), box-shadow .3s}
+.orb:active{transform:scale(.94)}
+.orb .ic{width:36px;height:36px;filter:drop-shadow(0 1px 4px rgba(0,0,0,.30))}
+.orb .t{font-size:14.5px;font-weight:690;letter-spacing:1.4px;text-shadow:0 1px 5px rgba(0,0,0,.36)}
+.orb .s{font-size:10px;letter-spacing:.4px;opacity:.75;text-shadow:0 1px 4px rgba(0,0,0,.30)}
+
+.foot{flex:none;padding:0 22px 22px;display:flex;flex-direction:column;gap:11px}
+.last{text-align:center;font-size:10.5px;color:var(--tx-low)}
+.settings{height:50px;border-radius:25px;display:flex;align-items:center;justify-content:center;gap:9px;
+  border:1px solid var(--chip-bd);background:var(--chip-bg);color:var(--tx);font-size:13.5px;font-weight:560;
+  cursor:pointer;position:relative;transition:transform .3s cubic-bezier(.32,2.32,.61,.27)}
+.settings:active{transform:scale(.96)}
+.settings svg{width:17px;height:17px;opacity:.85}
+
+/* ═══ 方案 A：发光描边（edge-lit）═══
+   玻璃几乎无色，质感全部交给一圈精致的发光边：内侧细白线 + 语义色外光晕 */
+.orb.a-share,.orb.a-view{
+  -webkit-backdrop-filter:blur(16px) saturate(1.35);
+  backdrop-filter:blur(16px) saturate(1.35)}
+.orb.a-share{background:rgba(12,26,52,.22)}
+.orb.a-view{background:rgba(40,18,52,.22)}
+.orb.a-share{box-shadow:
+  inset 0 0 0 1.2px rgba(255,255,255,.34),
+  inset 0 1px 4px rgba(255,255,255,.14),
+  0 0 26px rgba(10,132,255,.34),
+  0 8px 22px rgba(0,0,0,.32)}
+.orb.a-view{box-shadow:
+  inset 0 0 0 1.2px rgba(255,255,255,.34),
+  inset 0 1px 4px rgba(255,255,255,.14),
+  0 0 26px rgba(171,88,234,.32),
+  0 8px 22px rgba(0,0,0,.32)}
+.orb.a-share::before,.orb.a-view::before{content:"";position:absolute;inset:0;border-radius:50%;
+  background:linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,0) 30%);pointer-events:none}
+/* 按压时光晕收紧 */
+.orb.a-share:active{box-shadow:inset 0 0 0 1.2px rgba(255,255,255,.4), 0 0 14px rgba(10,132,255,.28), 0 4px 10px rgba(0,0,0,.32)}
+.orb.a-view:active{box-shadow:inset 0 0 0 1.2px rgba(255,255,255,.4), 0 0 14px rgba(171,88,234,.26), 0 4px 10px rgba(0,0,0,.32)}
+
+/* ═══ 方案 B：弧形光泽（glossy）═══
+   彩色磨砂 + 一道从左上扫到右下的弧形反光带 + 底部内侧反光，经典玻璃光泽 */
+.orb.b-share,.orb.b-view{
+  -webkit-backdrop-filter:blur(15px) saturate(1.4);
+  backdrop-filter:blur(15px) saturate(1.4)}
+.orb.b-share{background:linear-gradient(155deg, rgba(10,132,255,.40) 0%, rgba(100,210,255,.18) 55%, rgba(10,132,255,.30) 100%);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.24), 0 8px 22px rgba(0,0,0,.32)}
+.orb.b-view{background:linear-gradient(155deg, rgba(171,88,234,.38) 0%, rgba(94,92,230,.16) 55%, rgba(171,88,234,.28) 100%);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.24), 0 8px 22px rgba(0,0,0,.32)}
+.orb.b-share::before,.orb.b-view::before{ /* 弧形反光带 */
+  content:"";position:absolute;left:7%;top:4%;width:86%;height:48%;pointer-events:none;
+  border-radius:50% 50% 44% 44% / 64% 64% 36% 36%;
+  background:linear-gradient(180deg, rgba(255,255,255,.40) 0%, rgba(255,255,255,.10) 55%, rgba(255,255,255,0) 100%);
+  filter:blur(1px)}
+.orb.b-share::after,.orb.b-view::after{ /* 底部内侧反光 */
+  content:"";position:absolute;inset:0;border-radius:50%;pointer-events:none;
+  box-shadow:inset 0 -16px 22px -14px rgba(255,255,255,.20), inset 0 0 0 1px rgba(255,255,255,.18)}
+.orb.b-share:active{background:linear-gradient(155deg, rgba(10,132,255,.5) 0%, rgba(100,210,255,.28) 55%, rgba(10,132,255,.4) 100%)}
+.orb.b-view:active{background:linear-gradient(155deg, rgba(171,88,234,.48) 0%, rgba(94,92,230,.26) 55%, rgba(171,88,234,.38) 100%)}
+
+/* ═══ 方案 C：双环玻璃（double-ring）═══
+   内圆磨砂 + 外侧 9dp 间隙 + 一圈语义色细环，内外呼应 */
+.orb.c-share,.orb.c-view{
+  -webkit-backdrop-filter:blur(15px) saturate(1.35);
+  backdrop-filter:blur(15px) saturate(1.35)}
+.orb.c-share{background:rgba(12,26,52,.24);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.28), inset 0 1px 4px rgba(255,255,255,.12), 0 8px 22px rgba(0,0,0,.32)}
+.orb.c-view{background:rgba(40,18,52,.24);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.28), inset 0 1px 4px rgba(255,255,255,.12), 0 8px 22px rgba(0,0,0,.32)}
+.orb.c-share::after,.orb.c-view::after{ /* 外侧细环 */
+  content:"";position:absolute;inset:-9px;border-radius:50%;pointer-events:none;
+  border:1.3px solid rgba(255,255,255,.30)}
+.orb.c-share::after{border-color:rgba(100,180,255,.55)}
+.orb.c-view::after{border-color:rgba(200,130,255,.55)}
+.orb.c-share:active{box-shadow:inset 0 0 0 1px rgba(255,255,255,.36), 0 4px 12px rgba(0,0,0,.32)}
+.orb.c-view:active{box-shadow:inset 0 0 0 1px rgba(255,255,255,.36), 0 4px 12px rgba(0,0,0,.32)}
+
+/* ── 标注 ── */
+.note{display:none;position:absolute;font-size:9.5px;font-family:ui-monospace,Consolas,monospace;
+  color:#ffd166;background:rgba(10,10,12,.85);border:1px solid rgba(255,209,102,.35);
+  padding:2px 6px;border-radius:5px;white-space:nowrap;z-index:9;pointer-events:none}
+body.notes .note{display:block}
+body.notes .orb{outline:1px dashed rgba(255,209,102,.5);outline-offset:3px}
+
+/* ── 控制区 ── */
+.panel{display:flex;flex-direction:column;gap:14px;align-items:center;max-width:700px;
+  font-size:13.5px;line-height:1.75;color:var(--tx-mid);text-align:center}
+.panel .sw{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:center}
+.sw button,.sw label{cursor:pointer;font-size:13px;padding:9px 16px;border-radius:999px;
+  border:1px solid var(--chip-bd);background:var(--chip-bg);color:var(--tx);display:flex;gap:8px;align-items:center;user-select:none}
+.sw input{accent-color:#0a84ff}
+.hint{font-size:12.5px;color:var(--tx-mid)}
+</style>
+</head>
+<body>
+<h1>双人票 · 磨砂玻璃圆三方案<small>排版与 v5 相同，只换玻璃的视觉处理 · 按住圆有按压反馈 · 未改动任何代码</small></h1>
+
+<div class="stage">
+  <!-- ═══ A 发光描边 ═══ -->
+  <div class="phone-wrap">
+    <div class="tag">方案 A · 发光描边<small>无色玻璃 + 语义色光晕描边，极简高级</small></div>
+    <div class="phone">
+      <div class="wallpaper"></div>
+      <div class="app">
+        <div class="statusbar"><span>9:41</span><span>▮▮</span></div>
+        <div class="head"><h2>双人票</h2><p>把你的屏幕，变成朋友的私人影院</p></div>
+        <div class="orbs">
+          <div class="orb-wrap">
+            <button class="orb a-share">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.2" width="18" height="12.6" rx="2.6"/><path d="M12 14.2V7.6"/><path d="M9.1 10.4 12 7.5l2.9 2.9"/><path d="M8.2 20.8h7.6"/></svg>
+              <span class="t">分享屏幕</span><span class="s">浏览器免安装</span>
+            </button>
+          </div>
+          <div class="orb-wrap">
+            <button class="orb a-view">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6.6" y="2.6" width="10.8" height="18.8" rx="2.6"/><path d="M10.6 9.6v4.8l4-2.4z" fill="currentColor" stroke="none"/></svg>
+              <span class="t">进入观看</span><span class="s">粘上链接就能看</span>
+            </button>
+          </div>
+        </div>
+        <div class="foot">
+          <div class="last">上次连接 09-22 17:54</div>
+          <button class="settings"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94a7.07 7.07 0 0 0 .05-.94 7.07 7.07 0 0 0-.05-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.22l-2.39.96a7.03 7.03 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96a.5.5 0 0 0-.61.22L2.63 8.9a.5.5 0 0 0 .12.64l2.03 1.58a7.07 7.07 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.61.22l2.39-.96c.49.38 1.03.7 1.62.94l.36 2.54c.04.24.25.42.5.42h3.84c.25 0 .46-.18.5-.42l.36-2.54a7.03 7.03 0 0 0 1.62-.94l2.39.96c.21.1.48 0 .61-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58Z"/></svg>分享设置</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ B 弧形光泽 ═══ -->
+  <div class="phone-wrap">
+    <div class="tag">方案 B · 弧形光泽<small>彩色磨砂 + 大弧反光带，华丽经典</small></div>
+    <div class="phone">
+      <div class="wallpaper"></div>
+      <div class="app">
+        <div class="statusbar"><span>9:41</span><span>▮▮</span></div>
+        <div class="head"><h2>双人票</h2><p>把你的屏幕，变成朋友的私人影院</p></div>
+        <div class="orbs">
+          <div class="orb-wrap">
+            <button class="orb b-share">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.2" width="18" height="12.6" rx="2.6"/><path d="M12 14.2V7.6"/><path d="M9.1 10.4 12 7.5l2.9 2.9"/><path d="M8.2 20.8h7.6"/></svg>
+              <span class="t">分享屏幕</span><span class="s">浏览器免安装</span>
+            </button>
+          </div>
+          <div class="orb-wrap">
+            <button class="orb b-view">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6.6" y="2.6" width="10.8" height="18.8" rx="2.6"/><path d="M10.6 9.6v4.8l4-2.4z" fill="currentColor" stroke="none"/></svg>
+              <span class="t">进入观看</span><span class="s">粘上链接就能看</span>
+            </button>
+          </div>
+        </div>
+        <div class="foot">
+          <div class="last">上次连接 09-22 17:54</div>
+          <button class="settings"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94a7.07 7.07 0 0 0 .05-.94 7.07 7.07 0 0 0-.05-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.22l-2.39.96a7.03 7.03 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96a.5.5 0 0 0-.61.22L2.63 8.9a.5.5 0 0 0 .12.64l2.03 1.58a7.07 7.07 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.61.22l2.39-.96c.49.38 1.03.7 1.62.94l.36 2.54c.04.24.25.42.5.42h3.84c.25 0 .46-.18.5-.42l.36-2.54a7.03 7.03 0 0 0 1.62-.94l2.39.96c.21.1.48 0 .61-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58Z"/></svg>分享设置</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ C 双环玻璃 ═══ -->
+  <div class="phone-wrap">
+    <div class="tag">方案 C · 双环玻璃<small>磨砂内圆 + 间隙 + 语义色细环，精致独特</small></div>
+    <div class="phone">
+      <div class="wallpaper"></div>
+      <div class="app">
+        <div class="statusbar"><span>9:41</span><span>▮▮</span></div>
+        <div class="head"><h2>双人票</h2><p>把你的屏幕，变成朋友的私人影院</p></div>
+        <div class="orbs">
+          <div class="orb-wrap">
+            <span class="note" style="top:16px;right:-14px">外环间隙 9dp</span>
+            <button class="orb c-share">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.2" width="18" height="12.6" rx="2.6"/><path d="M12 14.2V7.6"/><path d="M9.1 10.4 12 7.5l2.9 2.9"/><path d="M8.2 20.8h7.6"/></svg>
+              <span class="t">分享屏幕</span><span class="s">浏览器免安装</span>
+            </button>
+          </div>
+          <div class="orb-wrap">
+            <button class="orb c-view">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6.6" y="2.6" width="10.8" height="18.8" rx="2.6"/><path d="M10.6 9.6v4.8l4-2.4z" fill="currentColor" stroke="none"/></svg>
+              <span class="t">进入观看</span><span class="s">粘上链接就能看</span>
+            </button>
+          </div>
+        </div>
+        <div class="foot">
+          <div class="last">上次连接 09-22 17:54</div>
+          <button class="settings"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94a7.07 7.07 0 0 0 .05-.94 7.07 7.07 0 0 0-.05-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.22l-2.39.96a7.03 7.03 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96a.5.5 0 0 0-.61.22L2.63 8.9a.5.5 0 0 0 .12.64l2.03 1.58a7.07 7.07 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.61.22l2.39-.96c.49.38 1.03.7 1.62.94l.36 2.54c.04.24.25.42.5.42h3.84c.25 0 .46-.18.5-.42l.36-2.54a7.03 7.03 0 0 0 1.62-.94l2.39.96c.21.1.48 0 .61-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58Z"/></svg>分享设置</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <div>
+    <b>方案 A · 发光描边</b> —— 玻璃几乎无色，一圈语义色光晕描边就是全部装饰。最克制、最耐看，短板是存在感偏低。<br>
+    <b>方案 B · 弧形光泽</b> —— 彩色磨砂 + 一道大弧反光带，是经典“玻璃按钮”的光泽做法，第一眼最华丽。<br>
+    <b>方案 C · 双环玻璃</b> —— 磨砂内圆和外侧语义色细环之间留了一圈空隙，最有设计感，也最独特。
+  </div>
+  <div class="sw">
+    <button id="themeBtn">◐ 切换深色 / 浅色</button>
+    <label><input type="checkbox" id="noteChk"> 显示标注</label>
+  </div>
+  <div class="hint">三台手机用的是同一排版、同一壁纸（App 现有壁纸近似）、同一文案，只有玻璃处理不同 —— 挑你觉得最顺眼的那个。</div>
+</div>
+
+<script>
+document.getElementById('themeBtn').addEventListener('click', () => document.body.classList.toggle('light'));
+document.getElementById('noteChk').addEventListener('change', e => document.body.classList.toggle('notes', e.target.checked));
+</script>
+</body>
+</html>

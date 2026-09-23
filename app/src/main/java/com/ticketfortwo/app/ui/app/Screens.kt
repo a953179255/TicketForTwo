@@ -1,8 +1,16 @@
 package com.ticketfortwo.app.ui.app
 
+import android.content.Context
+import android.view.WindowManager
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -12,22 +20,41 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.ticketfortwo.app.ShareQuality
+import com.ticketfortwo.app.ui.glass.GlassCard
 import com.ticketfortwo.app.ui.theme.GlassDimens
 import com.ticketfortwo.app.ui.theme.Ink
+import java.util.Locale
 
 /**
  * 各屏。全部走 Kit 里的玻璃原子，不再出现 Material 默认卡片。
@@ -50,12 +77,63 @@ fun HomeScreen(
     lastSummary: String?,
 ) {
     PageScaffold {
-        Spacer(Modifier.height(GlassDimens.sp6))
-        Headline("分享你的手机", "最多 1 位朋友实时观看，并且能和你连麦说话。")
+        Headline("双人票", "把你的屏幕，变成你和朋友的私人影院。")
 
+        // 圆形双入口（效果图 home-orbs-pastel3.html 方案 2：丁香紫 × 樱花粉）。
+        // 按用户要求：只改这两个圆的效果，页面其余部分保持原样。
+        //
+        // 尺寸自适应：直径以 160dp（实验室调定值）为上限，但不超过可用高度的 44%。
+        // 两个 160dp 的圆在矮屏上会把底部"分享设置"挤出屏幕（实测被裁掉半截），
+        // 所以这里按可用空间收缩 —— 高屏手机上依然显示完整的 160dp。
+        BoxWithConstraints(
+            Modifier.fillMaxWidth().weight(1f),
+            contentAlignment = Alignment.Center,
+        ) {
+            val orbSize = minOf(160.dp, maxHeight * 0.44f)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                GlassOrbEntry(
+                    onClick = onStart,
+                    backdrop = backdrop,
+                    tint = OrbTintViolet,
+                    diameter = orbSize,
+                    icon = {
+                        Icon(
+                            OrbShareIcon,
+                            contentDescription = null,
+                            tint = OrbInk,
+                            modifier = Modifier.size(34.dp),
+                        )
+                    },
+                label = "分享屏幕",
+                // 分享端需要装这个 App（只有观看端免安装），所以这里从"对方要什么"的角度写：
+                // 强调对方零门槛，而不是暗示自己也免安装（旧文案"浏览器免安装"会误导）
+                sub = "朋友浏览器就能看",
+                )
+                Spacer(Modifier.height(16.dp))
+                GlassOrbEntry(
+                    onClick = onJoinViewer,
+                    backdrop = backdrop,
+                    tint = OrbTintPink,
+                    diameter = orbSize,
+                    icon = {
+                        Icon(
+                            OrbViewIcon,
+                            contentDescription = null,
+                            tint = OrbInk,
+                            modifier = Modifier.size(34.dp),
+                        )
+                    },
+                    label = "进入观看",
+                    sub = "粘上链接就能看",
+                )
+            }
+        }
+
+        // 信息卡（原样保留：画质 / 流量 / 麦克风 / 上次连接）。
+        // 圆放大到 160dp 后垂直空间变紧，这里的内边距与行距各收一档。
         GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp3)) {
-                InfoRow("分享画质", quality.summary())
+            Column(Modifier.padding(GlassDimens.sp3), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
+                InfoRow("分享画质", quality.summary(rememberScreenWidthPx()))
                 if (quality.videoEnabled) {
                     InfoRow("流量上限", "约 ${quality.estMbPerMinute()} MB/分钟")
                 }
@@ -64,28 +142,170 @@ fun HomeScreen(
             }
         }
 
-        StatusChip("全程需要保持亮屏，锁屏会自动停止", ChipTone.Warn)
+        // 分享设置（原样保留：玻璃胶囊按钮）。
+        // 外面包一层 Column：这样它是"最后一个子项"，不再额外产生 PageScaffold 的元素间距，
+        // 否则 160dp 的大圆会把这一屏整体撑出屏幕（实测底部胶囊会被裁掉半截）。
+        Column {
+            PrimaryPill("分享设置", onSettings, backdrop, Modifier.fillMaxWidth(), filled = false)
+            Spacer(Modifier.height(10.dp))
+        }
+    }
+}
 
-        GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("怎么连上", fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextHi)
-                    StatusChip("你只要做一次")
-                }
-                Box(Modifier.fillMaxWidth().height(1.dp).background(Ink.TextLow.copy(alpha = 0.25f)))
-                StepRow("①", "复制邀请链接发给朋友", "链接里自带接入凭证")
-                StepRow("②", "他点开链接", "浏览器，不用装任何东西")
-                StepRow("③", "画面和声音就通了", "两端直连，不经中转")
+// ─────────────────────────── 首页 · 圆形磨砂入口 ───────────────────────────
+
+/**
+ * 圆钮雾色 —— 用户在「圆钮颜色实验室」实机调定（2026-09-23）。
+ * 改色只需改这两行（或在实验室里调完把 hex 发过来）。
+ */
+val OrbTintViolet = Color(0xFF1FE91F)
+val OrbTintPink = Color(0xFFFF62AB)
+
+/** 浅玻璃上的深色文字：高明度底上深字比白字清晰，也更年轻。 */
+val OrbInk = Color(0xFF0E1524)
+
+/**
+ * 首页圆形磨砂入口（效果图 home-orbs-pastel3.html 方案 2 的实现）：
+ * 126dp 玻璃圆，图标 + 名称 + 一句副标。
+ *
+ * · 磨砂 blur 15（用户指定）—— blurRadius 参数是本次为 GlassCard 新增的
+ * · tint 淡涂：壁纸透过圆仍隐约可见（v4 的教训：blur 太大 + tint 太浓 = 看不到透明效果）
+ * · 无外光晕；厚度由库默认的 Highlight/Shadow 承担
+ * · 圆内深色文字 —— 高明度浅底上深字比白字清晰，也更年轻
+ */
+@Composable
+fun GlassOrbEntry(
+    onClick: () -> Unit,
+    backdrop: LayerBackdrop,
+    tint: Color,
+    icon: @Composable () -> Unit,
+    label: String,
+    sub: String,
+    // 以下默认值 = 用户在玻璃参数实验室实机调定的配方（2026-09-23）。
+    // 实验室里再调出新的，改这里的默认值即可（或把参数发过来）。
+    diameter: Dp = 160.dp,
+    blurRadius: Dp = 10.dp,
+    lensRadius: Dp = 22.dp,
+    lensAmountMul: Float = 2.495f,
+    tintAlpha: Float = 0.80f,
+    brightAlpha: Float = 0.20f,
+) {
+    GlassCard(
+        onClick = onClick,
+        backdrop = backdrop,
+        modifier = Modifier.size(diameter),
+        shape = CircleShape,
+        // surfaceAlpha = 0：不画那层近黑的磨砂底。
+        // 官方示例组件 LiquidButton 的 surfaceColor 默认是 Unspecified（不画）——
+        // 玻璃亮度全靠 backdrop + vibrancy。我们此前叠的黑雾是"整体偏暗"的主因。
+        surfaceAlpha = 0f,
+        tint = tint.copy(alpha = tintAlpha),
+        lensRadius = lensRadius,
+        lensAmountMul = lensAmountMul,
+        blurRadius = blurRadius,
+        contentAlignment = Alignment.Center,
+    ) {
+        // 白雾提亮层：在通透玻璃上加一层柔白光（浓度由实验室调定）。
+        // 圆内深字也没有它会更清晰。
+        Box(
+            Modifier
+                .matchParentSize()
+                .background(Color.White.copy(alpha = brightAlpha), CircleShape)
+        )
+        Column(
+            modifier = Modifier.padding(top = 6.dp),   // 内容视觉重心微下移（实测偏上）
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            icon()
+            Text(
+                label,
+                fontSize = 14.5.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.4.sp,
+                color = OrbInk,
+            )
+            Text(sub, fontSize = 10.sp, color = OrbInk.copy(alpha = 0.60f))
+        }
+    }
+}
+
+/**
+ * 设置页的入口行。
+ *
+ * 刻意不用 ripple（在玻璃上是一块方形光晕，视觉脏）—— 按压反馈改成整行轻微内缩，
+ * 和玻璃按钮的手感一致。
+ */
+@Composable
+internal fun LabEntry(title: String, sub: String, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.98f else 1f,
+        animationSpec = spring(dampingRatio = 0.62f, stiffness = 520f),
+        label = "labEntryScale",
+    )
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
             }
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column {
+            Text(title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextHi)
+            Text(sub, fontSize = 11.5.sp, color = Ink.TextLow)
         }
+        Text("›", fontSize = 18.sp, color = Ink.TextLow)
+    }
+}
 
-        SpacerWeight()
-        PrimaryPill("开始分享", onStart, backdrop, Modifier.fillMaxWidth())
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
-            PrimaryPill("以观众进入", onJoinViewer, backdrop, Modifier.weight(1f), filled = false)
-            PrimaryPill("分享设置", onSettings, backdrop, Modifier.weight(1f), filled = false)
+/**
+ * 数字输入行 —— 「自定义码率 / 自定义帧率」共用。
+ *
+ * 为什么不用 Material 的 TextField：这一页整体是玻璃风格，Material 输入框的
+ * 填充/描边/下划线都跟周围的玻璃胶囊对不上，视觉上会像一个外来控件。
+ */
+@Composable
+internal fun NumberInputRow(
+    label: String,
+    value: String,
+    suffix: String,
+    placeholder: String,
+    onChange: (String) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2),
+    ) {
+        Text(label, fontSize = 12.5.sp, color = Ink.TextMid)
+        BasicTextField(
+            value = value,
+            onValueChange = onChange,
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            textStyle = TextStyle(color = Ink.TextHi, fontSize = 14.sp),
+            modifier = Modifier
+                .weight(1f)
+                .background(Color.Black.copy(alpha = 0.28f), RoundedCornerShape(percent = 50))
+                .padding(horizontal = 14.dp, vertical = 9.dp),
+        ) { inner ->
+            if (value.isEmpty()) {
+                Text(placeholder, fontSize = 14.sp, color = Ink.TextLow)
+            }
+            inner()
         }
-        Spacer(Modifier.height(GlassDimens.sp6))
+        Text(suffix, fontSize = 12.5.sp, color = Ink.TextMid)
     }
 }
 
@@ -112,6 +332,25 @@ internal fun StepRow(no: String, text: String, chip: String) {
 // ─────────────────────── 房主 · 分享设置 ───────────────────────
 
 /**
+ * 本机屏幕的**像素**宽度。
+ *
+ * 刻意和采集侧取同一个来源（`ScreenShareController.displayGeometry` 读的也是
+ * `WindowManager.currentWindowMetrics.bounds`）。标签要回答的是"这一档实际会采出多少宽"，
+ * 两边量尺寸的口径必须一致 —— 换用 LocalWindowInfo / DisplayMetrics 之类，
+ * 分屏和折叠态下就会给出和实际采集不同的数，文案当场变谎话。
+ *
+ * minSdk 33，currentWindowMetrics（API 30+）可直接用，无需版本兜底。
+ */
+@Composable
+private fun rememberScreenWidthPx(): Int {
+    val context = LocalContext.current
+    return remember(context) {
+        val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        wm.currentWindowMetrics.bounds.width()
+    }
+}
+
+/**
  * 分享设置：分辨率 / 帧率 / 码率 / 是否带画面。
  *
  * 全部是"开始分享时生效"的档位（见 [ShareQuality] 的注释：零服务器没法中途重协商）。
@@ -123,6 +362,8 @@ fun QualitySettingsScreen(
     backdrop: LayerBackdrop,
     quality: ShareQuality,
     onChange: (ShareQuality) -> Unit,
+    onOpenColorLab: () -> Unit,
+    onOpenGlassLab: () -> Unit,
     onBack: () -> Unit,
 ) {
     fun indexOfOr(list: List<*>, value: Any?, default: Int): Int =
@@ -134,31 +375,139 @@ fun QualitySettingsScreen(
         Spacer(Modifier.height(GlassDimens.sp6))
         Headline("分享设置", "这些是上限不是保证值：网络差或发热时会自动再降。开始分享时生效，本场通话内不可改。")
 
+        SectionTitle("实验室")
+        GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
+                LabEntry("圆钮颜色实验室", "调两个圆的雾色，复制参数发给 AI", onOpenColorLab)
+                LabEntry("玻璃参数实验室", "调磨砂/透镜/透明度，复制参数发给 AI", onOpenGlassLab)
+            }
+        }
+
         SectionTitle("画质")
         GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
             Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp3)) {
                 SectionTitle("分辨率")
+                // 标签按屏幕实际像素算 —— 采集分辨率 = 屏幕宽 × scale，而且**只能缩不能放**。
+                // 写死"1080p"会让 2K 机型永远看不到 2K 档，而那本来就是它的能力；
+                // 这一行刻意不做"自定义"：可选范围天然被屏幕卡死，填了也没用。
+                // 标签算法放在 ShareQuality 里，和「当前组合」那行共用同一个实现 ——
+                // 以前这页里有两套算法，2K 机上两行文案会互相打架。
+                val screenW = rememberScreenWidthPx()
                 SegmentRow(
-                    options = listOf("540p", "720p", "1080p"),
+                    options = ShareQuality.SCALES.map {
+                        ShareQuality.resolutionLabelFor(it, screenW)
+                    },
                     selected = indexOfOr(ShareQuality.SCALES, quality.scale, default = 1),
                 ) { onChange(quality.copy(scale = ShareQuality.SCALES[it])) }
+                StatusChip("本机屏幕宽 ${screenW}px，最高档就是原生分辨率", ChipTone.Neutral)
 
                 SectionTitle("帧率")
+                // 输入框的内容**由 quality 派生**，而不是"记住初值"：quality 是异步读盘的，
+                // 用无 key 的 remember 会在读盘完成后残留默认值（本该空着的自定义格里写着 30），
+                // 看着像用户自己设过自定义档。预设档一律把格子清空。
+                var fpsFocused by remember { mutableStateOf(false) }
+                var fpsText by remember {
+                    mutableStateOf(
+                        if (quality.fps in ShareQuality.FPSES) "" else quality.fps.toString()
+                    )
+                }
+                // 用户正在打字时**不**覆盖（否则刚敲完 60 就被外部同步抹成空串）；
+                // 焦点一离开就重新以 quality 为准，读盘完成、点了预设档都能反映过来。
+                LaunchedEffect(quality.fps, fpsFocused) {
+                    if (!fpsFocused) {
+                        fpsText = if (quality.fps in ShareQuality.FPSES) "" else quality.fps.toString()
+                    }
+                }
                 SegmentRow(
-                    options = listOf("10 帧", "15 帧", "30 帧"),
-                    selected = indexOfOr(ShareQuality.FPSES, quality.fps, default = 2),
+                    options = ShareQuality.FPSES.map { "$it" },
+                    selected = indexOfOr(ShareQuality.FPSES, quality.fps, default = -1),
+                    input = SegmentInputSpec(
+                        placeholder = "自定义",
+                        value = fpsText,
+                        onValueChange = { raw ->
+                            // 只收数字、最多 3 位。**在范围内才落盘**，范围外的半截数字
+                            // 先留在框里 —— 想输 60 时先敲出来的那个 6 不该被立刻改写成 8。
+                            val filtered = raw.filter { it.isDigit() }.take(3)
+                            fpsText = filtered
+                            filtered.toIntOrNull()
+                                ?.takeIf { it in ShareQuality.FPS_MIN..ShareQuality.FPS_MAX }
+                                ?.let { onChange(quality.copy(fps = it)) }
+                        },
+                        onFocusChange = { focused ->
+                            if (focused) {
+                                fpsFocused = true
+                            } else {
+                                // onFocusChanged 在首次组合时也会回调 false，所以整段必须幂等。
+                                val n = fpsText.toIntOrNull()
+                                    ?.coerceIn(ShareQuality.FPS_MIN, ShareQuality.FPS_MAX)
+                                if (n != null && n != quality.fps) onChange(quality.copy(fps = n))
+                                fpsText =
+                                    if (n != null && n !in ShareQuality.FPSES) n.toString() else ""
+                                fpsFocused = false
+                            }
+                        },
+                    ),
                 ) { onChange(quality.copy(fps = ShareQuality.FPSES[it])) }
+                Text(
+                    "单位 fps，可填 ${ShareQuality.FPS_MIN}–${ShareQuality.FPS_MAX}",
+                    fontSize = 11.sp, color = Ink.TextLow,
+                )
 
                 SectionTitle("码率上限")
+                val bpsToText = { bps: Int -> String.format(Locale.US, "%.1f", bps / 1_000_000f) }
+                var bpsFocused by remember { mutableStateOf(false) }
+                var bpsText by remember {
+                    mutableStateOf(
+                        if (quality.maxVideoBps in ShareQuality.BPS_LIST) ""
+                        else bpsToText(quality.maxVideoBps)
+                    )
+                }
+                LaunchedEffect(quality.maxVideoBps, bpsFocused) {
+                    if (!bpsFocused) {
+                        bpsText = if (quality.maxVideoBps in ShareQuality.BPS_LIST) ""
+                        else bpsToText(quality.maxVideoBps)
+                    }
+                }
                 SegmentRow(
-                    options = listOf("0.3M", "0.8M", "2M", "5M"),
-                    selected = indexOfOr(ShareQuality.BPS_LIST, quality.maxVideoBps, default = 2),
+                    options = ShareQuality.BPS_LIST.map { "${it / 1_000_000}M" },
+                    selected = indexOfOr(ShareQuality.BPS_LIST, quality.maxVideoBps, default = -1),
+                    input = SegmentInputSpec(
+                        placeholder = "自定义",
+                        value = bpsText,
+                        onValueChange = { raw ->
+                            val filtered = raw.filter { it.isDigit() || it == '.' }.take(5)
+                            bpsText = filtered
+                            filtered.toFloatOrNull()?.let { mbps ->
+                                val bps = (mbps * 1_000_000).toInt()
+                                if (bps in ShareQuality.BPS_MIN..ShareQuality.BPS_MAX) {
+                                    onChange(quality.copy(maxVideoBps = bps))
+                                }
+                            }
+                        },
+                        onFocusChange = { focused ->
+                            if (focused) {
+                                bpsFocused = true
+                            } else {
+                                val bps = bpsText.toFloatOrNull()
+                                    ?.let { (it * 1_000_000).toInt() }
+                                    ?.coerceIn(ShareQuality.BPS_MIN, ShareQuality.BPS_MAX)
+                                if (bps != null && bps != quality.maxVideoBps) {
+                                    onChange(quality.copy(maxVideoBps = bps))
+                                }
+                                bpsText =
+                                    if (bps != null && bps !in ShareQuality.BPS_LIST) bpsToText(bps)
+                                    else ""
+                                bpsFocused = false
+                            }
+                        },
+                    ),
                 ) { onChange(quality.copy(maxVideoBps = ShareQuality.BPS_LIST[it])) }
+                Text("单位 Mbps，可填 0.1–50", fontSize = 11.sp, color = Ink.TextLow)
 
                 Box(Modifier.fillMaxWidth().height(1.dp).background(Ink.TextLow.copy(alpha = 0.25f)))
-                InfoRow("当前组合", quality.summary())
+                InfoRow("当前组合", quality.summary(screenW))
                 InfoRow("流量上限估算", "约 ${quality.estMbPerMinute()} MB/分钟")
-                StatusChip("省流量测试建议：540p · 10 帧 · 0.3M（约 2–3 MB/分钟）", ChipTone.Ok)
+                StatusChip("省流量建议：540p · 30 帧 · 1M（约 8 MB/分钟）", ChipTone.Ok)
                 StatusChip("1080p 或高码率在多数机型上会发热降帧", ChipTone.Warn)
             }
         }
@@ -191,8 +540,9 @@ fun QualitySettingsScreen(
             }
         }
 
-        Spacer(Modifier.height(GlassDimens.sp4))
-        PrimaryPill("完成", onBack, backdrop, Modifier.fillMaxWidth())
+        // 没有「完成」按钮：这里的每一项都是**改了立即保存**（onChange 里就写盘了），
+        // 系统返回键或左上角返回都能走。多一个确认键只会让人以为"不点就不生效"。
+        StatusChip("改动立即生效，直接返回即可", ChipTone.Ok)
         Spacer(Modifier.height(GlassDimens.sp6))
     }
 }

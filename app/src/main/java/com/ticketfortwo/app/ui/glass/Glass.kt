@@ -561,6 +561,14 @@ fun GlassCard(
     surfaceAlpha: Float = 0.16f,
     tint: Color? = null,
     lensRadius: Dp = 18.dp,
+    /** 磨砂模糊半径。首页圆形入口按用户指定用 15dp（默认 4dp 是轻磨砂）。 */
+    blurRadius: Dp = 4.dp,
+    /** 折射强度倍数：折射位移 = 折射高度 × 此值（对齐 GlassPanel 的 lensAmountMul）。 */
+    lensAmountMul: Float = 1f,
+    /** 边缘色差（红蓝分离）。 */
+    chromaticAberration: Boolean = false,
+    /** 深度效果（折射带内的暗缘，库 demo 的 depthEffect）。 */
+    depthEffect: Boolean = true,
     refract: Boolean? = null,
     pressScale: Boolean = true,
     contentAlignment: Alignment = Alignment.TopStart,
@@ -581,12 +589,18 @@ fun GlassCard(
                 shape = { shape },
                 effects = {
                     vibrancy()
-                    blur(4.dp.toPx())
+                    blur(blurRadius.toPx())
                     if (lensRadius > 0.dp) {
-                        lens(lensRadius.toPx() * 1.1f, (lensRadius * 1.2f).coerceIn(12.dp, 20.dp).toPx())
+                        // 对齐 GlassPanel 的配方：折射强度 = 折射高度 × 倍数
+                        lens(
+                            refractionHeight = lensRadius.toPx(),
+                            refractionAmount = (lensRadius * lensAmountMul).toPx(),
+                            depthEffect = depthEffect,
+                            chromaticAberration = chromaticAberration,
+                        )
                     }
                 },
-            layerBlock = {
+                layerBlock = {
                 // 与 LiquidGlassButton 同理：不做跟指平移——卡片被按住拖动会读作「可拖拽」。
                 // 折射静态呈现，按压缩放与指尖辉光由 highlight 提供
             },

@@ -1,6 +1,7 @@
 package com.ticketfortwo.app
 
 import android.content.Context
+import kotlin.math.roundToInt
 
 /**
  * 分享画质设置：**上限，不是保证值**（网络差、发热时会自动再降）。
@@ -21,18 +22,14 @@ data class ShareQuality(
     val videoEnabled: Boolean = true,
 ) {
 
-    /** 分辨率档的用户文案。0.75 是既有默认，沿用效果图/首页一直说的 "720p"。 */
-    fun resolutionLabel(): String = when {
-        scale <= 0.5f -> "540p"
-        scale >= 1f -> "1080p"
-        else -> "720p"
-    }
+    /** 分辨率档的用户文案。**必须带屏宽** —— 见 [resolutionLabelFor]。 */
+    fun resolutionLabel(screenWidthPx: Int): String = resolutionLabelFor(scale, screenWidthPx)
 
     /** 首页与设置页一行摘要。 */
-    fun summary(): String = if (!videoEnabled) {
+    fun summary(screenWidthPx: Int): String = if (!videoEnabled) {
         "仅语音"
     } else {
-        "${resolutionLabel()} · $fps 帧 · ${bpsLabel(maxVideoBps)}"
+        "${resolutionLabel(screenWidthPx)} · $fps 帧 · ${bpsLabel(maxVideoBps)}"
     }
 
     /**
@@ -48,8 +45,36 @@ data class ShareQuality(
     companion object {
         // 档位就是选项列表本身 —— UI 的分段按钮与持久化校验共用同一份枚举。
         val SCALES = listOf(0.5f, 0.75f, 1.0f)
-        val FPSES = listOf(10, 15, 30)
-        val BPS_LIST = listOf(300_000, 800_000, 2_000_000, 5_000_000)
+
+        /**
+         * 采集分辨率档的显示名。**必须传屏宽**：
+         * 采集出来的宽度 = 屏幕宽 × scale，所以同一个 0.5 档，在 1080 宽的机上产 540 宽、
+         * 在 1440 宽的 2K 机上产 720 宽。早先按 scale 写死映射（0.5→540p / 1.0→1080p），
+         * 结果 2K 机型把"其实是 720 宽"的那档标成了 540p，而设置页里同一屏的
+         * 「当前组合」又是另一套算法 —— 两行文案当场对不上。
+         */
+        fun resolutionLabelFor(scale: Float, screenWidthPx: Int): String {
+            val w = (screenWidthPx * scale).roundToInt()
+            return when {
+                w >= 1300 -> "2K"
+                w >= 1000 -> "1080p"
+                w >= 700 -> "720p"
+                else -> "540p"
+            }
+        }
+
+        /** 帧率档：只留 30 / 60（10、15 帧没有存在意义）；更高或更低的用「自定义」。 */
+        val FPSES = listOf(30, 60)
+        /** 码率预设档。12M 那一档由「自定义输入」取代 —— 同一件事不留两个入口。 */
+        val BPS_LIST = listOf(1_000_000, 2_000_000, 4_000_000, 8_000_000)
+
+        /** 自定义码率允许范围（100 kbps – 50 Mbps）。 */
+        const val BPS_MIN = 100_000
+        const val BPS_MAX = 50_000_000
+
+        /** 自定义帧率允许范围（8 – 120 fps）。 */
+        const val FPS_MIN = 8
+        const val FPS_MAX = 120
 
         private const val PREFS = "t2"
         private const val K_SCALE = "q_scale"
@@ -63,8 +88,10 @@ data class ShareQuality(
             // 每个值都做"在档位列表里"的校验：将来档位改了，旧值不能把 UI 卡在 indexOf=-1 上。
             return ShareQuality(
                 scale = sp.getFloat(K_SCALE, d.scale).takeIf { it in SCALES } ?: d.scale,
-                fps = sp.getInt(K_FPS, d.fps).takeIf { it in FPSES } ?: d.fps,
-                maxVideoBps = sp.getInt(K_BPS, d.maxVideoBps).takeIf { it in BPS_LIST } ?: d.maxVideoBps,
+                // 帧率也可能是「自定义」值，同样按范围校验而不是按档位成员
+                fps = sp.getInt(K_FPS, d.fps).takeIf { it in FPS_MIN..FPS_MAX } ?: d.fps,
+                // 码率可能是「自定义」值（不在预设档里），所以按范围校验而不是按档位成员。
+                maxVideoBps = sp.getInt(K_BPS, d.maxVideoBps).takeIf { it in BPS_MIN..BPS_MAX } ?: d.maxVideoBps,
                 videoEnabled = sp.getBoolean(K_VIDEO, d.videoEnabled),
             )
         }

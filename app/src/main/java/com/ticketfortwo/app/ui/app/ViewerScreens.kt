@@ -30,13 +30,16 @@ fun ViewerJoinScreen(
     backdrop: LayerBackdrop,
     value: String,
     onChange: (String) -> Unit,
+    /** 主路径：在 App 内直接收看（不跳浏览器）。 */
     onSubmit: () -> Unit,
+    /** 备用路径：交给系统浏览器 —— 不想装 App 的朋友仍然点链接就能看。 */
+    onOpenInBrowser: () -> Unit,
     onBack: () -> Unit,
     error: String?,
 ) {
     PageScaffold {
         Spacer(Modifier.height(GlassDimens.sp6))
-        Headline("进入朋友的房间", "把他发来的那条链接粘到下面，我们用浏览器打开它。")
+        Headline("进入朋友的房间", "把房主发来的链接粘到下面，直接在这个 App 里看。")
 
         GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
             Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp3)) {
@@ -50,9 +53,9 @@ fun ViewerJoinScreen(
 
         GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
             Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
-                SectionTitle("打开之后会怎样")
-                StepRow("①", "浏览器载入链接", "不用装任何东西")
-                StepRow("②", "想说话就允许麦克风", "只看不点也行")
+                SectionTitle("怎么用")
+                StepRow("①", "粘上房主发来的链接", "直接在这个 App 里看")
+                StepRow("②", "想说话就先允许麦克风", "只看不点也行")
                 StepRow("③", "画面直接过来", "两端直连，不经服务器")
             }
         }
@@ -63,9 +66,10 @@ fun ViewerJoinScreen(
         StatusChip("建议戴耳机：外放会让他的声音回到你的麦克风", ChipTone.Warn)
 
         SpacerWeight()
+        PrimaryPill("在 App 内观看", onSubmit, backdrop, Modifier.fillMaxWidth(), enabled = value.isNotBlank())
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
             PrimaryPill("返回", onBack, backdrop, Modifier.weight(1f), filled = false)
-            PrimaryPill("用浏览器打开", onSubmit, backdrop, Modifier.weight(2f), enabled = value.isNotBlank())
+            PrimaryPill("用浏览器打开", onOpenInBrowser, backdrop, Modifier.weight(1f), filled = false, enabled = value.isNotBlank())
         }
         Spacer(Modifier.height(GlassDimens.sp6))
     }

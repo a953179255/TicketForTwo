@@ -1,7 +1,19 @@
 package com.ticketfortwo.app.ui.app
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,6 +23,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -24,10 +37,16 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -54,6 +73,9 @@ import com.kyant.backdrop.backdrops.LayerBackdrop
  */
 @Composable
 fun TicketForTwoAppRoot(content: @Composable (LayerBackdrop) -> Unit) {
+    // 自定义壁纸的持久化加载（App 启动时读一次；玻璃实验室里更换壁纸会写入）
+    val rootContext = LocalContext.current
+    LaunchedEffect(Unit) { AppWallpaper.load(rootContext) }
     TicketForTwoTheme(darkTheme = true) {
         val backdrop = rememberAppBackdrop(dark = true)
         Box(
@@ -185,44 +207,192 @@ fun StatusChip(
 enum class ChipTone { Neutral, Ok, Warn, Bad }
 
 /**
- * 分段选择器（设置页的档位行）。
+ * 分段行末尾的「自定义」输入格。
  *
- * 选中态走强调色实底、未选中透明 —— 与效果图 `seg` 一致。
- * 命中区 36dp 高、整行铺开，每个分段都 ≥44dp 宽（触控下限按宽度即可满足）。
+ * [onFocusChange] 在输入框焦点变化时回调，外面靠它做两件事：
+ *  - **失焦时校正**"还没填完"的中间值：想输 60 时先敲出来的是 6，不该立刻被改写成 8；
+ *    但也不能就那么留着 —— 否则会出现"框里写着 6、实际用着 30"的错位。
+ *  - **有焦点期间别用外部状态覆盖框里的字**：否则刚敲完 60、quality 跟着变成 60，
+ *    外部同步逻辑一跑就把用户刚输入的内容抹成空串。
+ */
+data class SegmentInputSpec(
+    val placeholder: String,
+    val value: String,
+    val onValueChange: (String) -> Unit,
+    val onFocusChange: (Boolean) -> Unit = {},
+)
+
+/**
+ * 峰值速度 → 形变量的换算系数。见 [SegmentRow] 里对形变的说明。
+ *
+ * 库写的是 `v = 速度/10`，它假设的是**手指拖拽**的速度量级（约 1–4 格/秒）。
+ * 我们是点击驱动，位置由一条刚度 1000 的临界阻尼弹簧给出，它的峰值速度是解析的：
+ *     |v| = 行程 · √刚度 · e⁻¹
+ * 而 [SegmentRow] 里已经用行程 `span` 归一过，于是归一化峰值速度
+ *     √1000 · e⁻¹ ≈ 11.6 格/秒
+ * 是个**与行里有几格无关的常数**（1 格的行、4 格的行都一样）。
+ *
+ * 照搬 /10，这个 11.6 会变成 1.16 —— 是库那条 `coerceIn(-0.2, 0.2)` 上限（对应 v=0.267）
+ * 的 4 倍多，于是整段飞行都顶死在上限上（实测一次跨两格的切换，20 帧里有 7 帧 scaleX
+ * 卡在 1.25 不动）。观感就从"滑块被拉长"变成了"滑块变胖"。
+ * 44 这个数就是为了让 11.6 正好落到 clamp 边界：**只有最快的那一两帧够得到库的最大形变**，
+ * 其余时间沿着弹簧的速度曲线平滑衰减 —— 这才是库那条曲线的形状。
+ */
+private const val SEGMENT_VELOCITY_SCALE = 44f
+
+/**
+ * 液态分段控件。
+ *
+ * 动效对齐 AndroidLiquidGlass 的 `DampedDragAnimation` + `LiquidBottomTabs`，两处照搬：
+ *
+ *  1. **位置**用 `spring(dampingRatio = 1f, stiffness = 1000f)` —— 阻尼比 1 是**临界阻尼，不过冲**，
+ *     滑块"滑过去停住"，不会像普通弹簧那样回弹一下。（上一版用了 0.55 的阻尼比，
+ *     画面上平白多出一次回弹，这就是"和库不一样"最直观的一处。）
+ *  2. **形变**公式逐字取自库的 `layerBlock`：
+ *       `scaleX /= 1 - (v*0.75)`、`scaleY *= 1 - (v*0.25)`
+ *     —— 横向拉长、纵向压扁，这是"液态"观感的真正来源，只做颜色渐变是看不出液态的。
+ *     只有速度的换算系数按本场景重新标定过，理由见 [SEGMENT_VELOCITY_SCALE]。
+ *
+ * 与库的两处分歧都是场景差异逼出来的，不是口味问题：
+ *
+ *  · **速度从哪来**。库的位置由**手指拖拽**驱动（`updateValue` 每帧跳目标），弹簧算不出
+ *    有意义的速度，所以它另开 `VelocityTracker` + 一条速度弹簧去测手指。我们是**点击**驱动，
+ *    位置本身就是一条光滑的临界阻尼弹簧，它的瞬时速度天然和位移同相位；照搬那层滤波器
+ *    只会让形变**迟到**（实测：位置已经飞到 1.96/2.0 时形变才刚开始爬升，
+ *    峰值落在动画结束之后 —— 表现为"飞过去时扁扁的、停稳了才鼓一下"，与液态完全相反）。
+ *
+ *  · **形变是有方向的**：`velocity` 带符号，所以向左切换时 scaleX 变小（横向收紧、纵向变高），
+ *    向右切换才横向拉长。看着不对称，但这**是库自己的行为** ——
+ *    `LiquidBottomTabs` / `LiquidSlider` / `LiquidToggle` 三个组件写的都是同一个不带 abs 的公式，
+ *    所以这里照抄，不做"自作聪明"的取绝对值。哪天想改成双向都拉长，改这一行即可。
+ *
+ * 有意略去的一项：库里指示器按下会鼓到 `78/56 ≈ 1.39` 倍（"液滴鼓出栏外"）。
+ * 那需要 56dp 高的指示器加 64dp 的栏才撑得住；我们的滑块只有 36dp、外套一层 3dp 内边距的
+ * 胶囊容器，放大 1.39 倍会直接冲出容器，在设置页里只会像画错了。
+ *
+ * [input] 非空时末尾追加一个可输入的格子（占位文字写在框内），
+ * 这样"自定义"不单独占一行，几行控件的高度才一致。
+ * [selected] 传 -1 表示"当前值不属于任何预设档"—— 指示器会落到输入格上。
  */
 @Composable
 fun SegmentRow(
     options: List<String>,
     selected: Int,
     modifier: Modifier = Modifier,
-    // onSelect 必须是最后一个参数：调用点全部用"命名参数 + 尾随 lambda"写法，
-    // 尾随 lambda 只会绑定到末位参数。
+    input: SegmentInputSpec? = null,
     onSelect: (Int) -> Unit,
 ) {
-    Row(
+    val cellCount = options.size + if (input != null) 1 else 0
+    val target = if (selected < 0) (cellCount - 1).toFloat() else selected.toFloat()
+
+    val position = remember { Animatable(target) }
+    // 归一化分母：总跨度（格数 - 1）。除以它，速度就和"每秒移动几格"同量纲，
+    // 这样 3 格的分辨率行和 5 格的码率行，拉长幅度不会因为格数不同而差一截。
+    val span = (cellCount - 1).coerceAtLeast(1).toFloat()
+
+    LaunchedEffect(target) {
+        position.animateTo(
+            targetValue = target,
+            // 临界阻尼 + 高刚度 = 快而不弹，与库的 valueAnimationSpec 一致
+            animationSpec = spring(dampingRatio = 1f, stiffness = 1000f, visibilityThreshold = 0.001f),
+        )
+    }
+
+    // 形变驱动 = 位置弹簧的**瞬时速度**。
+    //
+    // 库里这里还有一层"速度动画 + VelocityTracker"，那是因为它的位置由**手指拖拽**驱动：
+    // 每一帧目标值都在跳，弹簧算不出有意义的速度，只能另开一条跟踪器去测手指。
+    // 我们是点击驱动 —— 位置本身就是一条光滑的临界阻尼弹簧，它的瞬时速度天然和位移同相位，
+    // 再套一层弹簧滤波只会让形变**迟到**。
+    // （实测过：套滤波器时，位置已飞到 1.96/2.0 时形变才开始爬升，峰值落在动画结束之后，
+    //   表现为"飞过去时扁扁的、停稳了才鼓一下" —— 和要的液态完全相反。）
+    val v = position.velocity / span / SEGMENT_VELOCITY_SCALE
+    val deformX = 1f / (1f - (v * 0.75f).coerceIn(-0.2f, 0.2f))
+    val deformY = 1f - (v * 0.25f).coerceIn(-0.2f, 0.2f)
+
+    BoxWithConstraints(
         modifier
             .fillMaxWidth()
             .background(Color.Black.copy(alpha = 0.32f), RoundedCornerShape(percent = 50))
             .padding(3.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        options.forEachIndexed { i, label ->
-            val on = i == selected
-            Box(
-                Modifier
-                    .weight(1f)
-                    .height(36.dp)
-                    .clip(RoundedCornerShape(percent = 50))
-                    .background(if (on) Ink.AccentSolid else Color.Transparent)
-                    .clickable { onSelect(i) },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    label,
-                    fontSize = 12.5.sp,
-                    fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
-                    color = if (on) Color.White else Ink.TextMid,
+        val gap = 4.dp
+        val cellWidth = (maxWidth - gap * (cellCount - 1)) / cellCount
+
+        // 指示器：独立滑块。
+        // graphicsLayer 放在 background **之前**：这样圆角胶囊是画在缩放层"里面"的，
+        // 拉长时形状跟着一起变形 —— 和库把形变写在 drawBackdrop 的 layerBlock 里是一回事。
+        // 若把 graphicsLayer 放到 background 后面，缩放的是已经画好的圆角矩形，
+        // 圆角会被等比拉宽，看起来像个橄榄球。
+        Box(
+            Modifier
+                .offset(x = (cellWidth + gap) * position.value)
+                .width(cellWidth)
+                .height(36.dp)
+                .graphicsLayer {
+                    scaleX = deformX
+                    scaleY = deformY
+                }
+                .background(Ink.AccentSolid, RoundedCornerShape(percent = 50)),
+        )
+
+        Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
+            options.forEachIndexed { i, label ->
+                val on = i == selected
+                val fg by animateColorAsState(
+                    targetValue = if (on) Color.White else Ink.TextMid,
+                    animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing),
+                    label = "segFg",
                 )
+                Box(
+                    Modifier
+                        .width(cellWidth)
+                        .height(36.dp)
+                        .clickable(interactionSource = null, indication = null) { onSelect(i) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        label,
+                        fontSize = 12.5.sp,
+                        fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                        color = fg,
+                    )
+                }
+            }
+
+            if (input != null) {
+                val filled = input.value.isNotEmpty()
+                Box(
+                    Modifier.width(cellWidth).height(36.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    BasicTextField(
+                        value = input.value,
+                        onValueChange = input.onValueChange,
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        textStyle = TextStyle(
+                            color = if (filled) Color.White else Ink.TextLow,
+                            fontSize = 12.5.sp,
+                            fontWeight = if (filled) FontWeight.SemiBold else FontWeight.Normal,
+                            textAlign = TextAlign.Center,
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onFocusChanged { input.onFocusChange(it.isFocused) },
+                    ) { inner ->
+                        if (!filled) {
+                            Text(
+                                input.placeholder,
+                                fontSize = 12.5.sp,
+                                color = Ink.TextLow,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        inner()
+                    }
+                }
             }
         }
     }
@@ -308,6 +478,8 @@ fun PageScaffold(
         modifier
             .fillMaxSize()
             .statusBarsPadding()
+            // 底部安全区：手势导航条会盖住内容 —— 首页的设置胶囊实测就与横杠重叠了。
+            .navigationBarsPadding()
             .padding(horizontal = GlassDimens.screenH),
         verticalArrangement = Arrangement.spacedBy(GlassDimens.sp4),
     ) {

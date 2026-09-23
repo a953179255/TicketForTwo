@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>双人票 · 首页效果图 v2（AndroidLiquidGlass 风格）</title>
+<style>
+*{box-sizing:border-box;margin:0}
+:root{
+  --page:#08090c;
+  --tx:#f4f4f7; --tx-mid:rgba(255,255,255,.60); --tx-low:rgba(255,255,255,.36);
+  --chip-bg:rgba(255,255,255,.06); --chip-bd:rgba(255,255,255,.14);
+  /* 鲜艳壁纸：玻璃的 vibrancy（提饱和）需要底下有颜色可提 */
+  --wall-a:#0e3a78; --wall-b:#5b1f8a; --wall-c:#8a1f5c; --wall-d:#0b1020; --wall-e:#030409;
+  --label:#fff;
+}
+body.light{
+  --tx:#101218; --tx-mid:rgba(0,0,0,.58); --tx-low:rgba(0,0,0,.34);
+  --chip-bg:rgba(255,255,255,.5); --chip-bd:rgba(255,255,255,.75);
+  --wall-a:#9ecbff; --wall-b:#d9b3ff; --wall-c:#ffc4dd; --wall-d:#e9edf6; --wall-e:#cfd6e6;
+  --label:#101218;
+}
+body{min-height:100vh;background:var(--page);color:var(--tx);
+  font-family:system-ui,-apple-system,"Segoe UI","Noto Sans SC",sans-serif;
+  display:flex;flex-direction:column;align-items:center;padding:36px 20px 60px;gap:26px;
+  transition:background .4s}
+h1{font-size:19px;font-weight:650;text-align:center}
+h1 small{display:block;font-size:12.5px;font-weight:400;color:var(--tx-mid);margin-top:6px;letter-spacing:.3px}
+.stage{display:flex;gap:36px;align-items:flex-start;flex-wrap:wrap;justify-content:center}
+
+/* ── 手机壳 ── */
+.phone{width:390px;height:844px;border-radius:50px;position:relative;overflow:hidden;flex:none;
+  border:11px solid #17171c;box-shadow:0 34px 90px rgba(0,0,0,.65), inset 0 0 0 2px rgba(255,255,255,.07)}
+body.light .phone{border-color:#c9ccd6;box-shadow:0 34px 90px rgba(30,40,80,.30), inset 0 0 0 2px rgba(0,0,0,.05)}
+.wallpaper{position:absolute;inset:0;transition:background .4s;background:
+  radial-gradient(90% 70% at 12% 4%,  var(--wall-a) 0%, transparent 55%),
+  radial-gradient(80% 60% at 92% 14%, var(--wall-b) 0%, transparent 52%),
+  radial-gradient(85% 65% at 80% 78%, var(--wall-c) 0%, transparent 55%),
+  radial-gradient(90% 70% at 10% 90%, var(--wall-a) 0%, transparent 55%),
+  linear-gradient(180deg, var(--wall-d), var(--wall-e))}
+.notch{position:absolute;top:12px;left:50%;transform:translateX(-50%);width:110px;height:26px;border-radius:16px;background:#000;opacity:.85;z-index:5}
+
+.app{position:absolute;inset:0;display:flex;flex-direction:column}
+.statusbar{height:46px;flex:none;display:flex;justify-content:space-between;align-items:flex-end;
+  padding:0 26px 6px;font-size:13.5px;font-weight:650;color:var(--tx);position:relative;z-index:4}
+.statusbar .right{display:flex;gap:5px;align-items:center}
+
+.head{padding:14px 26px 0;flex:none;position:relative;z-index:4}
+.head h2{font-size:21px;font-weight:700;letter-spacing:.4px;color:var(--tx);
+  text-shadow:0 1px 8px rgba(0,0,0,.35)}
+.head p{font-size:12.5px;color:var(--tx-mid);margin-top:5px}
+
+/* ══ 液态玻璃圆 ══
+   AndroidLiquidGlass 的特征拆解（CSS 近似）：
+   · 透镜边缘 = 内侧亮环 + 内侧底部暗环（折射聚焦）
+   · Highlight = 一条锐利高光线 + 一片柔光带
+   · vibrancy = backdrop 的 saturate/brightness 拉高（透过玻璃的壁纸更鲜）
+   · CA 色散 = 边缘极细的红/蓝偏移
+   · 厚度 = 玻璃珠式外投影 */
+.orbs{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:34px;padding:0 24px}
+.orb-wrap{display:flex;flex-direction:column;align-items:center;position:relative}
+.orb{width:140px;height:140px;border-radius:50%;border:0;padding:0;cursor:pointer;position:relative;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;color:#fff;
+  -webkit-backdrop-filter:blur(9px) saturate(1.9) brightness(1.14);
+  backdrop-filter:blur(9px) saturate(1.9) brightness(1.14);
+  transition:transform .38s cubic-bezier(.32,2.32,.61,.27), box-shadow .38s}
+.orb:active{transform:scale(.92)}
+
+.orb::before{ /* Highlight：锐利弧线 + 柔光带，都在顶部 */
+  content:"";position:absolute;inset:0;border-radius:50%;pointer-events:none;
+  background:
+    radial-gradient(62% 40% at 50% -2%, rgba(255,255,255,.42) 0%, rgba(255,255,255,0) 68%),
+    linear-gradient(180deg, rgba(255,255,255,.42) 0%, rgba(255,255,255,.05) 26%, rgba(255,255,255,0) 42%);
+}
+.orb::after{ /* 透镜边缘：亮环 + 底部折射暗环 + CA 色散微边 */
+  content:"";position:absolute;inset:0;border-radius:50%;pointer-events:none;
+  box-shadow:
+    inset 0 0 0 1.2px rgba(255,255,255,.34),
+    inset 0 2px 5px rgba(255,255,255,.30),
+    inset 0 -12px 26px rgba(0,0,0,.34),
+    inset 0 -1.5px 6px rgba(255,255,255,.12),
+    inset 1.5px 0 3px rgba(255,110,110,.10),
+    inset -1.5px 0 3px rgba(110,170,255,.12);
+}
+
+.orb .ic{width:42px;height:42px;filter:drop-shadow(0 2px 7px rgba(0,0,0,.32))}
+.orb .t{font-size:15.5px;font-weight:690;letter-spacing:1.5px;
+  text-shadow:0 1px 5px rgba(0,0,0,.35)}
+.orb .s{font-size:10.5px;letter-spacing:.4px;opacity:.78;text-shadow:0 1px 4px rgba(0,0,0,.3)}
+
+/* 两颗彩色玻璃透镜 */
+.orb-share{background:linear-gradient(150deg, rgba(10,132,255,.46) 0%, rgba(100,210,255,.24) 52%, rgba(10,132,255,.36) 100%);
+  box-shadow:0 20px 46px rgba(10,132,255,.34), 0 6px 18px rgba(0,0,0,.35)}
+.orb-share:active{box-shadow:0 10px 26px rgba(10,132,255,.30), 0 4px 12px rgba(0,0,0,.35)}
+.orb-view{background:linear-gradient(150deg, rgba(191,90,242,.44) 0%, rgba(94,92,230,.22) 52%, rgba(191,90,242,.32) 100%);
+  box-shadow:0 20px 46px rgba(150,90,240,.30), 0 6px 18px rgba(0,0,0,.35)}
+.orb-view:active{box-shadow:0 10px 26px rgba(150,90,240,.26), 0 4px 12px rgba(0,0,0,.35)}
+
+/* ── 底部 ── */
+.foot{flex:none;padding:0 26px 26px;display:flex;flex-direction:column;gap:13px;position:relative;z-index:4}
+.last{text-align:center;font-size:11.5px;color:var(--tx-low)}
+.settings{height:56px;border-radius:28px;display:flex;align-items:center;justify-content:center;gap:10px;
+  border:1px solid var(--chip-bd);background:var(--chip-bg);color:var(--tx);font-size:14.5px;font-weight:560;
+  cursor:pointer;position:relative;
+  -webkit-backdrop-filter:blur(8px) saturate(1.6) brightness(1.08);
+  backdrop-filter:blur(8px) saturate(1.6) brightness(1.08);
+  transition:transform .3s cubic-bezier(.32,2.32,.61,.27)}
+.settings:active{transform:scale(.96)}
+.settings::before{content:"";position:absolute;inset:0;border-radius:28px;pointer-events:none;
+  box-shadow:inset 0 1px 3px rgba(255,255,255,.22), inset 0 -1px 2px rgba(0,0,0,.14)}
+.settings svg{width:19px;height:19px;opacity:.85}
+
+/* ── 标注 ── */
+.note{display:none;position:absolute;font-size:10.5px;font-family:ui-monospace,Consolas,monospace;
+  color:#ffd166;background:rgba(10,10,12,.85);border:1px solid rgba(255,209,102,.35);
+  padding:2px 7px;border-radius:5px;white-space:nowrap;z-index:9;pointer-events:none}
+body.notes .note{display:block}
+body.notes .orb::after{box-shadow:inset 0 0 0 1.2px rgba(255,209,102,.55), inset 0 -12px 26px rgba(0,0,0,.34)}
+
+/* ── 说明面板 ── */
+.panel{max-width:340px;display:flex;flex-direction:column;gap:16px;font-size:13.5px;line-height:1.75;color:var(--tx-mid)}
+.panel h3{font-size:15px;color:var(--tx);font-weight:650}
+.panel b{color:var(--tx);font-weight:620}
+.panel .sw{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:4px}
+.sw button,.sw label{cursor:pointer;font-size:13px;padding:9px 16px;border-radius:999px;
+  border:1px solid var(--chip-bd);background:var(--chip-bg);color:var(--tx);display:flex;gap:8px;align-items:center;user-select:none}
+.sw input{accent-color:#0a84ff}
+.spec{font-size:12px;border-top:1px solid var(--chip-bd);padding-top:12px}
+.spec li{margin:5px 0 5px 16px}
+</style>
+</head>
+<body>
+<h1>双人票 · 首页效果图 v2<small>AndroidLiquidGlass 风格 · 文字进圆内 · 配色：蓝青 × 紫罗兰双透镜 · 未改动任何代码</small></h1>
+
+<div class="stage">
+  <div class="phone">
+    <div class="wallpaper"></div>
+    <div class="notch"></div>
+    <div class="app">
+      <div class="statusbar">
+        <span>9:41</span>
+        <span class="right">
+          <svg width="17" height="12" viewBox="0 0 17 12" fill="currentColor"><rect x="0" y="7" width="3" height="5" rx="1"/><rect x="4.5" y="5" width="3" height="7" rx="1"/><rect x="9" y="2.5" width="3" height="9.5" rx="1"/><rect x="13.5" y="0" width="3" height="12" rx="1" opacity=".4"/></svg>
+          <svg width="24" height="12" viewBox="0 0 24 12" fill="none" stroke="currentColor"><rect x="1" y="1" width="19" height="10" rx="3"/><rect x="3" y="3" width="13" height="6" rx="1.5" fill="currentColor" stroke="none"/><path d="M22 4v4" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </span>
+      </div>
+
+      <div class="head">
+        <h2>双人票</h2>
+        <p>把你的屏幕，变成朋友的私人影院</p>
+      </div>
+
+      <div class="orbs">
+        <!-- 上：分享 = 蓝青透镜 -->
+        <div class="orb-wrap">
+          <span class="note" style="top:-6px;right:-52px">直径 140dp</span>
+          <button class="orb orb-share" aria-label="分享屏幕">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4.2" width="18" height="12.6" rx="2.6"/>
+              <path d="M12 14.2V7.6"/>
+              <path d="M9.1 10.4 12 7.5l2.9 2.9"/>
+              <path d="M8.2 20.8h7.6"/>
+            </svg>
+            <span class="t">分享屏幕</span>
+            <span class="s">浏览器免安装</span>
+          </button>
+        </div>
+
+        <!-- 下：观看 = 紫罗兰透镜 -->
+        <div class="orb-wrap">
+          <button class="orb orb-view" aria-label="进入观看">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="6.6" y="2.6" width="10.8" height="18.8" rx="2.6"/>
+              <path d="M10.6 9.6v4.8l4-2.4z" fill="currentColor" stroke="none"/>
+            </svg>
+            <span class="t">进入观看</span>
+            <span class="s">粘上链接就能看</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="foot">
+        <span class="note" style="position:static">底部胶囊高 56dp · 距安全区 26dp</span>
+        <div class="last">上次连接 09-22 17:54 · 画质 720p/30帧/2.0Mbps</div>
+        <button class="settings" aria-label="分享设置">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M19.14 12.94a7.07 7.07 0 0 0 .05-.94 7.07 7.07 0 0 0-.05-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.22l-2.39.96a7.03 7.03 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96a.5.5 0 0 0-.61.22L2.63 8.9a.5.5 0 0 0 .12.64l2.03 1.58a7.07 7.07 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.61.22l2.39-.96c.49.38 1.03.7 1.62.94l.36 2.54c.04.24.25.42.5.42h3.84c.25 0 .46-.18.5-.42l.36-2.54a7.03 7.03 0 0 0 1.62-.94l2.39.96c.21.1.48 0 .61-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58Z"/>
+          </svg>
+          分享设置
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>这一版改了什么</h3>
+    <div>
+      <b>① 文字全部进圆内</b>：图标 + 名称 + 一句副标，圆外零文字。<br>
+      <b>② 玻璃质感按 AndroidLiquidGlass 拆解重做</b>：透镜边缘（内侧亮环 + 底部折射暗环）、
+      双高光（锐利弧线 + 柔光带）、vibrancy（透过玻璃的壁纸被提亮提饱和）、边缘一像素的色散微边。<br>
+      <b>③ 配色</b>：两颗彩色玻璃透镜 —— 分享是<b>蓝青</b>（主操作，冷色靠前），
+      观看是<b>紫罗兰</b>（次操作）；底部设置是无色玻璃。<br>
+      <b>④ 壁纸加鲜艳</b>：玻璃的 vibrancy 需要底下有颜色可提，换成青/紫/洋红光斑。
+    </div>
+
+    <h3>试试</h3>
+    <div>按住两个圆 —— 弹性按压 + 阴影收缩；切换深浅色看玻璃在两种壁纸下的表现；勾选标注看尺寸。</div>
+    <div class="sw">
+      <button id="themeBtn">◐ 切换深色 / 浅色</button>
+      <label><input type="checkbox" id="noteChk"> 显示标注</label>
+    </div>
+
+    <div class="spec">
+      <b>关键规格</b>
+      <li>双圆 140dp（文字进圆后放大了一点），圆间距 34dp</li>
+      <li>分享 tint：#0A84FF→#64D2FF；观看 tint：#BF5AF2→#5E5CE6</li>
+      <li>玻璃滤镜：blur(9) saturate(1.9) brightness(1.14)</li>
+      <li>圆内：图标 42dp + 名称 15.5dp + 副标 10.5dp，垂直居中</li>
+      <li>按压 0.92 + 阴影收缩，曲线 cubic-bezier(.32,2.32,.61,.27)</li>
+      <li>真实实现时：tint/高光/折射环全部换成 backdrop 库的 drawBackdrop + lens + Highlight</li>
+    </div>
+  </div>
+</div>
+
+<script>
+document.getElementById('themeBtn').addEventListener('click', () => document.body.classList.toggle('light'));
+document.getElementById('noteChk').addEventListener('change', e => document.body.classList.toggle('notes', e.target.checked));
+document.querySelectorAll('.orb,.settings').forEach(el => {
+  el.addEventListener('pointerdown', () => { el.style.willChange = 'transform'; });
+});
+</script>
+</body>
+</html>

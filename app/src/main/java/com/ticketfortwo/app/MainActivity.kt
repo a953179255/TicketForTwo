@@ -12,11 +12,19 @@ import android.media.projection.MediaProjectionManager
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Box
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -30,6 +38,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.ticketfortwo.app.ui.app.CallScreen
+import com.ticketfortwo.app.ui.app.ColorLabScreen
+import com.ticketfortwo.app.ui.app.GlassLabScreen
 import com.ticketfortwo.app.ui.app.ConsentGuideScreen
 import com.ticketfortwo.app.ui.app.FailedScreen
 import com.ticketfortwo.app.ui.app.HomeScreen
@@ -66,6 +76,30 @@ class MainActivity : ComponentActivity() {
 
 private enum class UiRole { None, Host, Viewer }
 
+/**
+ * 当前该画哪一屏 —— **携带这一屏要显示的数据**，而不是一个光秃秃的枚举 key。
+ *
+ * 这个区别决定了转场动画好不好看：AnimatedContent 会让旧页在退场期间继续参与组合，
+ * 如果旧页此时去读"最新状态"（例如观众页的标题来自 `viewerState.note`），
+ * 状态一变它就立刻跟着变，退场的那一帧会闪成新页面的样子。
+ * 把 payload 钉进页面描述里，每个页面渲染的都是**属于它自己的那份快照**。
+ */
+private sealed interface Page {
+    object Home : Page
+    object Settings : Page
+    object ColorLab : Page
+    object GlassLab : Page
+    object Consent : Page
+    data class ViewerJoin(val error: String?) : Page
+    data class ViewerPreparing(val note: String) : Page
+    data class ViewerFailed(val reason: String) : Page
+    object ViewerCall : Page
+    data class Invite(val url: String) : Page
+    data class Preparing(val title: String, val note: String, val hint: String?) : Page
+    data class Call(val host: Boolean) : Page
+    data class Failed(val reason: String) : Page
+}
+
 @Composable
 private fun AppRouter(backdrop: LayerBackdrop) {
     val context = LocalContext.current
@@ -77,8 +111,15 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     val micMuted by CallSession.micMuted.collectAsState()
     val stats by CallSession.netStats.collectAsState()
 
+    // 观众端（App 内收看）的状态 —— 与房主的 CallSession 并行、互斥使用
+    val viewerState by ViewerSession.state.collectAsState()
+    val viewerVideo by ViewerSession.remoteVideo.collectAsState()
+    val viewerMicMuted by ViewerSession.micMuted.collectAsState()
+
     var showConsent by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var showColorLab by remember { mutableStateOf(false) }
+    var showGlassLab by remember { mutableStateOf(false) }
     var viewerIntent by remember { mutableStateOf(false) }
     var paste by remember { mutableStateOf("") }
     var viewerError by remember { mutableStateOf<String?>(null) }
@@ -181,15 +222,22 @@ private fun AppRouter(backdrop: LayerBackdrop) {
         else -> startAudioOnlyHost()
     }
 
-    // 观众入口：本 App 不再自己收流，直接把链接交给系统浏览器。
-    //
-    // 为什么这么改：浏览器是这套方案里观众端**唯一**的实现，也是唯一被真正测过的路径。
-    // 若再在 App 里用 Kotlin 写一遍 WebSocket 客户端，等于凭空多一份要维护、
-    // 且必须单独验证的实现 —— 收益为零，风险翻倍。
+    // 观众入口（主路径）：在 App 内直接收看。
     fun submitViewerLink() {
         val url = paste.trim()
         if (!url.startsWith("https://") && !url.startsWith("http://")) {
             viewerError = "这不像一条邀请链接。请把房主发来的整条网址原样粘进来（以 https:// 开头）。"
+            return
+        }
+        viewerError = null
+        ViewerSession.start(context, url)
+    }
+
+    // 观众入口（备用路径）：交给系统浏览器 —— 不想装 App 的朋友用这条。
+    fun openInBrowser() {
+        val url = paste.trim()
+        if (!url.startsWith("https://") && !url.startsWith("http://")) {
+            viewerError = "这不像一条邀请链接。"
             return
         }
         viewerError = null
@@ -208,6 +256,17 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     val isHost = role == UiRole.Host
     val stop = { CallSession.stop(context); viewerIntent = false; paste = "" }
 
+    // 系统返回键：二级页面返回上一级，而不是把 App 整个退出去。
+    // BackHandler 后注册的优先级更高，所以从最深的页面向浅注册。
+    BackHandler(enabled = viewerState !is ViewerSession.State.Idle) { ViewerSession.stop() }
+    BackHandler(enabled = viewerIntent && state is CallSession.State.Idle) {
+        viewerIntent = false; paste = ""; viewerError = null
+    }
+    BackHandler(enabled = showConsent) { showConsent = false }
+    BackHandler(enabled = showSettings) { showSettings = false }
+    BackHandler(enabled = showGlassLab) { showGlassLab = false; showSettings = true }
+    BackHandler(enabled = showColorLab) { showColorLab = false; showSettings = true }
+
     // 首页在两个分支里都要画（角色未定 / 兜底）。写成一处，避免以后改了其一忘了其二。
     val home: @Composable () -> Unit = {
         HomeScreen(
@@ -223,44 +282,132 @@ private fun AppRouter(backdrop: LayerBackdrop) {
         )
     }
 
-    Box(Modifier.fillMaxSize()) {
-        when {
-            // 分享设置：纯 UI 意图，和授权指引一样排在最前面。
-            showSettings -> QualitySettingsScreen(
+    // ── 当前该画哪一屏 ────────────────────────────────────────────────────
+    // 这个 when 的**顺序就是优先级**（越靠前的意图越"临时"，越该盖在上面），别重排。
+    val page: Page = when {
+        showColorLab -> Page.ColorLab
+        showGlassLab -> Page.GlassLab
+
+        // 分享设置：纯 UI 意图，和授权指引一样排在最前面。
+        showSettings -> Page.Settings
+        showConsent -> Page.Consent
+
+        // ── 观众：App 内收看（与房主的 CallSession 互斥）──
+        viewerState is ViewerSession.State.Connected -> Page.ViewerCall
+        viewerState is ViewerSession.State.Connecting ->
+            Page.ViewerPreparing((viewerState as ViewerSession.State.Connecting).note)
+        viewerState is ViewerSession.State.Failed ->
+            Page.ViewerFailed((viewerState as ViewerSession.State.Failed).reason)
+
+        // 会话已结束且没有待提交的意图 —— 首页
+        role == UiRole.None -> Page.Home
+
+        // 观众还没进入会话 —— 粘贴邀请
+        role == UiRole.Viewer && state is CallSession.State.Idle -> Page.ViewerJoin(viewerError)
+
+        state is CallSession.State.Connected -> Page.Call(isHost)
+
+        state is CallSession.State.Failed -> Page.Failed((state as CallSession.State.Failed).reason)
+
+        // 门牌就绪：把这条链接发出去就完事，剩下的双方自己会走完。
+        state is CallSession.State.WaitingViewer ->
+            Page.Invite((state as CallSession.State.WaitingViewer).inviteUrl)
+
+        state is CallSession.State.Preparing -> Page.Preparing(
+            title = "正在准备接入口",
+            note = (state as CallSession.State.Preparing).note,
+            hint = "采集已经开始了；要等的是临时地址，通常几秒",
+        )
+
+        state is CallSession.State.Connecting -> Page.Preparing(
+            title = "正在建立直连",
+            note = "逐对尝试候选地址（打洞），通常几秒内出结果",
+            hint = null,
+        )
+
+        // 理论上不可达的组合（例如角色已清但状态未回到 Idle）落回首页，
+        // 宁可少一屏也不能白屏。
+        else -> Page.Home
+    }
+
+    // 转场：新页淡入并轻微上浮（从下方 1/20 屏高处升起），旧页快速淡出。
+    // 进出时长不对称（220/140）是故意的 —— 退场慢了会和新页叠出"两张脸"。
+    AnimatedContent(
+        targetState = page,
+        transitionSpec = {
+            (fadeIn(tween(220, easing = FastOutSlowInEasing)) +
+                slideInVertically(tween(260, easing = FastOutSlowInEasing)) { it / 20 })
+                .togetherWith(fadeOut(tween(140, easing = FastOutLinearInEasing)))
+        },
+        modifier = Modifier.fillMaxSize(),
+        label = "page",
+    ) { p ->
+        when (p) {
+            Page.ColorLab -> ColorLabScreen(backdrop = backdrop, onBack = { showColorLab = false })
+            Page.GlassLab -> GlassLabScreen(backdrop = backdrop, onBack = { showGlassLab = false })
+
+            Page.Settings -> QualitySettingsScreen(
                 backdrop = backdrop,
                 quality = quality,
                 onChange = { q ->
                     quality = q
                     scope.launch(Dispatchers.IO) { ShareQuality.save(context, q) }
                 },
+                onOpenColorLab = { showSettings = false; showColorLab = true },
+                onOpenGlassLab = { showSettings = false; showGlassLab = true },
                 onBack = { showSettings = false },
             )
 
-            showConsent -> ConsentGuideScreen(
+            Page.Consent -> ConsentGuideScreen(
                 backdrop = backdrop,
                 onBack = { showConsent = false },
                 onContinue = { showConsent = false; startHostFlow() },
             )
 
-            // 会话已结束且没有待提交的意图 —— 首页
-            role == UiRole.None -> home()
+            Page.ViewerCall -> CallScreen(
+                backdrop = backdrop,
+                remoteTrack = viewerVideo,
+                isHost = false,
+                peerLabel = "已直连",
+                micOn = !viewerMicMuted,
+                onToggleMic = { ViewerSession.setMicMuted(!viewerMicMuted) },
+                latencyMs = null,
+                netLabel = "直连",
+                onStop = { ViewerSession.stop() },
+            )
 
-            // 观众还没进入会话 —— 粘贴邀请
-            role == UiRole.Viewer && state is CallSession.State.Idle -> ViewerJoinScreen(
+            is Page.ViewerPreparing -> PreparingScreen(
+                backdrop = backdrop,
+                title = "正在连接房主的手机",
+                note = p.note,
+                hint = "画面和声音直接在两台设备之间传，不经服务器",
+                onStop = { ViewerSession.stop() },
+            )
+
+            is Page.ViewerFailed -> FailedScreen(
+                backdrop = backdrop,
+                reason = p.reason,
+                onRetry = { ViewerSession.stop() },
+            )
+
+            Page.Home -> home()
+
+            is Page.ViewerJoin -> ViewerJoinScreen(
                 backdrop = backdrop,
                 value = paste,
                 onChange = { paste = it; viewerError = null },
                 onSubmit = { submitViewerLink() },
+                onOpenInBrowser = { openInBrowser() },
                 onBack = { viewerIntent = false; paste = "" },
-                error = viewerError,
+                error = p.error,
             )
 
-            state is CallSession.State.Connected -> CallScreen(
+            is Page.Call -> CallScreen(
                 backdrop = backdrop,
                 // 房主不给实时自预览（采集源就是这块屏，预览只会映出残影）；
                 // 这条轨只服务观众侧。
                 remoteTrack = remoteVideo,
-                isHost = isHost,
+                isHost = p.host,
                 // 房间码属于"链接里塞 SDP"那个时代的产物：那时靠它防两个人撞车。
                 // 现在链接里只有一个随机凭证，展示房间码没有意义，直接说明状态即可。
                 peerLabel = "已直连",
@@ -271,42 +418,26 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 onStop = stop,
             )
 
-            state is CallSession.State.Failed -> FailedScreen(
+            is Page.Failed -> FailedScreen(
                 backdrop = backdrop,
-                reason = (state as CallSession.State.Failed).reason,
+                reason = p.reason,
                 onRetry = stop,
             )
 
-            // 门牌就绪：把这条链接发出去就完事，剩下的双方自己会走完。
-            state is CallSession.State.WaitingViewer -> {
-                val url = (state as CallSession.State.WaitingViewer).inviteUrl
-                InviteScreen(
-                    backdrop = backdrop,
-                    inviteUrl = url,
-                    onCopy = { context.copy("邀请链接", url) },
-                    onStop = stop,
-                )
-            }
-
-            state is CallSession.State.Preparing -> PreparingScreen(
+            is Page.Invite -> InviteScreen(
                 backdrop = backdrop,
-                title = "正在准备接入口",
-                note = (state as CallSession.State.Preparing).note,
-                hint = "采集已经开始了；要等的是临时地址，通常几秒",
+                inviteUrl = p.url,
+                onCopy = { context.copy("邀请链接", p.url) },
                 onStop = stop,
             )
 
-            state is CallSession.State.Connecting -> PreparingScreen(
+            is Page.Preparing -> PreparingScreen(
                 backdrop = backdrop,
-                title = "正在建立直连",
-                note = "逐对尝试候选地址（打洞），通常几秒内出结果",
-                hint = null,
+                title = p.title,
+                note = p.note,
+                hint = p.hint,
                 onStop = stop,
             )
-
-            // 理论上不可达的组合（例如角色已清但状态未回到 Idle）落回首页，
-            // 宁可少一屏也不能白屏。
-            else -> home()
         }
     }
 }

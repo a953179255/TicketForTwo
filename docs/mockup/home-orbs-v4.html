@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>双人票 · 首页效果图 v4（六边形壁纸 + 厚磨砂玻璃圆）</title>
+<style>
+*{box-sizing:border-box;margin:0}
+:root{
+  --page:#08090c;
+  --tx:#f4f4f7; --tx-mid:rgba(255,255,255,.62); --tx-low:rgba(255,255,255,.38);
+  --chip-bg:rgba(255,255,255,.06); --chip-bd:rgba(255,255,255,.18);
+  --hex-line:rgba(130,185,255,.14);
+  --wall-d:#0a0f1c; --wall-e:#04060c;
+  --label:#fff;
+}
+body.light{
+  --tx:#101218; --tx-mid:rgba(0,0,0,.58); --tx-low:rgba(0,0,0,.34);
+  --chip-bg:rgba(255,255,255,.55); --chip-bd:rgba(255,255,255,.85);
+  --hex-line:rgba(30,70,140,.22);
+  --wall-d:#dfe7f4; --wall-e:#c8d2e4;
+  --label:#101218;
+}
+body{min-height:100vh;background:var(--page);color:var(--tx);
+  font-family:system-ui,-apple-system,"Segoe UI","Noto Sans SC",sans-serif;
+  display:flex;flex-direction:column;align-items:center;padding:36px 20px 60px;gap:26px;
+  transition:background .4s}
+h1{font-size:19px;font-weight:650;text-align:center}
+h1 small{display:block;font-size:12.5px;font-weight:400;color:var(--tx-mid);margin-top:6px;letter-spacing:.3px}
+.stage{display:flex;gap:36px;align-items:flex-start;flex-wrap:wrap;justify-content:center}
+
+/* ── 手机壳 ── */
+.phone{width:390px;height:844px;border-radius:50px;position:relative;overflow:hidden;flex:none;
+  border:11px solid #17171c;box-shadow:0 34px 90px rgba(0,0,0,.6)}
+body.light .phone{border-color:#c9ccd6;box-shadow:0 34px 90px rgba(30,40,80,.25)}
+/* 六边形网格壁纸：直线几何图案透过磨砂圆会被糊化，最能凸显玻璃的透明效果 */
+.wallpaper{position:absolute;inset:0;transition:background .4s;
+  background:
+    radial-gradient(130% 90% at 50% -6%, rgba(40,90,200,.30) 0%, transparent 58%),
+    url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="34.64" height="60"><g fill="none" stroke="rgba(130,185,255,0.16)" stroke-width="1.2"><path d="M17.32 0L34.64 10L34.64 30L17.32 40L0 30L0 10Z"/><path d="M0 30L17.32 40L17.32 60L0 70L-17.32 60L-17.32 40Z"/><path d="M34.64 30L51.96 40L51.96 60L34.64 70L17.32 60L17.32 40Z"/></g></svg>'),
+    linear-gradient(180deg, var(--wall-d), var(--wall-e));
+  background-size: auto, 34.64px 60px, auto;
+  background-repeat: no-repeat, repeat, no-repeat}
+body.light .wallpaper{background:
+  radial-gradient(130% 90% at 50% -6%, rgba(90,140,230,.18) 0%, transparent 58%),
+  url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="34.64" height="60"><g fill="none" stroke="rgba(20,60,140,0.20)" stroke-width="1.2"><path d="M17.32 0L34.64 10L34.64 30L17.32 40L0 30L0 10Z"/><path d="M0 30L17.32 40L17.32 60L0 70L-17.32 60L-17.32 40Z"/><path d="M34.64 30L51.96 40L51.96 60L34.64 70L17.32 60L17.32 40Z"/></g></svg>'),
+  linear-gradient(180deg, var(--wall-d), var(--wall-e));
+  background-size: auto, 34.64px 60px, auto;
+  background-repeat: no-repeat, repeat, no-repeat}
+.notch{position:absolute;top:12px;left:50%;transform:translateX(-50%);width:110px;height:26px;border-radius:16px;background:#000;opacity:.85;z-index:5}
+
+.app{position:absolute;inset:0;display:flex;flex-direction:column}
+.statusbar{height:46px;flex:none;display:flex;justify-content:space-between;align-items:flex-end;
+  padding:0 26px 6px;font-size:13.5px;font-weight:650;color:var(--tx);position:relative;z-index:4}
+.statusbar .right{display:flex;gap:5px;align-items:center}
+
+.head{padding:14px 26px 0;flex:none;position:relative;z-index:4}
+.head h2{font-size:21px;font-weight:700;letter-spacing:.4px;color:var(--tx);
+  text-shadow:0 1px 8px rgba(0,0,0,.35)}
+.head p{font-size:12.5px;color:var(--tx-mid);margin-top:5px}
+
+/* ══ 有厚度的磨砂玻璃圆 ══
+   厚度的三个视觉来源（正视图中呈现）：
+   · 底边内侧亮环：光从玻璃底边缘透出来（真实玻璃圆片最明显的特征）
+   · 贴墙的清晰投影：有厚度的物体影子更实
+   · 边缘均匀亮化：光在玻璃侧壁的折射
+   依然保持磨砂：blur(22) + 均匀 tint，不做球面高光 */
+.orbs{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:34px;padding:0 24px}
+.orb-wrap{display:flex;flex-direction:column;align-items:center;position:relative}
+.orb{width:140px;height:140px;border-radius:50%;border:0;padding:0;cursor:pointer;position:relative;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;color:#fff;
+  -webkit-backdrop-filter:blur(22px) saturate(1.45) brightness(1.05);
+  backdrop-filter:blur(22px) saturate(1.45) brightness(1.05);
+  box-shadow:
+    inset 0 -3px 9px rgba(255,255,255,.20),
+    inset 0 -1px 2px rgba(255,255,255,.30),
+    inset 0 2px 6px rgba(255,255,255,.08),
+    inset 0 0 0 1px rgba(255,255,255,.24),
+    0 10px 26px rgba(0,0,0,.34),
+    0 3px 8px rgba(0,0,0,.26);
+  transition:transform .38s cubic-bezier(.32,2.32,.61,.27), box-shadow .3s}
+.orb:active{transform:scale(.94);box-shadow:
+    inset 0 -3px 9px rgba(255,255,255,.20),
+    inset 0 -1px 2px rgba(255,255,255,.30),
+    inset 0 2px 6px rgba(255,255,255,.08),
+    inset 0 0 0 1px rgba(255,255,255,.24),
+    0 4px 12px rgba(0,0,0,.32)}
+
+.orb::before{ /* 顶部极轻提亮（环境光），保持平面感 */
+  content:"";position:absolute;inset:0;border-radius:50%;pointer-events:none;
+  background:linear-gradient(180deg, rgba(255,255,255,.07) 0%, rgba(255,255,255,0) 30%);
+}
+.orb::after{ /* 磨砂噪声微纹理 */
+  content:"";position:absolute;inset:0;border-radius:50%;pointer-events:none;
+  background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="140" height="140"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/></filter><rect width="140" height="140" filter="url(%23n)"/></svg>');
+  opacity:.06; mix-blend-mode:overlay;
+}
+
+.orb .ic{width:40px;height:40px;filter:drop-shadow(0 1px 4px rgba(0,0,0,.28))}
+.orb .t{font-size:15.5px;font-weight:680;letter-spacing:1.5px;
+  text-shadow:0 1px 5px rgba(0,0,0,.32)}
+.orb .s{font-size:10.5px;letter-spacing:.4px;opacity:.75;text-shadow:0 1px 4px rgba(0,0,0,.28)}
+
+/* tint：均匀淡涂（蓝 / 紫） */
+.orb-share{background-color:rgba(10,132,255,.26)}
+.orb-share:active{background-color:rgba(10,132,255,.38)}
+.orb-view{background-color:rgba(171,88,234,.22)}
+.orb-view:active{background-color:rgba(171,88,234,.34)}
+
+/* ── 底部 ── */
+.foot{flex:none;padding:0 26px 26px;display:flex;flex-direction:column;gap:13px;position:relative;z-index:4}
+.last{text-align:center;font-size:11.5px;color:var(--tx-low)}
+.settings{height:56px;border-radius:28px;display:flex;align-items:center;justify-content:center;gap:10px;
+  border:1px solid var(--chip-bd);background:var(--chip-bg);color:var(--tx);font-size:14.5px;font-weight:560;
+  cursor:pointer;position:relative;
+  -webkit-backdrop-filter:blur(22px) saturate(1.45);backdrop-filter:blur(22px) saturate(1.45);
+  box-shadow:
+    inset 0 -2px 6px rgba(255,255,255,.14),
+    inset 0 0 0 1px rgba(255,255,255,.20),
+    0 8px 22px rgba(0,0,0,.30);
+  transition:transform .3s cubic-bezier(.32,2.32,.61,.27)}
+.settings:active{transform:scale(.96)}
+.settings svg{width:19px;height:19px;opacity:.85}
+
+/* ── 标注 ── */
+.note{display:none;position:absolute;font-size:10.5px;font-family:ui-monospace,Consolas,monospace;
+  color:#ffd166;background:rgba(10,10,12,.85);border:1px solid rgba(255,209,102,.35);
+  padding:2px 7px;border-radius:5px;white-space:nowrap;z-index:9;pointer-events:none}
+body.notes .note{display:block}
+body.notes .orb{outline:1px dashed rgba(255,209,102,.55);outline-offset:3px}
+
+/* ── 说明面板 ── */
+.panel{max-width:340px;display:flex;flex-direction:column;gap:16px;font-size:13.5px;line-height:1.75;color:var(--tx-mid)}
+.panel h3{font-size:15px;color:var(--tx);font-weight:650}
+.panel b{color:var(--tx);font-weight:620}
+.panel .sw{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:4px}
+.sw button,.sw label{cursor:pointer;font-size:13px;padding:9px 16px;border-radius:999px;
+  border:1px solid var(--chip-bd);background:var(--chip-bg);color:var(--tx);display:flex;gap:8px;align-items:center;user-select:none}
+.sw input{accent-color:#0a84ff}
+.spec{font-size:12px;border-top:1px solid var(--chip-bd);padding-top:12px}
+.spec li{margin:5px 0 5px 16px}
+</style>
+</head>
+<body>
+<h1>双人票 · 首页效果图 v4<small>六边形几何壁纸 + 有厚度的磨砂玻璃圆 · 未改动任何代码</small></h1>
+
+<div class="stage">
+  <div class="phone">
+    <div class="wallpaper"></div>
+    <div class="notch"></div>
+    <div class="app">
+      <div class="statusbar">
+        <span>9:41</span>
+        <span class="right">
+          <svg width="17" height="12" viewBox="0 0 17 12" fill="currentColor"><rect x="0" y="7" width="3" height="5" rx="1"/><rect x="4.5" y="5" width="3" height="7" rx="1"/><rect x="9" y="2.5" width="3" height="9.5" rx="1"/><rect x="13.5" y="0" width="3" height="12" rx="1" opacity=".4"/></svg>
+          <svg width="24" height="12" viewBox="0 0 24 12" fill="none" stroke="currentColor"><rect x="1" y="1" width="19" height="10" rx="3"/><rect x="3" y="3" width="13" height="6" rx="1.5" fill="currentColor" stroke="none"/><path d="M22 4v4" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </span>
+      </div>
+
+      <div class="head">
+        <h2>双人票</h2>
+        <p>把你的屏幕，变成朋友的私人影院</p>
+      </div>
+
+      <div class="orbs">
+        <div class="orb-wrap">
+          <span class="note" style="top:-6px;right:-52px">直径 140dp</span>
+          <button class="orb orb-share" aria-label="分享屏幕">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4.2" width="18" height="12.6" rx="2.6"/>
+              <path d="M12 14.2V7.6"/>
+              <path d="M9.1 10.4 12 7.5l2.9 2.9"/>
+              <path d="M8.2 20.8h7.6"/>
+            </svg>
+            <span class="t">分享屏幕</span>
+            <span class="s">浏览器免安装</span>
+          </button>
+        </div>
+
+        <div class="orb-wrap">
+          <button class="orb orb-view" aria-label="进入观看">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="6.6" y="2.6" width="10.8" height="18.8" rx="2.6"/>
+              <path d="M10.6 9.6v4.8l4-2.4z" fill="currentColor" stroke="none"/>
+            </svg>
+            <span class="t">进入观看</span>
+            <span class="s">粘上链接就能看</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="foot">
+        <span class="note" style="position:static">底部胶囊高 56dp · 距安全区 26dp</span>
+        <div class="last">上次连接 09-22 17:54 · 画质 720p/30帧/2.0Mbps</div>
+        <button class="settings" aria-label="分享设置">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M19.14 12.94a7.07 7.07 0 0 0 .05-.94 7.07 7.07 0 0 0-.05-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.22l-2.39.96a7.03 7.03 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96a.5.5 0 0 0-.61.22L2.63 8.9a.5.5 0 0 0 .12.64l2.03 1.58a7.07 7.07 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.61.22l2.39-.96c.49.38 1.03.7 1.62.94l.36 2.54c.04.24.25.42.5.42h3.84c.25 0 .46-.18.5-.42l.36-2.54a7.03 7.03 0 0 0 1.62-.94l2.39.96c.21.1.48 0 .61-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58Z"/>
+          </svg>
+          分享设置
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>v4 改了什么</h3>
+    <div>
+      <b>① 六边形几何壁纸</b>：深蓝底 + 微亮六边形网格。直线图案是最好的"玻璃试纸"——
+      透过磨砂圆看，六边形被糊化的部分和外面清晰的部分一对比，<b>透明感立刻出来</b>。<br>
+      <b>② 厚度回来了，但不是球</b>：厚度的视觉来源换成三个平面化手法 ——
+      <b>底边内侧亮环</b>（光从玻璃底边缘透出，真实玻璃圆片最明显的特征）、
+      <b>贴墙的清晰投影</b>（有厚度的物体影子更实）、
+      <b>边缘均匀亮化</b>（光在玻璃侧壁折射）。没有球面高光、没有悬浮感。
+    </div>
+
+    <h3>试试</h3>
+    <div>按住圆看按压反馈；切换深浅色（六边形壁纸有两套配色）；勾选标注看尺寸。</div>
+    <div class="sw">
+      <button id="themeBtn">◐ 切换深色 / 浅色</button>
+      <label><input type="checkbox" id="noteChk"> 显示标注</label>
+    </div>
+
+    <div class="spec">
+      <b>关键规格</b>
+      <li>双圆 140dp，文字在圆内（图标 40 + 名称 15.5 + 副标 10.5）</li>
+      <li>磨砂：blur(22) saturate(1.45) brightness(1.05) + tint 蓝紫均匀淡涂</li>
+      <li>厚度：inset 底部亮环 (-3px/9px + -1px/2px) + 双层贴墙投影</li>
+      <li>壁纸：六边形网格（边长 20dp，线宽 1.2，蓝白 16% 透明线）</li>
+      <li>真实实现时：磨砂用 backdrop 库 drawBackdrop，六边形壁纸做成真实壁纸资源</li>
+    </div>
+  </div>
+</div>
+
+<script>
+document.getElementById('themeBtn').addEventListener('click', () => document.body.classList.toggle('light'));
+document.getElementById('noteChk').addEventListener('change', e => document.body.classList.toggle('notes', e.target.checked));
+</script>
+</body>
+</html>

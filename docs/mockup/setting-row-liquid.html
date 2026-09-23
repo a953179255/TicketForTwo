@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>双人票 · 设置行效果图 v2（分辨率去自定义 · 2K 档）</title>
+<style>
+*{box-sizing:border-box;margin:0}
+:root{
+  --tx:#f4f4f7; --tx-mid:rgba(255,255,255,.60); --tx-low:rgba(255,255,255,.38);
+  --accent:#0A84FF; --track:rgba(0,0,0,.34);
+}
+body{min-height:100vh;background:#08090c;color:var(--tx);
+  font-family:system-ui,-apple-system,"Segoe UI","Noto Sans SC",sans-serif;
+  display:flex;flex-direction:column;align-items:center;padding:32px 20px 56px;gap:24px}
+h1{font-size:18.5px;font-weight:650;text-align:center}
+h1 small{display:block;font-size:12.5px;font-weight:400;color:var(--tx-mid);margin-top:6px;letter-spacing:.3px}
+.stage{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap;justify-content:center}
+.wrap{display:flex;flex-direction:column;align-items:center;gap:12px}
+.tag{font-size:13.5px;font-weight:650;letter-spacing:.4px}
+.tag small{display:block;font-size:11.5px;font-weight:400;color:var(--tx-mid);text-align:center;margin-top:3px}
+
+.phone{width:320px;height:560px;border-radius:40px;position:relative;overflow:hidden;
+  border:9px solid #17171c;box-shadow:0 26px 66px rgba(0,0,0,.62)}
+.wallpaper{position:absolute;inset:0;
+  background:
+    radial-gradient(62% 42% at 80% 40%, rgba(45,85,165,.24) 0%, transparent 62%),
+    radial-gradient(50% 34% at 18% 76%, rgba(70,60,150,.14) 0%, transparent 60%),
+    radial-gradient(rgba(150,185,255,.06) 1px, transparent 1.5px),
+    linear-gradient(180deg,#090c15,#04060c);
+  background-size:auto,auto,11px 11px,auto;
+  background-repeat:no-repeat,no-repeat,repeat,no-repeat}
+.app{position:absolute;inset:0;padding:14px;display:flex;flex-direction:column;gap:12px}
+.app h2{font-size:18px;font-weight:700;letter-spacing:.4px;margin-top:4px}
+.app p.sub{font-size:11.5px;color:var(--tx-mid);margin-top:3px}
+
+.card{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.16);
+  border-radius:16px;padding:12px;backdrop-filter:blur(14px) saturate(1.4);
+  display:flex;flex-direction:column;gap:9px}
+.card .title{font-size:11.5px;color:var(--tx-low);letter-spacing:.5px}
+
+.seg{position:relative;display:flex;padding:3px;border-radius:999px;background:var(--track)}
+.seg .ind{position:absolute;top:3px;left:3px;border-radius:999px;background:var(--accent);
+  transform-origin:50% 50%;will-change:transform;pointer-events:none;
+  box-shadow:0 4px 14px rgba(10,132,255,.34)}
+.seg .items{position:relative;display:flex;width:100%}
+.seg .cell{flex:1 1 0;min-width:0;height:34px;display:grid;place-items:center;
+  font-size:12px;color:var(--tx-mid);cursor:pointer;user-select:none;
+  transition:color .24s cubic-bezier(.4,0,.2,1);white-space:nowrap;padding:0 3px}
+.seg .cell.on{color:#fff;font-weight:600}
+.seg .cell.input{color:var(--tx-low)}
+.seg .cell.input.has{color:#fff;font-weight:600}
+.seg .cell input{width:100%;background:transparent;border:0;outline:0;text-align:center;
+  font:inherit;color:inherit;font-weight:inherit;padding:0}
+.seg .cell input::placeholder{color:var(--tx-low);font-weight:400}
+
+.panel{max-width:400px;display:flex;flex-direction:column;gap:14px;font-size:13.5px;line-height:1.75;color:var(--tx-mid)}
+.panel h3{font-size:15px;color:var(--tx);font-weight:650}
+.panel b{color:var(--tx);font-weight:620}
+.panel ol{margin:0 0 0 18px}
+.panel li{margin:5px 0}
+.sw{display:flex;gap:10px;flex-wrap:wrap;margin-top:4px}
+.sw button{cursor:pointer;font-size:13px;padding:9px 16px;border-radius:999px;
+  border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.06);color:var(--tx)}
+.tip{font-size:12px;color:var(--tx-low)}
+.warn{font-size:12.5px;color:#ffd79a;background:rgba(255,164,43,.12);
+  border:1px solid rgba(255,164,43,.3);border-radius:14px;padding:10px 12px;line-height:1.7}
+</style>
+</head>
+<body>
+<h1>设置行效果图 v2<small>分辨率去掉「自定义」· 液态切换动画沿用已确认的做法 · 未改动代码</small></h1>
+
+<div class="stage">
+  <!-- ① 1080p 屏（模拟器） -->
+  <div class="wrap">
+    <div class="tag">1080p 屏（模拟器）<small>分辨率只有三档：540p / 720p / 1080p</small></div>
+    <div class="phone">
+      <div class="wallpaper"></div>
+      <div class="app">
+        <div><h2>分享设置</h2><p class="sub">这些是上限不是保证值。选好后返回即可。</p></div>
+
+        <div class="card">
+          <div class="title">分辨率</div>
+          <div class="seg">
+            <div class="ind"></div>
+            <div class="items">
+              <div class="cell">540p</div>
+              <div class="cell on">720p</div>
+              <div class="cell">1080p</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="title">帧率</div>
+          <div class="seg">
+            <div class="ind"></div>
+            <div class="items">
+              <div class="cell on">30</div>
+              <div class="cell">60</div>
+              <div class="cell input"><input placeholder="自定义" inputmode="numeric"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="title">码率上限</div>
+          <div class="seg">
+            <div class="ind"></div>
+            <div class="items">
+              <div class="cell">1M</div>
+              <div class="cell on">2M</div>
+              <div class="cell">4M</div>
+              <div class="cell">8M</div>
+              <div class="cell input"><input placeholder="自定义" inputmode="decimal"></div>
+            </div>
+          </div>
+        </div>
+        <div class="tip">点格子看液态滑动 · 按住看变宽</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ② 2K 屏（真机） -->
+  <div class="wrap">
+    <div class="tag">2K 屏（你的魅族）<small>分辨率三档：720p / 1080p / 2K</small></div>
+    <div class="phone">
+      <div class="wallpaper"></div>
+      <div class="app">
+        <div><h2>分享设置</h2><p class="sub">这些是上限不是保证值。选好后返回即可。</p></div>
+
+        <div class="card">
+          <div class="title">分辨率</div>
+          <div class="seg">
+            <div class="ind"></div>
+            <div class="items">
+              <div class="cell">720p</div>
+              <div class="cell">1080p</div>
+              <div class="cell on">2K</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="title">帧率</div>
+          <div class="seg">
+            <div class="ind"></div>
+            <div class="items">
+              <div class="cell on">30</div>
+              <div class="cell">60</div>
+              <div class="cell input"><input placeholder="自定义" inputmode="numeric"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="title">码率上限</div>
+          <div class="seg">
+            <div class="ind"></div>
+            <div class="items">
+              <div class="cell">1M</div>
+              <div class="cell on">2M</div>
+              <div class="cell">4M</div>
+              <div class="cell">8M</div>
+              <div class="cell input"><input placeholder="自定义" inputmode="decimal"></div>
+            </div>
+          </div>
+        </div>
+        <div class="tip">同一套代码，标签按屏幕像素自动变</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>这次改了什么</h3>
+    <ol>
+      <li><b>分辨率去掉「自定义」格</b> —— 它本来就不需要：可选范围天然被屏幕卡死。</li>
+      <li><b>「2K」不是一个新档位，而是第三档在你的屏幕上叫什么</b>：采集只能缩小、不能放大，
+        所以第三档刻度是“原生分辨率”——2K 屏上显示 <b>2K</b>，1080 屏上显示 <b>1080p</b>。</li>
+      <li>帧率、码率的「自定义」格保持（这两个是真需要自由填的）。</li>
+    </ol>
+
+    <div class="warn">
+      所以你在模拟器里看到的会是「540p / 720p / 1080p」，装了真机才会看到「720p / 1080p / <b>2K</b>」。
+      两边是同一套代码，只是标签按屏幕像素算 —— 不会出现 1080 屏假称 2K 的情况。
+    </div>
+
+    <h3>试试</h3>
+    <div>两台手机里的格子都能点：看指示器的拉长→回弹，按住看变宽。</div>
+    <div class="sw">
+      <button id="demo">▶ 连续切换演示（左机码率行）</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function setupSeg(seg) {
+  const ind = seg.querySelector('.ind');
+  const cells = [...seg.querySelectorAll('.cell')];
+  let cur = cells.findIndex(c => c.classList.contains('on'));
+  if (cur < 0) cur = 0;
+
+  const geom = () => ({ w: cells[0].offsetWidth, pad: 3 });
+
+  function place(i, animate, speed) {
+    const { w, pad } = geom();
+    const x = i * w;
+    if (!animate) {
+      ind.style.width = w + 'px';
+      ind.style.transform = `translateX(${x}px)`;
+      ind._x = x;
+      return;
+    }
+    const sx = 1 + 0.18 * speed;
+    const sy = 1 - 0.07 * speed;
+    ind.animate([
+      { width: w + 'px', transform: `translateX(${ind._x ?? x}px) scaleX(1) scaleY(1)` },
+      { transform: `translateX(${x}px) scaleX(${sx}) scaleY(${sy})`, offset: 0.62 },
+      { transform: `translateX(${x}px) scaleX(1) scaleY(1)` },
+    ], { duration: 420, easing: 'cubic-bezier(.32,1.6,.5,1)', fill: 'forwards' });
+    ind._x = x;
+    ind.style.width = w + 'px';
+  }
+
+  function select(i) {
+    const from = cur;
+    cur = i;
+    cells.forEach((c, k) => c.classList.toggle('on', k === i));
+    place(i, true, Math.min(1, Math.abs(i - from) / Math.max(1, cells.length - 1) + 0.45));
+  }
+
+  cells.forEach((c, i) => {
+    const input = c.querySelector('input');
+    if (input) {
+      input.addEventListener('focus', () => select(i));
+      input.addEventListener('input', () => c.classList.toggle('has', input.value.length > 0));
+      return;
+    }
+    c.addEventListener('pointerdown', () => {
+      const { w } = geom();
+      ind.animate([
+        { transform: `translateX(${ind._x ?? 0}px) scaleX(1) scaleY(1)` },
+        { transform: `translateX(${ind._x ?? 0}px) scaleX(1.22) scaleY(0.94)` },
+      ], { duration: 130, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'forwards' });
+      ind.style.width = w + 'px';
+    });
+    c.addEventListener('click', () => select(i));
+  });
+
+  requestAnimationFrame(() => {
+    const { w } = geom();
+    ind.style.width = w + 'px';
+    ind._x = cur * w;
+    ind.style.transform = `translateX(${ind._x}px)`;
+  });
+
+  seg._select = select;
+  seg._cells = cells;
+}
+
+const segs = [...document.querySelectorAll('.seg')].map(setupSeg);
+window.addEventListener('resize', () => segs.forEach(s => s._select(s._cells.findIndex(c => c.classList.contains('on')))));
+
+document.getElementById('demo').onclick = async () => {
+  const s = segs[2];
+  const n = s._cells.filter(c => !c.querySelector('input')).length;
+  for (let i = 0; i < n; i++) { s._select(i); await new Promise(r => setTimeout(r, 520)); }
+  s._select(0);
+};
+</script>
+</body>
+</html>
