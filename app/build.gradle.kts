@@ -57,10 +57,13 @@ android {
             // 正式版只留 arm64：它是发给真机用的，而隧道程序（cloudflared）单 x86_64
             // 那一份就有 43MB —— 模拟器专用的二进制没有理由跟着分发。（107.9MB → 71.3MB）
             //
-            // 一度以为"代价是正式包装不上模拟器"，**实测不成立**：本机模拟器镜像的
-            // abilist 是 `x86_64,arm64-v8a`（镜像自带 ARM 转译），只含 arm64 的正式包照样
-            // 能装能跑，`dumpsys package` 显示 primaryCpuAbi=arm64-v8a、无 UnsatisfiedLink。
-            // 所以正式包可以照常在模拟器上验，只是验的是 arm64 那份二进制。
+            // 关于"正式包能不能在模拟器上验"，实测结论分两半，别混为一谈：
+            //  · **界面能验**：本机模拟器镜像 abilist 是 `x86_64,arm64-v8a`（自带 ARM 转译），
+            //    只含 arm64 的正式包能装能跑，primaryCpuAbi=arm64-v8a，界面完全正常；
+            //  · **"开始分享"验不了**：隧道程序是个**独立可执行文件**，靠 fork+exec 启动，
+            //    而模拟器没有内核级 ARM 处理（无 /proc/sys/fs/binfmt_misc）。
+            //    实测把 arm64 那份 libcloudflared.so 推到 /data/local/tmp 直接执行 → 段错误；
+            //    x86_64 那份同样方式跑 → 正常。⇒ 要跑通整条分享链路必须在模拟器上用 debug 包。
             ndk {
                 abiFilters += listOf("arm64-v8a")
             }
