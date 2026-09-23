@@ -507,8 +507,16 @@ fun QualitySettingsScreen(
                 Box(Modifier.fillMaxWidth().height(1.dp).background(Ink.TextLow.copy(alpha = 0.25f)))
                 InfoRow("当前组合", quality.summary(screenW))
                 InfoRow("流量上限估算", "约 ${quality.estMbPerMinute()} MB/分钟")
-                StatusChip("省流量建议：540p · 30 帧 · 1M（约 8 MB/分钟）", ChipTone.Ok)
-                StatusChip("1080p 或高码率在多数机型上会发热降帧", ChipTone.Warn)
+                // 这两句提到具体档位，所以必须跟着本机档位取名 —— 写死 "540p"/"1080p"
+                // 会在 2K 机上指向根本不存在的选项（本机最低档叫 720p、最高档叫 2K）。
+                StatusChip(
+                    "省流量建议：${ShareQuality.lowestResolutionLabel(screenW)} · 30 帧 · 1M（约 8 MB/分钟）",
+                    ChipTone.Ok,
+                )
+                StatusChip(
+                    "${ShareQuality.highestResolutionLabel(screenW)} 或高码率在多数机型上会发热降帧",
+                    ChipTone.Warn,
+                )
             }
         }
 

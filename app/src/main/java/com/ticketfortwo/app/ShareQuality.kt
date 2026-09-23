@@ -63,6 +63,20 @@ data class ShareQuality(
             }
         }
 
+        /**
+         * 最低档 / 最高档的显示名。
+         *
+         * 设置页有两句**提到具体档位**的说明文案（省流量建议、发热提醒）。这两句以前把
+         * "540p" / "1080p" 写死在字符串里 —— 在 2K 机上最低档其实叫 720p、最高档叫 2K，
+         * 于是同一屏里出现"分辨率行没有 540p，下面的建议却让选 540p"的矛盾。
+         * 凡是"提到某一档"的文案，都必须用这两个助手取名字，不能写字面量。
+         */
+        fun lowestResolutionLabel(screenWidthPx: Int): String =
+            resolutionLabelFor(SCALES.first(), screenWidthPx)
+
+        fun highestResolutionLabel(screenWidthPx: Int): String =
+            resolutionLabelFor(SCALES.last(), screenWidthPx)
+
         /** 帧率档：只留 30 / 60（10、15 帧没有存在意义）；更高或更低的用「自定义」。 */
         val FPSES = listOf(30, 60)
         /** 码率预设档。12M 那一档由「自定义输入」取代 —— 同一件事不留两个入口。 */
