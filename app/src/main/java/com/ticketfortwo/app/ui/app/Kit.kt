@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -488,6 +489,11 @@ fun PageScaffold(
             .statusBarsPadding()
             // 底部安全区：手势导航条会盖住内容 —— 首页的设置胶囊实测就与横杠重叠了。
             .navigationBarsPadding()
+            // 键盘：观众粘贴链接那一屏的主按钮贴在底部，键盘一弹出来就把它整个盖住，
+            // 用户看到的是"粘好了但『在 App 内观看』点不到"（t2view 实测截图里就是这样，
+            // 当时脚本连点三次没反应，因为点的全落在键盘上）。imePadding 让内容抬到
+            // 键盘之上；没弹键盘时它是 0，不影响其它屏。
+            .imePadding()
             .padding(horizontal = GlassDimens.screenH),
         verticalArrangement = Arrangement.spacedBy(GlassDimens.sp4),
     ) {

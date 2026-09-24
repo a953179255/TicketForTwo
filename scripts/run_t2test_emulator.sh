@@ -17,7 +17,9 @@ export ANDROID_SDK_ROOT='G:\Android\sdk-ext'
 export ANDROID_ADB_SERVER_PORT="${ANDROID_ADB_SERVER_PORT:-5039}"
 
 EMU='/g/Android/sdk-ext/emulator/emulator.exe'
-LOG='G:/Android/avd/t2test-launch.log'
+# 要看第二台时：T2_AVD=t2view bash scripts/run_t2test_emulator.sh
+AVD="${T2_AVD:-t2test}"
+LOG="G:/Android/avd/${AVD}-launch.log"
 
 if [ ! -x "$EMU" ]; then
   echo "找不到 emulator：$EMU" >&2
@@ -29,7 +31,7 @@ fi
 # 默认 -no-window：不抢焦点，界面靠 adb uiautomator + screencap 驱动与验收。
 # 传 --window 则开真实窗口 —— 需要**人亲手操作**模拟器时才用（比如用户自己测分享流程、
 # 要长按复制邀请链接发到手机上）。无头模式下用户桌面上根本看不见它，别默认开窗口。
-EMU_ARGS=(-avd t2test -no-boot-anim -gpu host)
+EMU_ARGS=(-avd "$AVD" -no-boot-anim -gpu host)
 if [ "${1:-}" = "--window" ]; then
   echo "以带窗口模式启动（会出现在桌面上并抢焦点）"
 else
@@ -37,22 +39,22 @@ else
 fi
 
 "$EMU" "${EMU_ARGS[@]}" >"$LOG" 2>&1 &
-echo "已在后台启动 t2test，日志：$LOG"
+echo "已在后台启动 $AVD，日志：$LOG"
 
 ADB='/c/Android/sdk/platform-tools/adb.exe'
 HERE="$(cd "$(dirname "$0")" && pwd)"
-echo "等待开机（冷启动实测 39–97 秒波动）..."
+echo "等待 $AVD 开机（冷启动实测 39–97 秒波动）..."
 # 轮询**按 AVD 名**问，不问固定端口：t2test 可能拿到 5554（edgeai 没在跑时），
 # 写死 5556 会既等不到、又在别的机器上误连一台。
 for _ in $(seq 1 120); do
-  if SERIAL=$(python "$HERE/t2device.py" 2>/dev/null) && [ -n "$SERIAL" ]; then
+  if SERIAL=$(T2_AVD="$AVD" python "$HERE/t2device.py" 2>/dev/null) && [ -n "$SERIAL" ]; then
     if [ "$("$ADB" -s "$SERIAL" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
-      echo "t2test 已就绪：$SERIAL"
+      echo "$AVD 已就绪：$SERIAL"
       exit 0
     fi
   fi
   sleep 4
 done
-echo "超时：没等到 t2test 开机完成，查看 $LOG" >&2
+echo "超时：没等到 $AVD 开机完成，查看 $LOG" >&2
 tail -20 "$LOG"
 exit 1

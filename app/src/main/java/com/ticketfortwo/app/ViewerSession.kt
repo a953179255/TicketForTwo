@@ -85,6 +85,15 @@ object ViewerSession {
     @Volatile
     private var wsOpen = false
 
+    /**
+     * 这条会话有没有**曾经**连上过。收场分档全靠它：
+     * 从没连上 → 是真的连不上（Failed）；连上过之后断 → 才可能是"对方结束了"（Ended）。
+     * 上一版只看"当前是不是 Connecting"就判 Ended，结果隧道还没注册好时 Cloudflare 回
+     * 530、握手被拒，也被写成"与房主的连接断了"——那是失败，不是结束，用户该重试而不是等人。
+     */
+    @Volatile
+    private var everOpened = false
+
     /** 远端描述就绪前先攒着的候选（顺序错了 addIceCandidate 会抛）。 */
     private val pendingRemoteCandidates = mutableListOf<IceCandidate>()
 
@@ -94,6 +103,7 @@ object ViewerSession {
 
     fun start(context: Context, inviteUrl: String) {
         stop()
+        everOpened = false
         RtcEngine.init(context)
 
         val wsUrl = wsUrlOf(inviteUrl)
@@ -108,6 +118,7 @@ object ViewerSession {
             url = wsUrl,
             onOpen = {
                 wsOpen = true
+                everOpened = true
                 note("通道已建立，正在向房主打招呼")
                 send(JSONObject().apply { put("t", "hello"); put("role", "viewer") }.toString())
             },
@@ -122,7 +133,10 @@ object ViewerSession {
                             end("与房主的连接断了：${reason ?: "对方可能已停止分享"}")
                         // 曾经连上过但还没出画面 → 同样归到"结束"，别让人去查自己网络。
                         is State.Connecting ->
-                            end(reason ?: "连不上房主的手机（可能分享已结束，或网络不允许）")
+                            if (everOpened) end(reason ?: "连不上房主的手机（可能分享已结束）")
+                            // 从没握上手：这是"连不上"，不是"结束了"。该给失败与重试，
+                            // 而不是让人干等一个不会再来的房主。
+                            else fail(reason ?: "连不上房主的手机（链接可能已过期，或对方已停止分享）")
                         is State.Ended, is State.Failed, State.Idle -> Unit
                     }
                 }
@@ -136,6 +150,7 @@ object ViewerSession {
         runCatching { ws?.close() }
         ws = null
         wsOpen = false
+        everOpened = false
         runCatching { peer?.close() }
         peer = null
         runCatching { audioTrack?.dispose() }

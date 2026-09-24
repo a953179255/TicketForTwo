@@ -11,9 +11,10 @@
 """
 import os
 import subprocess
+import sys
 
 ADB = r"C:\Android\sdk\platform-tools\adb.exe"
-AVD = "t2test"
+AVD = os.environ.get("T2_AVD", "t2test")   # 要看第二台（t2view）时：T2_AVD=t2view
 
 
 def _run(*args, timeout=25):
@@ -46,4 +47,4 @@ def resolve(want=AVD):
 
 
 if __name__ == "__main__":
-    print(resolve())
+    print(resolve(sys.argv[1] if len(sys.argv) > 1 else AVD))

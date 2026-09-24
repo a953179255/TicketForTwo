@@ -858,7 +858,7 @@ fun EndedScreen(
             ) {
                 Text(reason, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Ink.TextHi)
                 Text(
-                    "画面停了不是因为连不上 —— 是对方那次分享已经结束了。",
+                    "这次分享已经停了，不是你的网络问题。",
                     fontSize = 12.5.sp, color = Ink.TextMid, lineHeight = 18.sp,
                 )
             }
@@ -877,9 +877,8 @@ fun EndedScreen(
                         StatusChip("只能由他发起", ChipTone.Ok)
                     }
                     Text(
-                        "请他在手机上重新点一次「分享屏幕」，再把新链接发给你。" +
-                            "旧那条链接连同口令已经作废，刷新它不会变回来 —— " +
-                            "所以这一屏没有「重试」按钮，点了也是白点。",
+                        "让房主在他手机上重新点一次「分享屏幕」，再把新链接发给你。" +
+                            "这条链接连同口令已经作废，刷新也不会恢复。",
                         fontSize = 12.sp, color = Ink.TextMid, lineHeight = 17.sp,
                     )
                 }
