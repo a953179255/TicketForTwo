@@ -135,6 +135,7 @@ class Peer(
                         if (local == null) {
                             listener.onFailure("offer 就绪但读不到 localDescription")
                         } else {
+                            logThread("localDescription(${Kind.Offer})")
                             listener.onLocalDescription(Kind.Offer, local.description)
                         }
                     }
@@ -166,6 +167,7 @@ class Peer(
                                 if (local == null) {
                                     listener.onFailure("answer 就绪但读不到 localDescription")
                                 } else {
+                                    logThread("localDescription(${Kind.Answer})")
                                     listener.onLocalDescription(Kind.Answer, local.description)
                                 }
                             }
@@ -321,6 +323,22 @@ class Peer(
     override fun onRenegotiationNeeded() = Unit
 
     // ---- helpers -------------------------------------------------------
+
+    /**
+     * 记下本地描述落在哪条线程。
+     *
+     * 加它的直接收益是**推翻了我自己对 libwebrtc 的一条假设**：本来以为
+     * `SdpObserver` 会回到"创建 PeerConnection 的那条线程"（`ViewerSession.ensurePeer()`
+     * 跑在 `Dispatchers.Main.immediate`，那样 answer 就得在主线程写 socket）。
+     * 2026-09-25 实测两局，日志是 `localDescription(Offer) 回调线程=signaling_threa` ——
+     * 它走的是 signaling 线程，所以 answer 那一路本来就是安全的。
+     *
+     * 真正会落到主线程的只有候选：[onIceCandidate] 里那句 `handler.post` 是显式投回
+     * 主线程的，这是 8127d12 的根因（房主侧），也是观众侧原先的同一个坑。
+     * 线程这种东西不要靠推断，打出来看。
+     */
+    private fun logThread(what: String) =
+        Log.d(TAG, "$what 回调线程=${Thread.currentThread().name}")
 
     private open inner class SimpleSdpObserver(private val label: String) : SdpObserver {
         override fun onCreateFailure(error: String) = fail(label, "create", error)

@@ -497,3 +497,59 @@ M0 那块朴素调试屏换成了玻璃化的正式路由：`MainActivity` 不�
 - 流量估算按上限口径：Mbps × 7.5 ≈ MB/分钟；仅语音 Opus ~32 kbps ≈ 0.3 MB/分钟。
 - 省流量测试建议档：**540p · 10 帧 · 0.3M ≈ 2–3 MB/分钟**（首页卡片实时显示当前组合与估算）。
 - **单轮已落地**：`a0cc901`（SignalHub + 出站隧道，观众点一次链接即入）取代了本文其余部分描述的两轮流程；两轮代码与夹具已随之删除，分析见 `docs/PIIK-ANALYSIS.md`。
+
+## 16. App 内观看从来没通过：观众侧也是"主线程写 socket"（2026-09-25）
+
+异地实测里出现一个此前没解释过的组合：**同一条链接，浏览器观众端能出画面，
+手机 App 内观看必失败**。当时界面甩的是旧版写死的那句"一方可能在严格的网络后
+（对称 NAT）"，而这句话在 `48ab471` 就已经被基于证据的判定替掉了 —— 也就是说
+手机上的包比仓库旧，光凭文案就能确认。
+
+但**"包旧"解释不了这次失败**。旧包与 HEAD 之间只有四个提交，其中两个是文案与
+失败屏改版，另两个（`e821174`、`8127d12`）修的是 `SignalHub`，那是**房主侧**才走的
+代码。观众侧一条都没沾到。所以真原因在别处，且新版照样会犯。
+
+### 根因
+
+`8127d12` 那个坑在观众侧有一份镜像实现，而且当时漏修了：
+
+- `Peer.onIceCandidate` 把候选 `handler.post` 回**主线程**再交给 listener（Peer.kt:283）；
+- 观众端的 listener 就是 `ViewerSession.send()` → `WsClient.send()`；
+- 而 `WsClient.send()` 是在**调用方线程上直接写 socket** 的，只用一把锁串行化。
+
+于是每条候选都在主线程抛 `NetworkOnMainThreadException`，`message` 是 null，
+旧日志只剩"发送失败：null"，被 `catch (Throwable)` 静静吞掉。
+
+后果是单点致命：answer 能送到（见下），房主因此正常起 ICE，但它手里**一条对方的
+地址都没有**，主动探测发不出去 —— 观众界面要么卡在"正在连接房主的手机…"，
+要么过一会儿报"直连失败"。网页观众端一直好用，正是因为它绕开了这条 Java 路径。
+
+### 顺手把我自己的一条假设测掉了
+
+原本以为 `SdpObserver`（answer 那一路）也会被投回"创建 PeerConnection 的线程"，
+而 `ViewerSession.ensurePeer()` 跑在 `Dispatchers.Main.immediate` 上，那样 answer
+也会一起丢。加了 `Peer.logThread()` 打线程名，实测两局都是
+`localDescription(Offer) 回调线程=signaling_threa` —— **answer 那一路本来就是安全的**，
+丢的只有候选。结论按实测写进注释，不留在推测里。
+
+### 修法与验收
+
+`WsClient` 改成与 `SignalHub` 同一个形状：`send()` 只入队（有界 128），
+专职线程 `t2-ws-write` 按 FIFO 落地；失败日志带上异常类名与线程名。
+
+新增 `WsClientTest`（JVM，配一个最小假 WebSocket 服务端）锁两件事：
+**写永远发生在专职写线程、不是调用方线程**；**握手完成前入队的消息不会被丢**。
+第二条不是凑数 —— 第一版实现正是"先 `poll()` 再判 `out == null` 然后 continue"，
+把还没法写的消息直接从队列摘走扔了，测试当场就红了。
+
+为此加了 `app/src/test/java/android/util/Log.kt` 这个桩：
+`run-unit-tests.sh` 是拿 JUnitCore 直接跑 class、classpath 上没有 android.jar，
+`WsClient` 一进门就 `Log.i`，缺桩则任何碰到它的测试都 NoClassDefFoundError
+（这也是 `IceProbe` 只用 `System.nanoTime()` 的同一个原因）。
+
+**尚未验证的部分（如实标注）：** 上面是"读代码 + 单测 + 房主侧同源事故"三条证据
+推出来的，**观众侧的端到端一次都没真跑过** —— 它需要第二台安卓设备，本机一台模拟器
+做不到（同一个包不能开两份，`edgeai` 那台是别的项目的、不能碰）。房主侧回归照跑：
+`t2test` 分享 → 浏览器入房 → `ice=CONNECTED`、收到视频与音频，20/20 单测绿。
+判据留在 §14 那张矩阵里：**装新包后 App 内观看若能连上，本条即为定案**；
+若仍失败，则候选不是唯一原因，要回看手机蜂窝侧的 srflx 分布。
