@@ -425,6 +425,16 @@ fun ControlIsland(
     modifier: Modifier = Modifier,
     /** 底下压着 SurfaceView 时必须 false（抓不到），没有视频层时可以采样环境底。 */
     refract: Boolean = false,
+    /**
+     * 观众侧的"方向"按钮：非空才画。房主没有"跟随对方"这回事，所以房主侧传 null。
+     * 用**两个字**（跟随/竖屏/横屏）而不是图标 —— 一来 core 图标集里没有
+     * `ScreenRotation`（那是 extended 的，为一颗按钮引整个扩展包不值），
+     * 二来旋转类图标语义太容易和"重试/刷新"混，写文字反而一眼懂。
+     */
+    orientationLabel: String? = null,
+    onCycleOrientation: () -> Unit = {},
+    /** 同一颗按钮在两端语义不同：房主是"停止分享"，观众是"停止观看"。 */
+    stopDesc: String = "停止分享",
 ) {
     GlassPanel(
         backdrop = backdrop,
@@ -448,10 +458,21 @@ fun ControlIsland(
                 }
                 VDivider()
                 Metric(label = latencyLabel, sub = netLabel)
+                if (orientationLabel != null) {
+                    VDivider()
+                    CircleControl(onClick = onCycleOrientation, backdrop = backdrop) {
+                        Text(
+                            orientationLabel,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Ink.TextHi,
+                        )
+                    }
+                }
                 VDivider()
                 CircleControl(onClick = onStop, backdrop = backdrop) {
                     Icon(
-                        Icons.Filled.Stop, contentDescription = "停止分享",
+                        Icons.Filled.Stop, contentDescription = stopDesc,
                         tint = Color.White, modifier = Modifier.size(GlassDimens.iconSize),
                     )
                 }

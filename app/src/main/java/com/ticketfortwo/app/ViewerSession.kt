@@ -24,6 +24,47 @@ import org.webrtc.PeerConnection
 import org.webrtc.VideoTrack
 import java.net.URI
 
+/** 观众屏该往哪个方向摆。`Keep` 表示"别动，听系统/用户的"。 */
+enum class OrientationTarget { Landscape, Portrait, Keep }
+
+/**
+ * 方向策略，纯函数（不碰 Android API，所以能在 JVM 上逐条测）。
+ *
+ * 为什么要它：实测过（t2test 分享 → t2view 收看），房主横屏后观众收到的帧确实变成
+ * `1800x810`，但观众屏**不会跟着转** —— 清单里没有 screenOrientation 锁定，方向只跟随
+ * 观众自己怎么拿手机，于是内容横、屏幕竖，画面缩成中间一条。观众的物理朝向我们管不着，
+ * 所以想让两边一致，只能主动去改观众屏的方向，没有第二条路。
+ *
+ * `Keep` 这一档是刻意的：还没来帧、或者对方开的是"仅语音"时，根本没有"内容方向"这回事，
+ * 这时候去锁方向就是无端抢用户的手机。
+ */
+internal fun decideOrientation(
+    mode: OrientationMode,
+    contentLandscape: Boolean?,
+    hasVideo: Boolean,
+): OrientationTarget = when (mode) {
+    OrientationMode.Portrait -> OrientationTarget.Portrait
+    OrientationMode.Landscape -> OrientationTarget.Landscape
+    OrientationMode.Follow -> when {
+        !hasVideo || contentLandscape == null -> OrientationTarget.Keep
+        contentLandscape -> OrientationTarget.Landscape
+        else -> OrientationTarget.Portrait
+    }
+}
+
+/** 观众自己选的：跟随对方 / 一直竖着 / 一直横着。 */
+enum class OrientationMode { Follow, Portrait, Landscape }
+
+/**
+ * 按钮的循环顺序。单独抽成纯函数是为了能测 —— 顺序写错，用户点一下就"按过头"
+ * （比如从"跟随"直接跳到"横屏"，他会以为按钮坏了）。
+ */
+internal fun nextOrientationMode(m: OrientationMode): OrientationMode = when (m) {
+    OrientationMode.Follow -> OrientationMode.Portrait
+    OrientationMode.Portrait -> OrientationMode.Landscape
+    OrientationMode.Landscape -> OrientationMode.Follow
+}
+
 /**
  * 观众端会话：在 **App 内**收看别人的分享（不跳浏览器）。
  *
@@ -66,6 +107,38 @@ object ViewerSession {
 
     private val _micMuted = MutableStateFlow(true)
     val micMuted: StateFlow<Boolean> = _micMuted.asStateFlow()
+
+    /** 对方画面的宽高比是不是横的。null = 还不知道（首帧没到）。 */
+    private val _contentLandscape = MutableStateFlow<Boolean?>(null)
+    val contentLandscape: StateFlow<Boolean?> = _contentLandscape.asStateFlow()
+
+    /** 观众选的方向模式，默认跟随对方。 */
+    private val _orientationMode = MutableStateFlow(OrientationMode.Follow)
+    val orientationMode: StateFlow<OrientationMode> = _orientationMode.asStateFlow()
+
+    /**
+     * 渲染层报上来的帧尺寸。[rot] 是 libwebrtc 的帧旋转标记，这里**故意不用它**：
+     * 房主侧是我们自己在转向时重建采集面（见 ScreenShareController 的 DisplayListener），
+     * 所以帧本来就是正过来的 1800x810，rot 恒为 0（实测）。真遇到 rot=90 的来源再说。
+     */
+    fun onContentResolution(w: Int, h: Int) {
+        if (w <= 0 || h <= 0) return
+        val land = w > h
+        if (_contentLandscape.value != land) {
+            Log.i(TAG, "对方画面方向：${if (land) "横" else "竖"}（$w x $h）")
+            _contentLandscape.value = land
+        }
+    }
+
+    /** 三态循环：跟随对方 → 锁竖 → 锁横 → 跟随对方。 */
+    fun cycleOrientationMode(): OrientationMode {
+        val next = nextOrientationMode(_orientationMode.value)
+        _orientationMode.value = next
+        Log.i(TAG, "观众方向模式 → $next")
+        return next
+    }
+
+    fun setOrientationMode(mode: OrientationMode) { _orientationMode.value = mode }
 
     private val _log = MutableStateFlow<List<String>>(emptyList())
     val log: StateFlow<List<String>> = _log.asStateFlow()
@@ -159,6 +232,7 @@ object ViewerSession {
         audioSource = null
         pendingRemoteCandidates.clear()
         _remoteVideo.value = null
+        _contentLandscape.value = null
         _micMuted.value = true
         _state.value = State.Idle
     }

@@ -6,10 +6,12 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -120,6 +122,9 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     val viewerState by ViewerSession.state.collectAsState()
     val viewerVideo by ViewerSession.remoteVideo.collectAsState()
     val viewerMicMuted by ViewerSession.micMuted.collectAsState()
+    val viewerLandscape by ViewerSession.contentLandscape.collectAsState()
+    val viewerOrient by ViewerSession.orientationMode.collectAsState()
+    remember { ViewerSession.setOrientationMode(context.prefs().orientationMode()); Unit }
 
     var showConsent by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
@@ -249,6 +254,35 @@ private fun AppRouter(backdrop: LayerBackdrop) {
         runCatching {
             context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))
         }.onFailure { viewerError = "没能唤起浏览器：${it.message}" }
+    }
+
+    // ── 观众屏方向 ────────────────────────────────────────────────────────
+    // 实测过：房主横屏后观众收到的帧变成 1800x810，但观众屏不会自己转，
+    // 于是内容横、屏幕竖，画面缩成中间一条。观众的物理朝向管不着，
+    // 想两边一致就只能主动改观众屏的方向 —— 没有第二条路。
+    //
+    // 三条边界：① 只在观看期间生效，退出观看必须交还给系统（否则用户出了 App
+    // 还发现手机转不动）；② 还没来帧 / 仅语音时不动（decideOrientation 返回 Keep）；
+    // ③ 那颗按钮能一键改成"锁竖/锁横"，因为一定有人不喜欢屏幕自己转。
+    val activity = context as? Activity
+    LaunchedEffect(viewerState, viewerLandscape, viewerOrient, viewerVideo) {
+        val a = activity ?: return@LaunchedEffect
+        val watching = viewerState is ViewerSession.State.Connected ||
+            viewerState is ViewerSession.State.Connecting
+        val target = if (watching) {
+            decideOrientation(viewerOrient, viewerLandscape, viewerVideo != null)
+        } else {
+            OrientationTarget.Keep
+        }
+        val want = when (target) {
+            OrientationTarget.Landscape -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            OrientationTarget.Portrait -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+            OrientationTarget.Keep -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+        if (a.requestedOrientation != want) {
+            Log.i("MainActivity", "观众屏方向 → $target（模式 ${viewerOrient.name}，内容横=$viewerLandscape）")
+            a.requestedOrientation = want
+        }
     }
 
     // ── 路由 ──────────────────────────────────────────────────────────────
@@ -386,6 +420,16 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 onToggleMic = { ViewerSession.setMicMuted(!viewerMicMuted) },
                 latencyMs = null,
                 netLabel = "直连",
+                onContentResolution = { w, h -> ViewerSession.onContentResolution(w, h) },
+                orientationLabel = when (viewerOrient) {
+                    OrientationMode.Follow -> "跟随"
+                    OrientationMode.Portrait -> "竖屏"
+                    OrientationMode.Landscape -> "横屏"
+                },
+                onCycleOrientation = {
+                    val next = ViewerSession.cycleOrientationMode()
+                    context.prefs().setOrientationMode(next.name)
+                },
                 onStop = { ViewerSession.stop() },
             )
 
@@ -478,11 +522,19 @@ private fun Context.toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_
 
 private const val PREFS = "t2"
 private const val KEY_LAST_CONNECTED = "last_connected"
+private const val KEY_ORIENT = "viewer_orientation"
 
 private class Prefs(context: Context) {
     private val sp = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     fun markConnected() = sp.edit().putLong(KEY_LAST_CONNECTED, System.currentTimeMillis()).apply()
+
+    /** 观众屏方向偏好。存的是枚举名，取值失败一律退回 Follow（宁可跟随，不可乱锁）。 */
+    fun orientationMode(): OrientationMode =
+        runCatching { OrientationMode.valueOf(sp.getString(KEY_ORIENT, null) ?: "Follow") }
+            .getOrDefault(OrientationMode.Follow)
+
+    fun setOrientationMode(name: String) = sp.edit().putString(KEY_ORIENT, name).apply()
 
     fun lastSummary(): String? {
         val at = sp.getLong(KEY_LAST_CONNECTED, 0L)

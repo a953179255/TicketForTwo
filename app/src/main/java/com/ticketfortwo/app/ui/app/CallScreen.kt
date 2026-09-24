@@ -52,6 +52,8 @@ fun VideoLayer(
     modifier: Modifier = Modifier,
     onLabel: String = "video",
     onFirstFrame: (Boolean) -> Unit = {},
+    /** 帧尺寸变化（含首次）。观众端靠它判断"对方是不是横屏了"。 */
+    onResolution: (Int, Int) -> Unit = { _, _ -> },
 ) {
     val context = LocalContext.current
     val renderer = remember { SurfaceViewRenderer(context) }
@@ -74,6 +76,9 @@ fun VideoLayer(
 
                         override fun onFrameResolutionChanged(w: Int, h: Int, rot: Int) {
                             Log.i("VideoLayer", "$onLabel resolution ${w}x$h rot=$rot")
+                            // 帧尺寸是"对方横没横屏"唯一的证据。上一版这里只打日志就完了，
+                            // 于是内容变成横的、观众屏还竖着，画面缩成中间一条。
+                            renderer.post { onResolution(w, h) }
                         }
                     },
                 )
@@ -114,6 +119,11 @@ fun CallScreen(
     onToggleMic: () -> Unit,
     latencyMs: Int?,
     netLabel: String,
+    /** 只给观众侧用：帧尺寸变化上报，用来做"跟随对方横竖屏"。 */
+    onContentResolution: (Int, Int) -> Unit = { _, _ -> },
+    /** 非空才画那颗方向按钮（房主侧没有"跟随对方"这回事）。 */
+    orientationLabel: String? = null,
+    onCycleOrientation: () -> Unit = {},
     onStop: () -> Unit,
 ) {
     // 这里**不能**给 Box 铺不透明底色：SurfaceView 的合成面在窗口之下，靠"挖洞"显示，
@@ -144,6 +154,7 @@ fun CallScreen(
                 modifier = Modifier.fillMaxSize(),
                 onLabel = "remote",
                 onFirstFrame = { firstFrame = true },
+                onResolution = onContentResolution,
             )
             when {
                 voiceMode -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -195,6 +206,9 @@ fun CallScreen(
             onStop = onStop,
             latencyLabel = latencyMs?.let { "$it" } ?: "—",
             netLabel = netLabel,
+            orientationLabel = orientationLabel,
+            onCycleOrientation = onCycleOrientation,
+            stopDesc = if (isHost) "停止分享" else "停止观看",
             refract = isHost,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
