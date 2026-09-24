@@ -121,6 +121,12 @@ object SignalHub {
         runCatching { server?.close() }
         server = null
         acceptThread = null
+        // 必须归零。`CallSession.isActive` 拿 `port != 0` 当"有没有在分享"的判据之一，
+        // 而 port 一旦绑过就不会自己变回 0 —— 于是第一次分享之后 isActive 永久为真，
+        // 之后每一次「开始分享」都被 startHost 的 guard 静默吞掉，
+        // 用户看到的就是"点了『我知道了，继续』完全没反应"（真机实测踩过）。
+        // 顺带：留着旧端口号也可能让下一次隧道指向一个已经关掉的本地端口。
+        port = 0
         val v = synchronized(lock) { viewer?.also { viewer = null } }
         runCatching { v?.socket?.close() }
         _viewerConnected.value = false

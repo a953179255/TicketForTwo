@@ -26,8 +26,17 @@ fi
 
 # -gpu host：AVD 配置里的默认值在这台机上跑不出玻璃所需的 RenderNode 离屏层，
 # 必须显式覆盖成 host（上次建完就是这样才起得来）。
-# -no-window：不抢焦点，界面靠 adb uiautomator + screencap 驱动与验收。
-"$EMU" -avd t2test -no-window -no-boot-anim -gpu host >"$LOG" 2>&1 &
+# 默认 -no-window：不抢焦点，界面靠 adb uiautomator + screencap 驱动与验收。
+# 传 --window 则开真实窗口 —— 需要**人亲手操作**模拟器时才用（比如用户自己测分享流程、
+# 要长按复制邀请链接发到手机上）。无头模式下用户桌面上根本看不见它，别默认开窗口。
+EMU_ARGS=(-avd t2test -no-boot-anim -gpu host)
+if [ "${1:-}" = "--window" ]; then
+  echo "以带窗口模式启动（会出现在桌面上并抢焦点）"
+else
+  EMU_ARGS+=(-no-window)
+fi
+
+"$EMU" "${EMU_ARGS[@]}" >"$LOG" 2>&1 &
 echo "已在后台启动 t2test，日志：$LOG"
 
 ADB='/c/Android/sdk/platform-tools/adb.exe'
