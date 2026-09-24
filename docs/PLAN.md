@@ -604,3 +604,30 @@ offered，上限 400 ms，然后才拆）、`ViewerSession.State.Ended`、网页
 两处都已修，roundtrip 重跑 PASS。改 UI 文案时要回头扫 `scripts/`。
 
 **未验证：** App 内观看那一侧的 `Ended` 分支需要第二台安卓设备，与 §16 同一笔欠账。
+
+## 18. 观众端播放体验四处（2026-09-25，来自真机 5G 跨网实测）
+
+这一轮是**第一次真正的跨网直连成功**：手机 5G ↔ 电脑，顶栏「直连」为绿、右上「已直连」，
+不是中继。§14 矩阵里"异地能不能连上"从此有了一个真数据点（n=1，别当结论）。
+
+| 现象 | 真因 | 处理 |
+| --- | --- | --- |
+| 点全屏没反应 | `document.documentElement.requestFullscreen().catch(()=>{})`。安卓上多数内核只把 Fullscreen API 开给 `<video>`，对文档调用直接 reject，而 reject 被空 catch 吞掉 ⇒ 用户看到的就是"点了没反应" | 目标改成 `#stage`，失败再退 `video.webkitEnterFullscreen()`，两条都不行就 **toast 说清楚**并指路画中画/横屏；resolve 了也要以 `fullscreenElement` 复核 |
+| 画面上下/左右丢一块 | `body{height:100vh}`：移动端 100vh 量的是**不含地址栏的大视口**，框比看得见的高，`overflow:hidden` 又把这件事变得毫无痕迹 | 舞台 `position:fixed;inset:0`，并用 `visualViewport` 显式钉住尺寸（含 resize/scroll/orientationchange） |
+| 收场屏"介绍不对" | 面板说"房主结束了分享"，顶栏还挂着绿色「● 直连」、右上还写"连接抖动，正在自愈"、底下控制岛还在跳 90ms/1fps —— 同一屏三种说法 | `reportEnded()` 一并把顶栏改灰「已结束」、收掉控制岛、关掉 pc |
+| 「这一条链接」和「已随那次分享作废」隔很远 | `.kv{justify-content:space-between}` 在窄屏上把短标签推到两端 | 收场屏不再用 kv，改成两句正文；`.kv` 补 `flex-wrap` |
+| 房主转屏后画面方向/裁切错 | 采集尺寸是 `startCapture()` 那一刻读的死值，`changeFormat()` **定义了但全仓库无人调用**，也没有任何转向监听 | `DisplayManager.DisplayListener.onDisplayChanged` → 重读几何 → `changeCaptureFormat`（不用 OrientationEventListener：它给连续角度，还得自己定死区） |
+
+**转向的实测**（这是唯一能本机验的硬指标）：横屏时房主日志
+`显示转向：810x1800 -> 1800x810，重设采集`，浏览器收到的帧从 `1800x810`
+在转回竖屏后变成 `810x1800` —— 证明 `changeCaptureFormat` 真的重建了 VirtualDisplay
+并传到对端，不是只改了个变量。
+
+⚠ **一次"我复现了"其实是量具骗我**：用 `--window-size=412,900` 无头截图时卡片明显溢出右边，
+我差点就此下结论。实测 `innerWidth=492` 而 PNG 只有 412 宽 —— **是截图被窗口裁掉，不是页面溢出**
+（卡片 left=24 width=444，24+444<492 完全放得下）。⇒ 无头 `--screenshot` 的 PNG 宽度必须和
+`innerWidth` 对上才能当证据；对不上时看到的"裁切"是假象。
+
+**仍未确认：** 用户真机上"右边丢一块"没有本机复现。最像的解释是那个浏览器把**布局视口**
+弄得比屏幕宽（页面缩放类设置），左对齐 ⇒ 右边出界。为此在收场/失败面板底部加了一行
+「布局 WxH · 可见 WxH · 缩放」—— 下次那张截图自己就带答案，不用再猜。

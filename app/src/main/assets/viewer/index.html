@@ -13,9 +13,15 @@
   --r-lg:16px; --r-card:26px; --pill:9999px; --ctl:44px;
 }
 *{box-sizing:border-box}
-body{margin:0;background:#000;color:var(--text-hi);height:100vh;overflow:hidden;
+html,body{margin:0;height:100%;background:#000;overflow:hidden}
+body{color:var(--text-hi);overscroll-behavior:none;
   font-family:system-ui,-apple-system,"Segoe UI","Noto Sans SC",sans-serif}
-#stage{position:relative;width:100%;height:100%;background:#000}
+/* 舞台用 fixed + inset:0，**不要**再用 height:100vh。
+   移动端 100vh 量的是"不含地址栏"的大视口：手机上是 3200 物理像素的屏却给出
+   ~2900 的可见高度，视频框因此比看得见的一块高，画面上下各被切掉一截，
+   而 body{overflow:hidden} 把这件事变得完全看不出来（没有滚动条可看）。
+   fixed 元素直接对齐视口，浏览器外壳收起/展开时会自动跟着变。 */
+#stage{position:fixed;inset:0;background:#000}
 video{width:100%;height:100%;object-fit:contain;background:#000;display:block}
 /* 浮层：视频区之上只能用 scrim —— SurfaceView/原生视频内容抓不到，玻璃盖不上去 */
 .overlay{position:absolute;left:12px;right:12px;z-index:5}
@@ -50,7 +56,7 @@ button.primary{background:var(--accent);color:#fff;border:0;border-radius:var(--
 .chip.bad{color:#ffb4bb;background:rgba(243,114,127,.13);border-color:rgba(243,114,127,.32)}
 .chip.warn{color:#ffd79a;background:rgba(255,164,43,.13);border-color:rgba(255,164,43,.32)}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.kv{display:flex;justify-content:space-between;gap:12px;font-size:13px;padding:3px 0}
+.kv{display:flex;justify-content:space-between;gap:12px;font-size:13px;padding:3px 0;flex-wrap:wrap}
 .kv>*{min-width:0}
 .hide{display:none!important}
 .meter{display:inline-flex;align-items:flex-end;gap:2px;height:14px}
@@ -280,17 +286,33 @@ function askToPlay(title, body){
 
 /**
  * 正常收场：房主结束分享，或信令通道先一步断掉。
- * 刻意与 reportFailure 分开 —— 不催用户换网络、不说"没有中继兜底"，
- * 因为这一次什么都没坏，只是对方不播了。旧链接连同口令一起作废，
- * 所以这里不放「重试」：刷新只会再拿一个打不开的地址。
+ *
+ * 刻意与 reportFailure 分开 —— 不催用户换网络、不说"没有中继兜底"，因为这一次
+ * 什么都没坏，只是对方不播了。旧链接连同口令一起作废，所以不放「重试」：
+ * 刷新只会再拿一个打不开的地址。
+ *
+ * 另外必须把顶部那颗绿色「● 直连」和底下还在跳 90ms/1fps 的控制岛一起收掉。
+ * 上一版只换了面板，结果同一屏上三种说法并存：面板说"房主结束了分享"、
+ * 顶栏说"直连"、右上说"连接抖动，正在自愈" —— 用户只会挑最刺眼的那条去理解，
+ * 于是"结束"又被读成"卡住了"。
  */
 function reportEnded(s){
   closedByUs = true;
   if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+  try { if (pc) pc.close(); } catch (e) {}
+  const live = $('topBar').querySelector('.live');
+  if (live) {
+    live.innerHTML = '<i></i>已结束';
+    live.style.color = 'var(--text-mid)';
+    // 绿点是 .live 类给的，收场时换成灰的，否则"已结束"配绿灯自相矛盾
+    const dot = live.querySelector('i');
+    if (dot) { dot.style.background = 'var(--text-low)'; dot.style.boxShadow = 'none'; }
+  }
+  $('topRight').textContent = '分享已结束';
+  $('ctlBar').classList.add('hide');
   show(`<h1>${escapeHtml(String(s))}</h1>
-    <p class="muted">画面停了不是因为连不上 —— 是对方那次分享已经结束了。
-      请他在手机上重新点一次「分享屏幕」，再把新链接发给你。</p>
-    <div class="kv"><span>这一条链接</span><span class="chip ok">已随那次分享作废</span></div>`);
+    <p class="muted">这次分享已经停了，不是你的网络问题。想看的话，得由房主在他手机上重新点一次「分享屏幕」，再把新链接发给你。</p>
+    <p class="muted" style="margin-top:10px">这条链接连同口令已经一起作废，刷新也不会恢复。</p>${viewportNote()}`);
 }
 
 function reportFailure(s){
@@ -303,7 +325,7 @@ function reportFailure(s){
       <span class="chip">你换成 WiFi 或换 5G 再点一次</span>
       <span class="chip">让房主重发一条链接</span>
     </div>
-    <button class="primary" onclick="location.reload()">重试</button>`);
+    <button class="primary" onclick="location.reload()">重试</button>${viewportNote()}`);
 }
 
 // ---- 统计 -------------------------------------------------------------
@@ -384,11 +406,85 @@ $('btnPip').onclick = async () => {
   catch (e) { /* Safari 可能走系统播控 */ }
 };
 $('btnFull').innerHTML = ICON.full;
-$('btnFull').onclick = () => {
-  if (document.fullscreenElement) document.exitFullscreen();
-  else document.documentElement.requestFullscreen().catch(()=>{});
+$('btnFull').onclick = async () => {
+  if (document.fullscreenElement) { try { await document.exitFullscreen(); } catch (e) {} return; }
+  // 目标必须是 #stage，不是 documentElement：安卓上多数内核（Chrome/Edge/各家）
+  // 只把 Fullscreen API 开给 <video>，对整个文档调用会直接 reject；
+  // 上一版写成 `document.documentElement.requestFullscreen().catch(()=>{})`，
+  // reject 被吞掉，用户看到的就是"点了全屏没任何反应"。
+  const el = $('stage');
+  const tried = [];
+  try {
+    if (el.requestFullscreen) { tried.push('stage'); await el.requestFullscreen({ navigationUI: 'hide' }); }
+    else if (el.webkitRequestFullscreen) { tried.push('stage-webkit'); el.webkitRequestFullscreen(); }
+    else throw new Error('no-element-api');
+  } catch (e) {
+    // 退一步：让视频自己进全屏（iOS Safari 与部分安卓内核只认这一条）
+    try {
+      if (video.webkitEnterFullscreen) { video.webkitEnterFullscreen(); tried.push('video-webkit'); }
+      else throw new Error('no-video-api');
+    } catch (e2) {
+      toast('这个浏览器不让网页全屏（安卓上很常见）。' +
+            '可以点旁边的画中画，或把手机横过来看。');
+      return;
+    }
+  }
+  // 有些内核 resolve 了但根本没进全屏，所以以 fullscreenElement 为准再判一次
+  setTimeout(() => {
+    if (!document.fullscreenElement) toast('浏览器拒绝了网页全屏，改用画中画试试');
+  }, 400);
 };
 video.addEventListener('click', () => { if (video.paused) video.play(); });
+
+/* 让画面严格对齐"人眼看得见的那一块"。
+   移动端有三套视口：布局视口（viewport meta 定的）、可见视口（visualViewport）、
+   以及地址栏展开/收起时动态变化的那个。CSS 里任何 vh 用的都是**最大**的那个，
+   于是地址栏一挡，画面底部就被裁掉一截，而 overflow:hidden 让这件事完全看不出来；
+   部分国产内核还会把布局视口弄得比屏幕宽（页面缩放），右边跟着被切。
+   visualViewport 是唯一直接给"看得见多大"的接口，所以拿它显式钉住舞台。 */
+function fitStage(){
+  const st = $('stage');
+  const vv = window.visualViewport;
+  if (!vv) return;                       // 老内核：退回 CSS 的 fixed inset:0
+  st.style.left = vv.offsetLeft + 'px';
+  st.style.top = vv.offsetTop + 'px';
+  st.style.width = vv.width + 'px';
+  st.style.height = vv.height + 'px';
+}
+fitStage();
+if (window.visualViewport) {
+  visualViewport.addEventListener('resize', fitStage);
+  visualViewport.addEventListener('scroll', fitStage);
+}
+// 转屏时 visualViewport 的回调有时比布局稳定得晚，补一次
+addEventListener('orientationchange', () => setTimeout(fitStage, 150));
+
+/** 收场面板底部那行小字：把两套视口尺寸摊出来。
+    观众用的是各种各样的手机浏览器，出问题只能靠截图反推 —— 让截图自带诊断。 */
+function viewportNote(){
+  const vv = window.visualViewport;
+  const s = vv && vv.scale !== 1 ? ` · 缩放 ${vv.scale.toFixed(2)}` : '';
+  return `<p class="muted" style="font-size:11px;opacity:.55;margin-top:14px">` +
+    `布局 ${innerWidth}×${innerHeight} · 可见 ${vv ? Math.round(vv.width) + '×' + Math.round(vv.height) : '?'}${s}</p>`;
+}
+
+/** 轻量提示：不挡画面、2.6 秒自己走。全屏被拒这类事必须说出来，静默失败最招误解。 */
+function toast(msg){
+  let t = $('toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = 'toast';
+    t.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:96px;z-index:9;' +
+      'max-width:86%;padding:10px 14px;border-radius:14px;background:rgba(0,0,0,.82);' +
+      'color:#fff;font-size:12.5px;line-height:1.5;backdrop-filter:blur(8px);' +
+      'border:1px solid rgba(255,255,255,.14);transition:opacity .25s';
+    document.body.appendChild(t);
+  }
+  t.textContent = msg;
+  t.style.opacity = '1';
+  clearTimeout(t._h);
+  t._h = setTimeout(() => { t.style.opacity = '0'; }, 2600);
+}
 
 /* 仅调试：?report=1 时把统计 POST 回本地采集器，便于无头浏览器里取证。
    生产链接不带这个参数。 */
@@ -405,6 +501,27 @@ if (_q.get('report') === '1') {
         // 只报"面板出没出现"分不出"正常结束"和"连不上"这两类，而这次的缺陷恰恰是
         // 两者被混为一谈。把标题原文带回去，才看得见观众到底被说了什么。
         panelH1: ($('panel').querySelector('h1') || {}).textContent || null,
+        // 画面被裁、全屏没反应这类问题，光看截图分不清是"视频框算错了"还是"视口本身
+        // 比可见区域高"。把两套尺寸一起报回来：innerHeight 是布局视口，
+        // visualViewport.height 是人眼真正看得到的那块，两者不等就是 100vh 的坑。
+        geo: {
+          iw: innerWidth, ih: innerHeight,
+          vvh: window.visualViewport ? +window.visualViewport.height.toFixed(1) : null,
+          vvw: window.visualViewport ? +window.visualViewport.width.toFixed(1) : null,
+          osh: outerHeight,
+          stageH: $('stage').clientHeight, stageW: $('stage').clientWidth,
+          vidW: video.clientWidth, vidH: video.clientHeight,
+          fit: getComputedStyle(video).objectFit,
+          fs: !!document.fullscreenElement,
+          // 面板溢出也用同一套数字判：cardL/cardW 与 innerWidth 一比就知道
+          // 卡片是被居中挤小了，还是整个都跑到视口外面去了。
+          cardL: +($('cardBody').getBoundingClientRect().left || 0).toFixed(1),
+          cardW: +($('cardBody').getBoundingClientRect().width || 0).toFixed(1),
+          docSW: document.documentElement.scrollWidth,
+          bodySW: document.body.scrollWidth,
+          // 能不能真的全屏：这个浏览器上 requestFullscreen 对谁有效，只能试了才知道
+          fsOkOnStage: null,
+        },
         video: { readyState: video.readyState, w: video.videoWidth, h: video.videoHeight,
                  t: +video.currentTime.toFixed(2) },
       };

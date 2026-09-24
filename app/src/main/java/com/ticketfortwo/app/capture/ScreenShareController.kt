@@ -2,7 +2,10 @@ package com.ticketfortwo.app.capture
 
 import android.content.Context
 import android.content.Intent
+import android.hardware.display.DisplayManager
 import android.media.projection.MediaProjection
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.WindowManager
 import com.ticketfortwo.app.rtc.RtcEngine
@@ -66,7 +69,10 @@ class ScreenShareController(
      */
     fun start(fps: Int = 30, scale: Float = 0.75f): VideoTrack? {
         if (videoTrack != null) return videoTrack
+        startFps = fps
+        startScale = scale
         val g = displayGeometry(scale, fps)
+        lastGeo = g
 
         // enableCpuOveruseDetection=true：让 libwebrtc 自己按 CPU 压力降档，
         // 这正是"边玩游戏边分享不卡手"的关键。
@@ -79,6 +85,7 @@ class ScreenShareController(
 
         cap.initialize(helper, context, source.capturerObserver)
         cap.startCapture(g.width, g.height, fps)
+        watchRotation()
 
         val track = RtcEngine.factory.createVideoTrack("screen", source)
         videoSource = source
@@ -98,6 +105,7 @@ class ScreenShareController(
     }
 
     fun release() {
+        unwatchRotation()
         stopCapture()
         runCatching { capturer?.dispose() }
         runCatching { surfaceHelper?.dispose() }
@@ -111,4 +119,54 @@ class ScreenShareController(
 
     /** 编码器要求宽高为偶数，奇数会直接 startCapture 失败。 */
     private fun even(v: Int): Int = if (v % 2 == 0) v else v - 1
+
+    // ---- 转向 ------------------------------------------------------------
+
+    private var startScale = 0.75f
+    private var startFps = 30
+    private var lastGeo: CaptureGeometry? = null
+    private var displayListener: DisplayManager.DisplayListener? = null
+
+    /**
+     * 监听显示转向，转了就把采集尺寸重设。
+     *
+     * 为什么必须有：`startCapture(w, h, fps)` 的宽高是**开始那一刻**读的死值
+     * （[displayGeometry] 只在 [start] 里调一次）。房主中途横屏打个游戏，真实显示
+     * 从 810×1800 变成 1800×810，而 VirtualDisplay 还按竖的尺寸要帧 ——
+     * 结果就是观众看到画面被转了 90°、或者只截到中间一条。
+     * 上一版这里连监听都没有：`changeFormat()` 定义了却全仓库无人调用。
+     *
+     * 用 [DisplayManager.DisplayListener] 而不是 OrientationEventListener：
+     * 前者在"显示配置真的变了"时才响，后者给的是连续角度，还得自己定死区与防抖。
+     * 分享跑在 Service 里，也没有 Activity.onConfigurationChanged 可用。
+     */
+    private fun watchRotation() {
+        if (displayListener != null) return
+        val dm = context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+        val l = object : DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) = Unit
+            override fun onDisplayRemoved(displayId: Int) = Unit
+            override fun onDisplayChanged(displayId: Int) {
+                if (displayId != android.view.Display.DEFAULT_DISPLAY) return
+                val g = runCatching { displayGeometry(startScale, startFps) }.getOrNull() ?: return
+                if (g == lastGeo) return   // 折叠屏展开、DPI 微调等也会触发，尺寸没变就别折腾
+                Log.i(tag, "显示转向：$lastGeo -> $g，重设采集")
+                lastGeo = g
+                changeFormat(g.width, g.height, startFps)
+            }
+        }
+        displayListener = l
+        // 回调要落在一条有 Looper 的线程上；主线程够用（这里只做一次尺寸比较）
+        dm.registerDisplayListener(l, Handler(Looper.getMainLooper()))
+        Log.i(tag, "转向监听已挂上")
+    }
+
+    private fun unwatchRotation() {
+        val l = displayListener ?: return
+        displayListener = null
+        runCatching {
+            (context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager)
+                .unregisterDisplayListener(l)
+        }
+    }
 }
