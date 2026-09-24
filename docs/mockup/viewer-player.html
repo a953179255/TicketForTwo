@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>双人票 · 观众端播放器化 · 效果图</title>
+<style>
+:root{
+  --bg:#0b0b0d; --surface-0:#121212; --surface-1:#181818; --surface-2:#1f1f1f;
+  --text-hi:#fff; --text-mid:#b3b3b3; --text-low:#7a7a7a;
+  --accent:#2997ff; --live:#1ed760; --warn:#ffa42b; --err:#f3727f;
+  --scrim:rgba(0,0,0,.60); --pill:9999px; --r-card:26px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:#07070a;color:var(--text-hi);
+  font-family:system-ui,-apple-system,"Segoe UI","Noto Sans SC",sans-serif;padding:34px 26px 60px}
+h1{font-size:22px;margin:0 0 4px}
+.lead{color:var(--text-mid);font-size:13.5px;max-width:900px;line-height:1.7;margin:0 0 26px}
+.row{display:flex;gap:26px;flex-wrap:align-start;align-items:flex-start}
+.cell{width:330px;flex:none}
+.cap{font-size:12.5px;color:var(--text-low);margin:10px 2px 0;line-height:1.6}
+.cap b{color:var(--text-mid)}
+/* 手机框 */
+.phone{width:330px;height:700px;border-radius:38px;background:#000;position:relative;overflow:hidden;
+  border:1px solid rgba(255,255,255,.10);box-shadow:0 18px 44px rgba(0,0,0,.6)}
+.phone.wide{width:700px;height:330px}
+/* 假装的"对方屏幕"内容：拿一张彩色壁纸感的东西占位 */
+.video{position:absolute;inset:0;background:
+  radial-gradient(circle at 22% 18%,#2f7d4f 0 18%,transparent 19%),
+  radial-gradient(circle at 74% 30%,#3b6ea5 0 16%,transparent 17%),
+  radial-gradient(circle at 40% 62%,#c9a227 0 14%,transparent 15%),
+  radial-gradient(circle at 80% 78%,#7a4f9e 0 17%,transparent 18%),
+  linear-gradient(160deg,#1d2430,#0f1418 60%,#151a12)}
+.video:after{content:"对方正在分享的屏幕（真实画面）";position:absolute;left:12px;bottom:10px;
+  font-size:10.5px;color:rgba(255,255,255,.5);letter-spacing:.04em}
+.dim{position:absolute;inset:0;background:rgba(0,0,0,.28)}
+.rotwrap{position:absolute;inset:0;display:grid;place-items:center;overflow:hidden}
+.rot{position:relative;inset:auto;width:330px;height:700px;transform:rotate(90deg)}
+/* .video 自带 position:absolute;inset:0，两个方向都钉住时 width/height 会被忽略 ——
+   上一版旋转块因此变成"700x330 再转 90°"，正好转反。必须显式松开 inset。 */
+/* 顶栏 / 底栏 */
+.island{position:absolute;left:12px;right:12px;display:flex;align-items:center;gap:9px;
+  padding:9px 13px;border-radius:var(--pill);background:var(--scrim);backdrop-filter:blur(12px);
+  border:1px solid rgba(255,255,255,.10);font-size:12px}
+.island.top{top:14px}
+.island.bottom{bottom:20px;justify-content:center;left:auto;right:auto;width:max-content;padding:8px 10px;gap:8px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--live);box-shadow:0 0 0 3px rgba(30,215,96,.2);flex:none}
+.grow{margin-left:auto;color:var(--text-mid);font-size:11.5px}
+.ctl{width:44px;height:44px;border-radius:var(--pill);display:grid;place-items:center;flex:none;
+  border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.14);color:#fff;font-size:17px}
+.ctl.on{background:#fff;color:#0a0a0a}
+.ctl.stop{background:var(--err);border-color:transparent}
+.vr{width:1px;height:26px;background:rgba(255,255,255,.18);flex:none}
+.stat{display:flex;flex-direction:column;font-size:10.5px;color:var(--text-mid);line-height:1.25;min-width:52px}
+.stat b{font-size:12.5px;color:#fff;font-weight:640}
+.meter{display:inline-flex;align-items:flex-end;gap:2px;height:11px}
+.meter i{width:3px;background:var(--live);border-radius:2px;display:block}
+/* 手势 HUD */
+.hud{position:absolute;top:50%;transform:translateY(-50%);width:74px;padding:12px 8px;border-radius:18px;
+  background:rgba(0,0,0,.72);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.12);
+  display:flex;flex-direction:column;align-items:center;gap:9px;font-size:11px;color:var(--text-mid)}
+.hud.l{left:16px} .hud.r{right:16px}
+.track{width:6px;height:150px;border-radius:3px;background:rgba(255,255,255,.16);position:relative;overflow:hidden}
+.fill{position:absolute;left:0;right:0;bottom:0;background:var(--accent);border-radius:3px}
+.zone{position:absolute;top:0;bottom:0;width:50%;border:1px dashed rgba(255,255,255,.22)}
+.zone.l{left:0} .zone.r{right:0}
+.zone span{position:absolute;top:12px;left:0;right:0;text-align:center;font-size:10.5px;color:rgba(255,255,255,.55)}
+.hint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:8px 14px;border-radius:var(--pill);
+  background:rgba(0,0,0,.6);font-size:12px;color:var(--text-mid);backdrop-filter:blur(8px)}
+.badge{position:absolute;top:64px;right:14px;padding:5px 10px;border-radius:var(--pill);font-size:10.5px;
+  background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.12);color:var(--text-mid)}
+/* 规格表 */
+.spec{margin-top:38px;border-top:1px solid rgba(255,255,255,.1);padding-top:22px}
+table{border-collapse:collapse;width:100%;max-width:1080px;font-size:12.5px}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid rgba(255,255,255,.08);vertical-align:top}
+th{color:var(--text-low);font-weight:600;font-size:11.5px;letter-spacing:.04em}
+.yes{color:var(--live)} .no{color:var(--err)} .half{color:var(--warn)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--text-mid)}
+.note{color:var(--text-low);font-size:12px;line-height:1.8;max-width:1000px;margin-top:16px}
+</style>
+</head>
+<body>
+<h1>观众端 · 播放器化改造（提案效果图）</h1>
+<p class="lead">现状只有"顶栏 + 底部一颗控制岛"，看视频时屏幕上一直压着两块玻璃，且没有任何播放控制。
+下面四态是提案：<b>① 沉浸态</b>（控件自动收起）→ <b>② 控件态</b>（轻触唤出）→
+<b>③ 手势态</b>（左半屏上下滑=亮度、右半屏=音量）→ <b>④ 横屏铺满</b>（旋转按钮）。
+配色与圆角沿用现有玻璃规范（accent #2997FF、pill 9999、控制岛 surfaceAlpha 0.72）。</p>
+
+<div class="row">
+
+  <div class="cell">
+    <div class="phone">
+      <div class="video"></div>
+      <div class="hint">轻触屏幕显示控制</div>
+      <div class="badge">3 秒后自动隐藏</div>
+    </div>
+    <p class="cap"><b>① 沉浸态。</b>首帧到达后 3 秒收起所有浮层，画面完整不被遮。
+    顶栏那颗红点表示"你的屏幕正在被看"——这是隐私提示，<b>不能</b>跟着一起藏，
+    所以改成右上角一枚小徽标，只留一个点。</p>
+  </div>
+
+  <div class="cell">
+    <div class="phone">
+      <div class="video"></div><div class="dim"></div>
+      <div class="island top"><span class="dot"></span>正在观看<span class="grow">已直连 · 148ms</span></div>
+      <div class="island bottom">
+        <div class="ctl">🎤</div>
+        <div class="vr"></div>
+        <div class="stat"><b>148<small>ms</small></b><span class="meter"><i style="height:4px"></i><i style="height:6px"></i><i style="height:8px"></i><i style="height:11px"></i> 直连</span></div>
+        <div class="vr"></div>
+        <div class="ctl">🔁</div>
+        <div class="ctl">⛶</div>
+        <div class="ctl">⧉</div>
+        <div class="ctl stop">■</div>
+      </div>
+    </div>
+    <p class="cap"><b>② 控件态。</b>轻触唤出。底岛从左到右：麦克风（连麦开关）· 延迟读数 ·
+    <b>旋转</b> · <b>全屏</b> · <b>画中画</b> · <b>停止观看</b>。
+    音量和亮度<b>不占按钮</b>，交给手势（见③），只在需要时以 HUD 出现。</p>
+  </div>
+
+  <div class="cell">
+    <div class="phone">
+      <div class="video"></div><div class="dim"></div>
+      <div class="zone l"><span>亮度</span></div>
+      <div class="zone r"><span>音量</span></div>
+      <div class="hud l"><span>☀ 62%</span><div class="track"><div class="fill" style="height:62%"></div></div></div>
+      <div class="hud r"><span>♞ 80%</span><div class="track"><div class="fill" style="height:80%"></div></div></div>
+      <div class="island bottom" style="bottom:24px">
+        <div class="ctl">🎤</div><div class="vr"></div>
+        <div class="stat"><b>148<small>ms</small></b><span>直连</span></div>
+        <div class="vr"></div><div class="ctl">🔁</div><div class="ctl">⛶</div><div class="ctl">⧉</div><div class="ctl stop">■</div>
+      </div>
+    </div>
+    <p class="cap"><b>③ 手势态。</b>左半屏上下滑调<b>屏幕亮度</b>、右半屏调<b>音量</b>，
+    松手 1 秒淡出。这是安卓播放器的通用肌肉记忆，观众不用学。
+    左右半屏的分界与虚线只在教学首启时显示一次。</p>
+  </div>
+
+</div>
+
+<div class="row" style="margin-top:30px">
+  <div class="cell" style="width:700px">
+    <div class="phone wide">
+      <!-- 真的把竖屏内容转 90°：330x700 的竖块居中旋转后正好铺满 700x330。
+           不这么画的话，"旋转"这一格跟上面那格看起来没区别，等于没表达。 -->
+      <div class="rotwrap"><div class="video rot"></div></div>
+      <div class="dim"></div>
+      <div class="badge" style="top:auto;bottom:70px;right:14px">已旋转 90° · 竖屏内容铺满横屏</div>
+      <div class="island top" style="top:12px"><span class="dot"></span>正在观看<span class="grow">已直连 · 148ms</span></div>
+      <div class="island bottom" style="bottom:14px">
+        <div class="ctl">🎤</div><div class="vr"></div>
+        <div class="stat"><b>148<small>ms</small></b><span>直连</span></div>
+        <div class="vr"></div><div class="ctl on">🔁</div><div class="ctl">⛶</div><div class="ctl">⧉</div><div class="ctl stop">■</div>
+      </div>
+    </div>
+    <p class="cap"><b>④ 横屏铺满。</b>对方发的是竖屏（810×1800），你横过来看时按 <b>contain</b> 只有中间一条。
+    「旋转」按钮把画面转 90° 铺满整块横屏 —— 这是播放器里最常被按的一个，
+    也是<b>只有 App 能做得干净</b>的一类：网页要转得靠 CSS transform，且全屏本身在安卓各家内核上就不稳。</p>
+  </div>
+</div>
+
+<div class="spec">
+<h1 style="font-size:17px">这些能力 App 与网页各自的边界</h1>
+<table>
+<tr><th>能力</th><th>App 内观看</th><th>网页观众端</th><th>依据</th></tr>
+<tr><td>屏幕亮度手势</td><td class="yes">可以，真亮度</td><td class="no">做不到</td>
+    <td class="mono">本机 Chromium 实测 screen.setBrightness / getBrightness / mozBrightness 全部 undefined；网页只能给画面盖一层半透明黑（假亮度）</td></tr>
+<tr><td>音量手势</td><td class="yes">可以，走系统音量</td><td class="half">部分：video.volume 能调</td>
+    <td class="mono">volume 属性实测存在；但它调的是这个播放元素的音量，不是系统音量；iOS 上是否可写本机没有设备未验</td></tr>
+<tr><td>全屏</td><td class="yes">本来就是全屏</td><td class="half">各家内核不一</td>
+    <td class="mono">已实测：安卓上对 documentElement 调用会被拒；改成请求 #stage 后仍需以 fullscreenElement 复核</td></tr>
+<tr><td>锁定/切换方向</td><td class="yes">可以，Activity 级</td><td class="half">要先进全屏，且标 Limited availability</td>
+    <td class="mono">MDN：orientation lock 通常仅移动端 + 全屏可用，否则抛 SecurityError</td></tr>
+<tr><td>画面旋转 90° 铺满</td><td class="yes">渲染层直接转</td><td class="half">CSS transform 能凑</td>
+    <td class="mono">网页要自己处理容器尺寸与手势命中区，容易和全屏互相打架</td></tr>
+<tr><td>画中画小窗</td><td class="yes">系统 PiP</td><td class="half">Chrome/Edge 有，Safari 走系统播控</td>
+    <td class="mono">document.pictureInPictureEnabled 实测存在</td></tr>
+<tr><td>保持屏幕常亮</td><td class="yes">FLAG_KEEP_SCREEN_ON</td><td class="yes">Wake Lock API 可用</td>
+    <td class="mono">navigator.wakeLock.request 实测存在</td></tr>
+<tr><td>进度条拖动</td><td class="no">不适用</td><td class="no">不适用</td>
+    <td class="mono">这是直播流不是录像，没有可拖的时间轴；做出来反而是假的</td></tr>
+<tr><td>倍速播放</td><td class="no">不适用</td><td class="no">不建议</td>
+    <td class="mono">playbackRate 存在，但对实时流会直接失同步、堆缓冲</td></tr>
+</table>
+<p class="note"><b>结论：你的判断是对的，而且比"浏览器难统一"更具体。</b>
+亮度这一项网页<b>根本没有 API</b>（不是各家实现差异，是压根没有）；音量只有"元素音量"，不是系统音量；
+全屏与转向是"各家内核行为不一致"。所以播放器化的手势与旋转，<b>App 端做完整版，网页端做降级版</b>：
+网页保留轻触唤出控件 + 元素音量 + 画中画 + 常亮，亮度改成"画面变暗遮罩"并如实标注，
+旋转不做（避免和各家全屏实现互相干扰）。
+另外两条我刻意<b>不做</b>：进度条和倍速 —— 这是实时直连，不是录像，做了就是骗人。</p>
+</div>
+</body>
+</html>
