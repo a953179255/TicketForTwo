@@ -75,21 +75,23 @@ def main():
     info = dump_pkg(s)
     print(f"   当前包：versionName={info['version'][0] if info['version'] else '未安装'}"
           f"  安装来源={info['installer'][0] if info['installer'] else '-'}")
-    if not os.path.exists(APK):
-        print(f"   找不到调试包 {APK}，先 ./gradlew :app:assembleDebug")
+    if not os.path.exists(REL):
+        print(f"   没有正式包 {os.path.basename(REL)}，先 ./gradlew :app:assembleRelease")
         return 1
-    print(f"   待装调试包：{os.path.basename(APK)}  {os.path.getsize(APK) // (1024 * 1024)} MB")
+    print(f"   待装：{os.path.basename(REL)}  {os.path.getsize(REL) // (1024 * 1024)} MB"
+          f"（正式签名，与手机上那个同源 ⇒ 原地覆盖，不清数据）")
 
     if not a.yes:
-        print("\n（体检模式，什么都没动。要装请加 --yes —— 它会先卸载旧包，"
-              "App 里的分享设置与上次连接记录会一起没掉。）")
+        print("\n（体检模式，什么都没动。要装请加 --yes。默认走原地覆盖；"
+              "只有真撞上签名不一致才需要卸载，而那种情况脚本会停下来问，不自己动手。）")
         return 0
 
-    print("\n== 卸载旧包（数据会清）==")
-    print("   " + sh(ADB, "-s", s, "uninstall", PKG).stdout.strip().replace("\n", " / "))
+    if a.wipe:
+        print("\n== 卸载旧包（数据会清）==")
+        print("   " + sh(ADB, "-s", s, "uninstall", PKG).stdout.strip().replace("\n", " / "))
 
-    print("== 安装调试包 ==")
-    r = sh(ADB, "-s", s, "install", "-r", "-t", APK)
+    print("\n== 原地覆盖安装 ==")
+    r = sh(ADB, "-s", s, "install", "-r", "-t", REL)
     out = (r.stdout + r.stderr).strip()
     print("   " + out.replace("\n", " / "))
     if "USER_RESTRICTED" in out or "USER_CONFIRMATION" in out:
@@ -97,7 +99,7 @@ def main():
         print("   ⚠ 手机上有安装确认弹窗，点允许后我再试一次…")
         import time
         time.sleep(12)
-        r = sh(ADB, "-s", s, "install", "-r", "-t", APK)
+        r = sh(ADB, "-s", s, "install", "-r", "-t", REL)
         print("   " + (r.stdout + r.stderr).strip().replace("\n", " / "))
     if "UPDATE_INCOMPATIBLE" in out or "signatures do not match" in out:
         # 只有真撞上签名不一致才走到这一步 —— 那意味着必须卸载、必须清数据，

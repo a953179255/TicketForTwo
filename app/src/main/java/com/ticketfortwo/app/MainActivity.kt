@@ -12,6 +12,7 @@ import android.content.pm.ServiceInfo
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
 import android.util.Log
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -29,6 +30,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -286,14 +288,34 @@ private fun AppRouter(backdrop: LayerBackdrop) {
         } else {
             OrientationTarget.Keep
         }
+        // 用不带 SENSOR_ 的常量。真机实测：手机关掉自动旋转时（accelerometer_rotation=0），
+        // 系统会**忽略** SCREEN_ORIENTATION_SENSOR_LANDSCAPE —— 于是模拟器上一切正常
+        // （t2view 的自动旋转是开的），到手机上完全不转。
+        // 而"跟随对方"本来就是要盖过用户的锁定才有意义：对方横屏了，这边就该横过来。
         val want = when (target) {
-            OrientationTarget.Landscape -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            OrientationTarget.Portrait -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+            OrientationTarget.Landscape -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            OrientationTarget.Portrait -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             OrientationTarget.Keep -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
         if (a.requestedOrientation != want) {
             Log.i("MainActivity", "观众屏方向 → $target（模式 ${viewerOrient.name}，内容横=$viewerLandscape）")
             a.requestedOrientation = want
+        }
+    }
+
+    // ── 会话期间保持屏幕常亮 ──────────────────────────────────────────────
+    // 真机实测踩到的：手机 screen_off_timeout = 120 秒，观众看到第 2 分钟屏幕一锁，
+    // WebSocket 随之被系统掐掉，房主那边先"观众已离开"、8 秒后报"直连中断且未能自愈"。
+    // 看着像网络不稳，其实是我们没声明"我正在用这台设备"——看别人屏幕看到一半
+    // 手机自己锁屏，这个产品就没法用了。房主侧同理（锁屏还会被系统撤走投屏）。
+    val sharing = state !is CallSession.State.Idle
+    val watching = viewerState !is ViewerSession.State.Idle
+    DisposableEffect(sharing || watching) {
+        val on = sharing || watching
+        if (on) activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
 

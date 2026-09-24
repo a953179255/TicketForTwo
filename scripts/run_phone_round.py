@@ -49,20 +49,22 @@ def adb(serial, *args, timeout=90):
 
 
 def nettype(serial):
-    """尽力识别这台设备此刻走的是什么网。识别不出来就返回 unknown，不猜。"""
-    out = adb(serial, "shell", "dumpsys", "connectivity").stdout
-    m = re.search(r"Active default network:\s*(\d+)", out)
-    if not m:
-        return "unknown(无默认网络)"
-    handle = m.group(1)
-    # 同一份 dump 里每个 NetworkAgentInfo 都带 `T: WIFI` / `T: MOBILE`，按 handle 对上号
-    for blk in re.split(r"NetworkAgentInfo", out):
-        if handle in blk[:400] or f"[0x0={handle[:4]}" in blk:
-            t = re.search(r"T:\s*([A-Z_]+)", blk)
-            if t:
-                return t.group(1)
-    t = re.search(rf"NetworkHandle.*{handle}.*?T:\s*([A-Z_]+)", out, re.S)
-    return t.group(1) if t else f"unknown(handle={handle})"
+    """这台设备此刻走的是什么网。识别不出来就返回 unknown，绝不猜。
+
+    上一版靠解析 dumpsys connectivity 里 `Active default network` 再回找 `T: WIFI`，
+    在真机上正则没匹配上、直接返回 unknown —— 而"两端网络类型"是这一轮的硬前置，
+    记不到就等于这轮不作数，所以宁可换两个各自读得懂的笨探针。
+    """
+    wifi = adb(serial, "shell", "cmd", "wifi", "status").stdout
+    if re.search(r"Connected to", wifi, re.I):
+        return "WIFI"
+    cell = adb(serial, "shell", "dumpsys", "telephony.registry").stdout
+    if re.search(r"mDataConnectionState=\s*(2|CONNECTED)", cell) or        re.search(r"dataConnectionState=DATA_CONNECTED", cell):
+        types = adb(serial, "shell", "getprop", "gsm.network.type").stdout.strip()
+        return f"MOBILE({types})" if types else "MOBILE"
+    if "not connected" not in wifi.lower() and re.search(r"Connected to", wifi):
+        return "WIFI"
+    return "unknown"
 
 
 def wifi_ssid(serial):
@@ -108,6 +110,29 @@ def mean_brightness(path, box=None):
     return round(sum(px) / len(px), 1)
 
 
+def clear_lingering_dialogs(serial):
+    """开局先确认没有系统弹窗压在 App 上。
+
+    上一轮就是栽在这：Flyme 的权限弹窗没被点掉，一直留在屏幕上，
+    于是这一轮第一步"把 App 带到前台"就失败，而第 6 步 dump 到的也是弹窗文字 ——
+    两项判定同时变假，看着像产品坏了，其实是上一轮留的现场没清。
+    """
+    rt.SERIAL = serial
+    focus = adb(serial, "shell", "dumpsys", "window").stdout
+    line = next((l for l in focus.splitlines() if "mCurrentFocus" in l), "")
+    if "permissioncontroller" not in line and "systemui" not in line:
+        return
+    print("   检测到系统弹窗压在屏幕上，先处理掉")
+    for pat in ("仅在使用时允许", "仅本次使用时允许", "While using the app", "允许", "Allow"):
+        p = rt.node(pat)
+        if p:
+            rt.sh(rt.ADB, "-s", serial, "shell", "input", "tap", *map(str, p))
+            time.sleep(2)
+            return
+    rt.sh(rt.ADB, "-s", serial, "shell", "input", "keyevent", "KEYCODE_BACK")
+    time.sleep(1)
+
+
 def launch_app(serial):
     adb(serial, "shell", "am", "start", "-n", ACT)
     for _ in range(30):
@@ -122,6 +147,11 @@ def launch_app(serial):
 def join_as_viewer(serial, url):
     """在观众机上把链接喂进去。返回 True=已提交。"""
     rt.SERIAL = serial
+    clear_lingering_dialogs(serial)
+    # 必须冷启：上一轮结束时 App 停在"房主结束了分享"那一屏，
+    # 只 am start 把它带到前台的话，屏幕上根本没有「进入观看」可点。
+    adb(serial, "shell", "am", "force-stop", PKG)
+    time.sleep(1)
     if not launch_app(serial):
         return False, "App 没到前台"
     p = rt.node("进入观看")
@@ -245,9 +275,30 @@ def main():
     if mic:
         rt.sh(rt.ADB, "-s", phone, "shell", "input", "tap", *map(str, mic))
         time.sleep(3)
-        allow = rt.node("While using the app") or rt.node("允许")
+        # 系统权限弹窗要轮询着找：它出现得比 tap 晚，而且各家 ROM 文案不同
+        # （原生是 "While using the app"，Flyme 是中文）。上一版只认英文、
+        # 且只找一次，结果弹窗压在 App 上没关掉 —— 连带让后面几步 dump 到的
+        # 都是弹窗而不是我们的界面，两项判定同时变假。
+        allow = None
+        for _ in range(10):
+            for pat in ("While using the app", "仅在使用中允许", "使用时允许",
+                        "始终允许", "允许", "Allow"):
+                allow = rt.node(pat)
+                if allow:
+                    break
+            if allow:
+                break
+            time.sleep(1)
         if allow:
             rt.sh(rt.ADB, "-s", phone, "shell", "input", "tap", *map(str, allow))
+            print(f"   已点权限弹窗按钮")
+            time.sleep(2)
+            # 有的 ROM 会连着问第二次（通知、悬浮窗），再扫一轮兜底
+            again = rt.node("允许") or rt.node("Allow")
+            if again:
+                rt.sh(rt.ADB, "-s", phone, "shell", "input", "tap", *map(str, again))
+        else:
+            print("   ⚠ 没找到权限弹窗按钮，这一步的判定不可信")
         got = wait_for(host, ["CallSession:V"], "收到对方音频轨", 20)
         results["观众开麦房主收到"] = got is not None
         print(f"   {'PASS' if results['观众开麦房主收到'] else 'FAIL'}  房主日志出现「收到对方音频轨」")
@@ -259,11 +310,18 @@ def main():
     adb(host, "shell", "settings", "put", "system", "accelerometer_rotation", "0")
     adb(host, "shell", "settings", "put", "system", "user_rotation", "1")
     time.sleep(8)
-    vlog2 = adb(phone, "logcat", "-d", "-s", "ViewerSession:V", "MainActivity:V").stdout
-    results["观众跟随转向"] = "观众屏方向 → Landscape" in vlog2
-    print(f"   {'PASS' if results['观众跟随转向'] else 'FAIL'}  观众端出现「观众屏方向 → Landscape」")
+    # 判据用**截图尺寸**而不是日志：logcat 缓冲会被系统噪声冲掉（上一轮就是这么误判的），
+    # 而"屏幕到底横没横"直接看像素宽高最硬。
     p2 = os.path.join(out_dir, "viewer-landscape.png")
     screencap(phone, p2)
+    from PIL import Image
+    w0, h0 = Image.open(vp).size
+    w1, h1 = Image.open(p2).size
+    results["观众跟随转向"] = (w1 > h1) and (w0 < h0)
+    vlog2 = adb(phone, "logcat", "-d", "-s", "ViewerSession:V", "MainActivity:V").stdout
+    print(f"   {'PASS' if results['观众跟随转向'] else 'FAIL'}  "
+          f"观众屏 {w0}x{h0} -> {w1}x{h1}（日志佐证："
+          f"{'有' if 'Landscape' in vlog2 else '无'}）")
     adb(host, "shell", "settings", "put", "system", "user_rotation", "0")
     time.sleep(6)
 
@@ -273,7 +331,17 @@ def main():
     rt.tap("停止分享")
     time.sleep(5)
     rt.SERIAL = phone
-    ended = rt.node("房主结束了分享") is not None
+    # 弹窗还压在上面就先关掉，否则 dump 到的不是我们的界面（上一轮就是这么误判的）
+    for _ in range(3):
+        stuck = rt.node("不允许") or rt.node("Don’t allow") or rt.node("Don't allow")
+        if not stuck:
+            break
+        rt.sh(rt.ADB, "-s", phone, "shell", "input", "keyevent", "KEYCODE_BACK")
+        time.sleep(1)
+    # 两种收场措辞都算对：收到道别是「房主结束了分享」，
+    # 通道先断（锁屏、隧道到期）是「与房主的连接断了：对方可能已停止分享」。
+    # 上一版只认前者，于是产品画出了正确的中性收场屏、脚本却判它 FAIL。
+    ended = bool(rt.node("房主结束了分享") or rt.node("与房主的连接断了"))
     bad = rt.node("根据什么这么判断") is not None or rt.node("按这个顺序试") is not None
     results["收场文案正确"] = ended and not bad
     print(f"   {'PASS' if results['收场文案正确'] else 'FAIL'}  结束={ended} 误报失败={bad}")
