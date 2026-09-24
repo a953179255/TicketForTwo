@@ -206,6 +206,12 @@ def main():
     lum = mean_brightness(SHOT) if ok_shot else None
     print(f"   截图：{SHOT if ok_shot else '没截到'}  亮度均值={None if lum is None else round(lum,1)}")
 
+    if "--keep-sharing" in sys.argv:
+        # 做"方向同步"这类实验时要留着分享，否则测完就没得看了
+        print("   （--keep-sharing：跳过停止分享这一步）")
+        print("PASS  观众端已连上，分享保持中")
+        return 0
+
     # 房主停止 → 观众应显示"房主结束了分享"，而不是失败屏
     rt.SERIAL = host
     if not rt.tap("停止分享"):
