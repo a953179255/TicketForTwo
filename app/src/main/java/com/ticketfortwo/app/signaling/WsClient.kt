@@ -38,7 +38,11 @@ class WsClient(
 
     private var socket: Socket? = null
 
-    /** 只在 [writerThread] 上读写；[run] 完成握手后才赋值，所以用 volatile 让写线程看得见。 */
+    /**
+     * 只在握手完成之后由 [writerThread] 写；握手请求头与 PONG 由 [run] 那条读线程直接写。
+     * 两条都不是主线程 —— 关键约束是"绝不从调用方线程写"，见 [send]。
+     * [run] 完成握手后才赋值，所以用 volatile 让写线程看得见。
+     */
     @Volatile
     private var out: OutputStream? = null
     private val writeLock = Any()
