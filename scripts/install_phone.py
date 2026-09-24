@@ -28,7 +28,8 @@ except Exception:
     pass
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-APK = os.path.join(HERE, "..", "app", "build", "outputs", "apk", "debug", "app-debug.apk")
+REL = os.path.join(HERE, "..", "app", "build", "outputs", "apk", "release", "app-release.apk")
+DBG = os.path.join(HERE, "..", "app", "build", "outputs", "apk", "debug", "app-debug.apk")
 PKG = "com.ticketfortwo.app"
 ADB = t2device.ADB
 ENV = dict(os.environ, ANDROID_ADB_SERVER_PORT="5039", MSYS_NO_PATHCONV="1")
@@ -58,7 +59,9 @@ def dump_pkg(serial):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--yes", action="store_true", help="同意先卸载（会清掉 App 数据）")
+    ap.add_argument("--yes", action="store_true", help="同意安装（默认原地覆盖，不清数据）")
+    ap.add_argument("--wipe", action="store_true",
+                    help="仅在签名真的对不上时才需要：先卸载旧包（会清掉 App 数据）")
     a = ap.parse_args()
 
     s = phone_serial()
@@ -96,6 +99,13 @@ def main():
         time.sleep(12)
         r = sh(ADB, "-s", s, "install", "-r", "-t", APK)
         print("   " + (r.stdout + r.stderr).strip().replace("\n", " / "))
+    if "UPDATE_INCOMPATIBLE" in out or "signatures do not match" in out:
+        # 只有真撞上签名不一致才走到这一步 —— 那意味着必须卸载、必须清数据，
+        # 是不可逆的，所以这里停下来问，不替用户决定。
+        print("⚠ 签名对不上，只能先卸载再装，而**卸载会清掉 App 全部数据**"
+              "（分享设置、上次连接记录）。")
+        print("   确认要做，就再跑一次：python scripts/install_phone.py --yes --wipe")
+        return 1
     if "Success" not in out:
         return 1
 
