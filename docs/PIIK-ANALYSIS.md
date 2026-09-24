@@ -134,6 +134,9 @@ var quickOriginPattern = regexp.MustCompile(
 
 `indexHtml` 是 base64 的观众端页面本体。所以 **`.qoder.site` 是 Qoder 提供的免费静态站点托管**，用途只有一个：给观众端 HTML 一个 HTTPS 地址（WebRTC 要求 HTTPS 或 localhost）。
 
+> 该站点已于 2026-09-25 删除，这个清单文件也随之下架（观众页现在由手机 APK 直接发出，
+> 不再需要"先放个地方"）。文件内容还在 git 历史里，本节那段核对过程照样可复查。
+
 **它不是"依赖"，更不是服务器**——它无状态、不参与信令、不碰媒体。换成 GitHub Pages / Cloudflare Pages / Vercel / 任意对象存储都一样。
 
 真正缺的是：**一条双方可达的实时信令通道**。这才是 Piik 与你现在的差距所在。
@@ -255,4 +258,4 @@ var quickOriginPattern = regexp.MustCompile(
 | 三种模式差异、欢迎页行为 | `docs/guide/getting-started.md` |
 | Worker 免费额度、DO 免费可用、WS 20:1 折算 | Cloudflare 官方 Pricing 文档（2026 现行） |
 | cloudflared 可在 Android 运行 | Termux 实测博客、`cloudflared_tunnel` Flutter 插件、`Droidploy` 项目 |
-| 本项目现状 | `SignalingCodec.kt`、`RtcEngine.kt`、`CallSession.kt`、`docs/PLAN.md` §9/§10、`viewer/.双人票 · 观众端.qoder.site` |
+| 本项目现状 | `SignalingCodec.kt`、`RtcEngine.kt`、`CallSession.kt`、`docs/PLAN.md` §9/§10、`viewer/.双人票 · 观众端.qoder.site`（站点已删，仅存 git 历史） |
