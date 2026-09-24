@@ -45,6 +45,17 @@ object TunnelManager {
     private val originPattern =
         Regex("""https://[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.trycloudflare\.com""")
 
+    /**
+     * 这不是门牌，是 Cloudflare 的接口域名。
+     *
+     * cloudflared 在预检 / 注册阶段就会把 `api.trycloudflare.com` 写进日志，
+     * 而它长得完全符合上面的正则 —— 于是"取第一条匹配"会把它当成分配到的隧道地址。
+     * 实测后果：邀请链接变成 `https://api.trycloudflare.com/?k=…`，
+     * 朋友点开得到 **HTTP 405**，页面根本加载不出来。
+     * 所以匹配到它必须跳过，继续等真正那条 `xxx-yyy-zzz.trycloudflare.com`。
+     */
+    private val notATunnelOrigin = "https://api.trycloudflare.com"
+
     sealed interface State {
         data object Idle : State
 
@@ -190,7 +201,10 @@ object TunnelManager {
                         Log.v(TAG, "cloudflared: $line")
                     }
                     if (!ready.isCompleted) {
-                        originPattern.find(line.lowercase())?.value?.let { ready.complete(it) }
+                        originPattern.find(line.lowercase())?.value
+                            // api.trycloudflare.com 是 Cloudflare 接口域名，不是门牌，跳过继续等
+                            ?.takeIf { it != notATunnelOrigin }
+                            ?.let { ready.complete(it) }
                     }
                 }
             }

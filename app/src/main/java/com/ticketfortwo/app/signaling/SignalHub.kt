@@ -19,6 +19,8 @@ import java.net.Socket
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 /**
@@ -76,8 +78,12 @@ object SignalHub {
     @Volatile
     private var running = false
 
+    /** 待发送给观众的消息。写入由 [writeLoop] 那条专职线程做，调用方只入队。 */
+    private val outbox = LinkedBlockingQueue<String>()
+
     private var server: ServerSocket? = null
     private var acceptThread: Thread? = null
+    private var writeThread: Thread? = null
     /**
      * 观众页面。
      *
@@ -107,6 +113,7 @@ object SignalHub {
             port = s.localPort
             running = true
             acceptThread = thread(name = "t2-signal-accept", isDaemon = true) { acceptLoop(s) }
+            writeThread = thread(name = "t2-signal-write", isDaemon = true) { writeLoop() }
             Log.i(TAG, "传话员已就位 127.0.0.1:$port")
             true
         } catch (t: Throwable) {
@@ -121,6 +128,8 @@ object SignalHub {
         runCatching { server?.close() }
         server = null
         acceptThread = null
+        writeThread = null
+        outbox.clear()
         // 必须归零。`CallSession.isActive` 拿 `port != 0` 当"有没有在分享"的判据之一，
         // 而 port 一旦绑过就不会自己变回 0 —— 于是第一次分享之后 isActive 永久为真，
         // 之后每一次「开始分享」都被 startHost 的 guard 静默吞掉，
@@ -132,15 +141,42 @@ object SignalHub {
         _viewerConnected.value = false
     }
 
-    /** 把一条消息发给观众。返回是否真的发出去了。 */
+    /**
+     * 把一条消息发给观众。**任何线程都可以调**。
+     *
+     * 为什么不直接写 socket：`Peer.onIceCandidate` 会把候选 post 到主线程再发，
+     * 而 Android 禁止主线程网络 I/O —— 直接写就每条候选都抛
+     * `NetworkOnMainThreadException`（message 是 null，日志上只看得见"发给观众失败：null"）。
+     * 后果不是全局失败：同机测试靠 host 候选也能连通，所以看起来"有时好用"；
+     * 一旦是手机蜂窝↔电脑这种必须用 srflx 的组合，观众就拿不到房主的公网地址，
+     * ICE 永远停在 CHECKING，既不成功也不报失败（异地实测就是这个现象）。
+     *
+     * 所以写入交给一条专职线程按 FIFO 消费，调用方只入队。
+     * 返回 false 只代表"当前没有观众可发"，不代表投递结果。
+     */
     fun sendToViewer(json: String): Boolean {
-        val c = synchronized(lock) { viewer } ?: return false
-        return try {
-            synchronized(c.writeLock) { writeFrame(c.out, OP_TEXT, json.toByteArray(Charsets.UTF_8)) }
-            true
-        } catch (t: Throwable) {
-            Log.w(TAG, "发给观众失败：${t.message}")
-            false
+        val hasViewer = synchronized(lock) { viewer != null }
+        if (!hasViewer) return false
+        return outbox.offer(json)
+    }
+
+    /** 专职写线程：唯一持有 socket 写权限的地方，永远不在调用者线程上发包。 */
+    private fun writeLoop() {
+        while (running) {
+            val msg = try {
+                outbox.poll(1, TimeUnit.SECONDS)
+            } catch (e: InterruptedException) {
+                break
+            } ?: continue
+            val c = synchronized(lock) { viewer } ?: continue // 观众走了就丢弃，不阻塞队列
+            try {
+                synchronized(c.writeLock) { writeFrame(c.out, OP_TEXT, msg.toByteArray(Charsets.UTF_8)) }
+            } catch (t: Throwable) {
+                // 带上异常类型与位置：只打 t.message 时 NullPointerException /
+                // NetworkOnMainThreadException 都显示成"null"，白查了一轮。
+                val at = t.stackTrace.firstOrNull()?.let { "${it.fileName}:${it.lineNumber}" } ?: "?"
+                Log.w(TAG, "发给观众失败：${t.javaClass.name}（${t.message}）于 $at")
+            }
         }
     }
 
