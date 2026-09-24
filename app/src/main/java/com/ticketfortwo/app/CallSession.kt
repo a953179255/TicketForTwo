@@ -63,7 +63,12 @@ object CallSession {
 
         data object Connecting : State
         data object Connected : State
-        data class Failed(val reason: String) : State
+
+        /**
+         * [reason] 给人看的一句话，[verdict] 是**从候选与状态轨迹推出来的**判定。
+         * 没有 verdict 的失败（比如隧道起不来）跟打洞无关，界面就不该显示 ICE 证据。
+         */
+        data class Failed(val reason: String, val verdict: com.ticketfortwo.app.rtc.Verdict? = null) : State
     }
 
     private const val TAG = "CallSession"
@@ -388,8 +393,12 @@ object CallSession {
                         State.Connected
                     }
 
-                    PeerConnection.IceConnectionState.FAILED ->
-                        State.Failed("直连失败：一方可能在对称 NAT 之后")
+                    PeerConnection.IceConnectionState.FAILED -> {
+                        // 不再凭"失败了"就断言是对称 NAT —— 让 probe 按双方候选给结论。
+                        val v = peer?.probe?.verdict()
+                        note("ICE 判定：${v?.headline}｜${peer?.probe?.summary()}")
+                        State.Failed(v?.headline ?: "直连失败", v)
+                    }
 
                     PeerConnection.IceConnectionState.DISCONNECTED -> {
                         stopStatsPump()
@@ -419,7 +428,9 @@ object CallSession {
             override fun onFailure(reason: String) {
                 Log.e(TAG, reason)
                 stopStatsPump()
-                _state.value = State.Failed(reason)
+                // 自愈超时这类"先连上后失败"的分支同样给证据：
+                // 判定会把轨迹里的 CONNECTED 挑出来，界面就不会误报成"打洞没成功"。
+                _state.value = State.Failed(reason, peer?.probe?.verdict())
             }
         })
         return p.also { peer = it }

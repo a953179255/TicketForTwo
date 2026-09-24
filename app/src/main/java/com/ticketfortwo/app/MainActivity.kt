@@ -41,6 +41,7 @@ import com.ticketfortwo.app.ui.app.CallScreen
 import com.ticketfortwo.app.ui.app.ColorLabScreen
 import com.ticketfortwo.app.ui.app.GlassLabScreen
 import com.ticketfortwo.app.ui.app.ConsentGuideScreen
+import com.ticketfortwo.app.rtc.Verdict
 import com.ticketfortwo.app.ui.app.FailedScreen
 import com.ticketfortwo.app.ui.app.HomeScreen
 import com.ticketfortwo.app.ui.app.InviteScreen
@@ -92,12 +93,12 @@ private sealed interface Page {
     object Consent : Page
     data class ViewerJoin(val error: String?) : Page
     data class ViewerPreparing(val note: String) : Page
-    data class ViewerFailed(val reason: String) : Page
+    data class ViewerFailed(val reason: String, val verdict: Verdict? = null) : Page
     object ViewerCall : Page
     data class Invite(val url: String) : Page
     data class Preparing(val title: String, val note: String, val hint: String?) : Page
     data class Call(val host: Boolean) : Page
-    data class Failed(val reason: String) : Page
+    data class Failed(val reason: String, val verdict: Verdict? = null) : Page
 }
 
 @Composable
@@ -297,7 +298,10 @@ private fun AppRouter(backdrop: LayerBackdrop) {
         viewerState is ViewerSession.State.Connecting ->
             Page.ViewerPreparing((viewerState as ViewerSession.State.Connecting).note)
         viewerState is ViewerSession.State.Failed ->
-            Page.ViewerFailed((viewerState as ViewerSession.State.Failed).reason)
+            Page.ViewerFailed(
+                (viewerState as ViewerSession.State.Failed).reason,
+                (viewerState as ViewerSession.State.Failed).verdict,
+            )
 
         // 会话已结束且没有待提交的意图 —— 首页
         role == UiRole.None -> Page.Home
@@ -307,7 +311,10 @@ private fun AppRouter(backdrop: LayerBackdrop) {
 
         state is CallSession.State.Connected -> Page.Call(isHost)
 
-        state is CallSession.State.Failed -> Page.Failed((state as CallSession.State.Failed).reason)
+        state is CallSession.State.Failed -> Page.Failed(
+            (state as CallSession.State.Failed).reason,
+            (state as CallSession.State.Failed).verdict,
+        )
 
         // 门牌就绪：把这条链接发出去就完事，剩下的双方自己会走完。
         state is CallSession.State.WaitingViewer ->
@@ -387,6 +394,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
             is Page.ViewerFailed -> FailedScreen(
                 backdrop = backdrop,
                 reason = p.reason,
+                verdict = p.verdict,
                 onRetry = { ViewerSession.stop() },
             )
 
@@ -421,6 +429,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
             is Page.Failed -> FailedScreen(
                 backdrop = backdrop,
                 reason = p.reason,
+                verdict = p.verdict,
                 onRetry = stop,
             )
 

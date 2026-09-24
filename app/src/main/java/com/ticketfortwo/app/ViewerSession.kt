@@ -43,7 +43,7 @@ object ViewerSession {
 
         data object Connected : State
 
-        data class Failed(val reason: String) : State
+        data class Failed(val reason: String, val verdict: com.ticketfortwo.app.rtc.Verdict? = null) : State
     }
 
     private const val TAG = "ViewerSession"
@@ -200,8 +200,11 @@ object ViewerSession {
                         PeerConnection.IceConnectionState.COMPLETED ->
                             _state.value = State.Connected
 
-                        PeerConnection.IceConnectionState.FAILED ->
-                            fail("直连失败：一方可能在严格的网络后（对称 NAT）")
+                        PeerConnection.IceConnectionState.FAILED -> {
+                            val v = peer?.probe?.verdict()
+                            note("ICE 判定：${v?.headline}｜${peer?.probe?.summary()}")
+                            fail(v?.headline ?: "直连失败", v)
+                        }
 
                         PeerConnection.IceConnectionState.DISCONNECTED ->
                             _state.value = State.Connecting("连接抖动，正在自愈…")
@@ -258,11 +261,11 @@ object ViewerSession {
         ws?.send(text)
     }
 
-    private fun fail(reason: String) {
+    private fun fail(reason: String, verdict: com.ticketfortwo.app.rtc.Verdict? = null) {
         note(reason)
         runCatching { ws?.close() }
         ws = null
-        _state.value = State.Failed(reason)
+        _state.value = State.Failed(reason, verdict)
     }
 
     private fun note(msg: String) {

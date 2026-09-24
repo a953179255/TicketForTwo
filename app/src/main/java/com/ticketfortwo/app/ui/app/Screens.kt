@@ -752,35 +752,79 @@ fun PasteField(value: String, onChange: (String) -> Unit, hint: String = "长按
 
 // ─────────────────────────── 失败 / 诊断 ───────────────────────────
 
+/**
+ * 失败 / 诊断屏。
+ *
+ * 这里以前把结论写死成"你们两家的网络类型对不上（其中一方在对称 NAT 之后）"——
+ * 那是猜的：只要 ICE 失败就这一句。现在结论来自 [Verdict]，由双方候选类型与状态轨迹推出来，
+ * 并把**证据本身**摊开显示：用户看得见"我拿到公网地址了、对方没拿到"，
+ * 就知道该让对方换网络，而不是照着模板话瞎试。
+ */
 @Composable
-fun FailedScreen(backdrop: LayerBackdrop, reason: String, onRetry: () -> Unit) {
+fun FailedScreen(
+    backdrop: LayerBackdrop,
+    reason: String,
+    verdict: com.ticketfortwo.app.rtc.Verdict? = null,
+    onRetry: () -> Unit,
+) {
+    // 这一屏**必须能滚**：加了证据卡与"只有中继能救"那张之后，内容已经占满一屏，
+    // 而 nextStep 的长短是运行时才知道的。原先用两个 SpacerWeight 居中，
+    // 内容一超就双双塌成 0（截图上标题直接顶到状态栏），底部按钮随时会被裁掉。
     PageScaffold {
-        SpacerWeight(0.4f)
         Column(
-            Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(GlassDimens.sp3),
+            Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(GlassDimens.sp4),
         ) {
-            Text("直连连不通", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Ink.TextHi)
-            Text(
-                "你们两家的网络类型对不上（其中一方在对称 NAT 之后）。" +
-                    "纯 P2P 没有中继兜底，这是这套架构的固有代价。",
-                fontSize = 12.5.sp, color = Ink.TextMid,
-            )
-        }
-        GlassCardPanel(backdrop, Modifier.fillMaxWidth(), floating = true) {
-            Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
-                SectionTitle("诊断")
-                Text(reason, fontSize = 11.5.sp, fontFamily = FontFamily.Monospace, color = Ink.Error)
+            Column(
+                Modifier.fillMaxWidth().padding(top = GlassDimens.sp4),
+                verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2),
+            ) {
+                Text(
+                    verdict?.headline ?: reason,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Ink.TextHi,
+                )
+                if (verdict != null) {
+                    Text(
+                        verdict.nextStep,
+                        fontSize = 12.5.sp, color = Ink.TextMid, lineHeight = 18.sp,
+                    )
+                }
             }
+
+            if (verdict != null) {
+                GlassCardPanel(backdrop, Modifier.fillMaxWidth(), floating = true) {
+                    Column(
+                        Modifier.padding(GlassDimens.sp4),
+                        verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2),
+                    ) {
+                        SectionTitle("根据什么这么判断")
+                        verdict.evidence.forEach {
+                            Text(it, fontSize = 11.5.sp, fontFamily = FontFamily.Monospace, color = Ink.TextMid)
+                        }
+                    }
+                }
+            }
+
+            // 只有证据指向"两边都有公网地址仍敲不通"时才提中继 ——
+            // 否则等于把三种不同的病都推给同一个药，用户白折腾。
+            if (verdict?.onlyRelayHelps == true) {
+                FixCard(
+                    backdrop, "这种情况只有中继能救", "无解于 P2P",
+                    "两台手机都躲在运营商的地址转换后面，而且互相不认对方问到的地址。" +
+                        "加一个中转服务器（TURN）让画面走第三方转发，是唯一稳的办法。"
+                )
+            }
+
+            SectionTitle("按这个顺序试")
+            FixCard(backdrop, "① 让他连你的热点", "几乎必成", "两端进同一个网络时只用本机地址就能直连，绕开全部打洞问题。")
+            FixCard(backdrop, "② 他换成 WiFi 或换 5G", "一半情况有效", "公司/校园网防火墙是主因；运营商 4G/5G 走 CGNAT，失败率明显更高。")
+            FixCard(backdrop, "③ 重试一次", "候选顺序会变", "重发邀请会重新收集候选，偶尔就能通。")
+            Spacer(Modifier.height(GlassDimens.sp2))
         }
-        SectionTitle("按这个顺序试")
-        FixCard(backdrop, "① 让他连你的热点", "几乎必成", "两端进同一个网络时只用本机地址就能直连，绕开全部打洞问题。")
-        FixCard(backdrop, "② 他换成 WiFi 或换 5G", "一半情况有效", "公司/校园网防火墙是主因；运营商 4G/5G 走 CGNAT，失败率明显更高。")
-        FixCard(backdrop, "③ 重试一次", "候选顺序会变", "重发邀请会重新收集候选，偶尔就能通。")
-        SpacerWeight()
         PrimaryPill("重试", onRetry, backdrop, Modifier.fillMaxWidth())
-        Spacer(Modifier.height(GlassDimens.sp6))
+        Spacer(Modifier.height(GlassDimens.sp4))
     }
 }
 

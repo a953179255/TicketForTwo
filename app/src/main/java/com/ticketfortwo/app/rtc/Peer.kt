@@ -59,6 +59,9 @@ class Peer(
     private var pc: PeerConnection? = null
     private var controlChannel: DataChannel? = null
 
+    /** 全程取证，失败时由上层取 [IceProbe.verdict] 拼出"根据什么判断"。 */
+    val probe = IceProbe()
+
     /** 断连后的自愈宽限期：先等它自己回来，超时再报可行动的失败。 */
     private val graceMs = 8_000L
 
@@ -71,6 +74,7 @@ class Peer(
 
     fun open() {
         if (pc != null) return
+        probe.reset()
         val created = RtcEngine.factory.createPeerConnection(RtcEngine.configuration(), this)
         pc = created
         if (created == null) {
@@ -175,6 +179,7 @@ class Peer(
     /** 收到对方的 ICE 候选。远端描述可能还没设好，libwebrtc 会自行排队，这里直接转交。 */
     fun addRemoteCandidate(candidate: IceCandidate) {
         val p = pc ?: return
+        probe.onRemoteCandidate(candidate.sdp)
         runCatching { p.addIceCandidate(candidate) }
             .onFailure { Log.w(TAG, "addIceCandidate 失败：${it.message}") }
     }
@@ -222,6 +227,7 @@ class Peer(
 
     override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
         Log.i(TAG, "ice=$state")
+        probe.onIceState(state.name)
         listener.onIceState(state)
         // DISCONNECTED 不等于死亡：真实网络切换（WiFi↔蜂窝、NAT 映射过期）后，
         // 已协商好的 candidate pair 常常几十秒内自己恢复。先给它宽限期。
@@ -270,9 +276,10 @@ class Peer(
      */
     override fun onIceCandidate(candidate: IceCandidate) {
         if (candidate.sdp.isNullOrEmpty()) {
-            Log.i(TAG, "候选收集结束")
+            Log.i(TAG, "候选收集结束 ${probe.summary()}")
             return
         }
+        probe.onLocalCandidate(candidate.sdp)
         handler.post { listener.onLocalCandidate(candidate) }
     }
 
