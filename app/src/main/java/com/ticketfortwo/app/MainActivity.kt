@@ -42,6 +42,7 @@ import com.ticketfortwo.app.ui.app.ColorLabScreen
 import com.ticketfortwo.app.ui.app.GlassLabScreen
 import com.ticketfortwo.app.ui.app.ConsentGuideScreen
 import com.ticketfortwo.app.rtc.Verdict
+import com.ticketfortwo.app.ui.app.EndedScreen
 import com.ticketfortwo.app.ui.app.FailedScreen
 import com.ticketfortwo.app.ui.app.HomeScreen
 import com.ticketfortwo.app.ui.app.InviteScreen
@@ -94,6 +95,9 @@ private sealed interface Page {
     data class ViewerJoin(val error: String?) : Page
     data class ViewerPreparing(val note: String) : Page
     data class ViewerFailed(val reason: String, val verdict: Verdict? = null) : Page
+
+    /** 房主结束分享（或信令通道断了）—— 中性收场，不算失败。 */
+    data class ViewerEnded(val reason: String) : Page
     object ViewerCall : Page
     data class Invite(val url: String) : Page
     data class Preparing(val title: String, val note: String, val hint: String?) : Page
@@ -302,6 +306,8 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 (viewerState as ViewerSession.State.Failed).reason,
                 (viewerState as ViewerSession.State.Failed).verdict,
             )
+        viewerState is ViewerSession.State.Ended ->
+            Page.ViewerEnded((viewerState as ViewerSession.State.Ended).reason)
 
         // 会话已结束且没有待提交的意图 —— 首页
         role == UiRole.None -> Page.Home
@@ -396,6 +402,12 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 reason = p.reason,
                 verdict = p.verdict,
                 onRetry = { ViewerSession.stop() },
+            )
+
+            is Page.ViewerEnded -> EndedScreen(
+                backdrop = backdrop,
+                reason = p.reason,
+                onBack = { ViewerSession.stop() },
             )
 
             Page.Home -> home()

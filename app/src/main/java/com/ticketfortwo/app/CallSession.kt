@@ -291,6 +291,14 @@ object CallSession {
     }
 
     fun stop(context: Context) {
+        // 第一件事必须是道别，而且必须在拆 peer / 拆隧道 / 拆传话员之前做完：
+        // SignalHub.stop() 会清掉待发队列，TunnelManager.stop() 直接杀 cloudflared 进程，
+        // 任何一件先发生，这句"结束"就永远留在队列里。不发出去的后果不是"少一句提示"，
+        // 而是观众只能从"媒体突然没了"反推，于是把一次正常结束报成"连不上/对称 NAT"，
+        // 还附三条换网络建议（用户照做就是白折腾）。
+        // 这条路径同时也是系统撤销投屏（锁屏、下拉里点停止）的出口 ——
+        // ScreenShareController.onStoppedBySystem 最终也调这里，所以那一类也会被通知到。
+        SignalHub.sayGoodbye()
         stopStatsPump()
         teardownPeer()
         runCatching { capture?.release() }

@@ -163,10 +163,16 @@ function openSocket(){
   ws.onmessage = ev => { onMessage(ev.data); };
   ws.onclose = () => {
     if (closedByUs) return;
-    reportFailure('与房主的连接断了');
+    // 通道自己断了 ≠ 连不上。绝大多数就是房主点了「停止分享」（隧道随会话一起没），
+    // 以前这里也走 reportFailure，画出来是"纯直连在部分网络下会失败 + 换网络建议"，
+    // 把一个正常结束说成了用户的网络故障。
+    reportEnded('与房主的连接断了 · 对方可能已停止分享');
   };
   ws.onerror = () => { /* onclose 会跟着触发，统一在那里处理 */ };
 }
+
+/** 信令通道此刻是否还开着。ICE 失败时用它分诊：通道都没了，媒体失败是必然结果。 */
+function signalingAlive(){ return !!ws && ws.readyState === 1; }
 
 function onMessage(text){
   let m = null;
@@ -174,7 +180,7 @@ function onMessage(text){
 
   if (m.t === 'offer') startPeer(m.sdp);
   else if (m.t === 'cand') addRemoteCandidate(m);
-  else if (m.t === 'bye') reportFailure('房主停止了分享');
+  else if (m.t === 'bye') { closedByUs = true; reportEnded('房主结束了分享'); }
 }
 
 // ---- 建立直连 ---------------------------------------------------------
@@ -213,7 +219,12 @@ async function startPeer(offerSdp){
   pc.onconnectionstatechange = () => {
     const s = pc.connectionState;
     $('topRight').textContent = s;
-    if (s === 'failed') reportFailure('failed');
+    if (s === 'failed') {
+      // 分诊：信令通道还在 → 地址是真敲不通，那才是"连不上"，给换网络建议有意义；
+      // 通道已经断了 → 媒体撑不住是必然结果，报对称 NAT 属于误诊。
+      if (signalingAlive()) reportFailure('failed');
+      else reportEnded('看不到画面了 · 与房主的连接先断了');
+    }
     if (s === 'disconnected') $('topRight').textContent = '连接抖动，正在自愈';
     if (s === 'connected') {
       hidePanel();
@@ -267,15 +278,30 @@ function askToPlay(title, body){
   $('btnListen').onclick = () => video.play().then(hidePanel).catch(()=>{});
 }
 
+/**
+ * 正常收场：房主结束分享，或信令通道先一步断掉。
+ * 刻意与 reportFailure 分开 —— 不催用户换网络、不说"没有中继兜底"，
+ * 因为这一次什么都没坏，只是对方不播了。旧链接连同口令一起作废，
+ * 所以这里不放「重试」：刷新只会再拿一个打不开的地址。
+ */
+function reportEnded(s){
+  closedByUs = true;
+  if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+  show(`<h1>${escapeHtml(String(s))}</h1>
+    <p class="muted">画面停了不是因为连不上 —— 是对方那次分享已经结束了。
+      请他在手机上重新点一次「分享屏幕」，再把新链接发给你。</p>
+    <div class="kv"><span>这一条链接</span><span class="chip ok">已随那次分享作废</span></div>`);
+}
+
 function reportFailure(s){
   closedByUs = true;
   show(`<h1>连不上房主的手机</h1>
     <p class="muted">网页能打开，<b>不代表画面一定连得通</b>。纯直连在部分网络下会失败，而且这一版没有中继兜底。</p>
     <div class="kv"><span>当前状态</span><span class="chip bad">${escapeHtml(String(s))}</span></div>
     <div class="row" style="margin-top:12px">
-      <span class="chip">让房主确认还在分享</span>
-      <span class="chip">你换成 WiFi 再点一次</span>
-      <span class="chip ok">最稳：连他开的热点</span>
+      <span class="chip">让房主先关掉 VPN 或代理</span>
+      <span class="chip">你换成 WiFi 或换 5G 再点一次</span>
+      <span class="chip">让房主重发一条链接</span>
     </div>
     <button class="primary" onclick="location.reload()">重试</button>`);
 }
@@ -376,6 +402,9 @@ if (_q.get('report') === '1') {
         conn: pc && pc.connectionState, ice: pc && pc.iceConnectionState,
         stats: window.t2 && window.t2.stats,
         panelHidden: $('panel').classList.contains('hide'),
+        // 只报"面板出没出现"分不出"正常结束"和"连不上"这两类，而这次的缺陷恰恰是
+        // 两者被混为一谈。把标题原文带回去，才看得见观众到底被说了什么。
+        panelH1: ($('panel').querySelector('h1') || {}).textContent || null,
         video: { readyState: video.readyState, w: video.videoWidth, h: video.videoHeight,
                  t: +video.currentTime.toFixed(2) },
       };

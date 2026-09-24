@@ -831,6 +831,66 @@ fun FailedScreen(
     }
 }
 
+/**
+ * 正常收场屏：房主结束了分享，或者信令通道先一步断了。
+ *
+ * 单独一屏而不是复用 [FailedScreen]，是因为复用的代价正好是用户投诉的那件事：
+ * 房主点"停止分享"之后，观众只能从"媒体突然没了"反推，于是走进失败分支，
+ * 标题变成"直连失败"、附三条换网络建议、底部一个"重试" —— 一个别人的正常动作
+ * 被画成了用户的网络故障，而"重试"根本没用（链接随那次会话一起作废了）。
+ *
+ * 所以这里刻意**不画红、不提 NAT、不放重试**，只说清"该等他重新开一次并再发链接"。
+ */
+@Composable
+fun EndedScreen(
+    backdrop: LayerBackdrop,
+    reason: String,
+    onBack: () -> Unit,
+) {
+    PageScaffold {
+        Column(
+            Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(GlassDimens.sp4),
+        ) {
+            Column(
+                Modifier.fillMaxWidth().padding(top = GlassDimens.sp4),
+                verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2),
+            ) {
+                Text(reason, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Ink.TextHi)
+                Text(
+                    "画面停了不是因为连不上 —— 是对方那次分享已经结束了。",
+                    fontSize = 12.5.sp, color = Ink.TextMid, lineHeight = 18.sp,
+                )
+            }
+
+            GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
+                Column(
+                    Modifier.padding(GlassDimens.sp4),
+                    verticalArrangement = Arrangement.spacedBy(GlassDimens.sp1),
+                ) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("想看的话该怎么做", fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextHi)
+                        StatusChip("只能由他发起", ChipTone.Ok)
+                    }
+                    Text(
+                        "请他在手机上重新点一次「分享屏幕」，再把新链接发给你。" +
+                            "旧那条链接连同口令已经作废，刷新它不会变回来 —— " +
+                            "所以这一屏没有「重试」按钮，点了也是白点。",
+                        fontSize = 12.sp, color = Ink.TextMid, lineHeight = 17.sp,
+                    )
+                }
+            }
+            Spacer(Modifier.height(GlassDimens.sp2))
+        }
+        PrimaryPill("知道了", onBack, backdrop, Modifier.fillMaxWidth(), filled = false)
+        Spacer(Modifier.height(GlassDimens.sp4))
+    }
+}
+
 @Composable
 private fun FixCard(backdrop: LayerBackdrop, title: String, chip: String, body: String) {
     GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {

@@ -21,6 +21,7 @@ import java.security.SecureRandom
 import java.util.Base64
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
 /**
@@ -81,6 +82,13 @@ object SignalHub {
     /** 待发送给观众的消息。写入由 [writeLoop] 那条专职线程做，调用方只入队。 */
     private val outbox = LinkedBlockingQueue<String>()
 
+    /**
+     * 入队 / 落地的两条计数，只为一件事：让 [sayGoodbye] 能判断"再见是不是真的写出去了"。
+     * 用计数而不是 `outbox.isEmpty()`，因为 `poll` 一取走队列就空了，而那一次写还没发生。
+     */
+    private val offeredCount = AtomicLong()
+    private val writtenCount = AtomicLong()
+
     private var server: ServerSocket? = null
     private var acceptThread: Thread? = null
     private var writeThread: Thread? = null
@@ -130,6 +138,10 @@ object SignalHub {
         acceptThread = null
         writeThread = null
         outbox.clear()
+        // 队列被清空，那些消息永远不会"落地"了 —— 计数必须一起归零，
+        // 否则下一次分享时 sayGoodbye() 会拿上一次的差额当"还没写完"白等一截。
+        offeredCount.set(0)
+        writtenCount.set(0)
         // 必须归零。`CallSession.isActive` 拿 `port != 0` 当"有没有在分享"的判据之一，
         // 而 port 一旦绑过就不会自己变回 0 —— 于是第一次分享之后 isActive 永久为真，
         // 之后每一次「开始分享」都被 startHost 的 guard 静默吞掉，
@@ -139,6 +151,35 @@ object SignalHub {
         val v = synchronized(lock) { viewer?.also { viewer = null } }
         runCatching { v?.socket?.close() }
         _viewerConnected.value = false
+    }
+
+    /**
+     * 拆通道**之前**跟观众说一声，并且等这句真的写出去。
+     *
+     * 为什么必须等：观众那边原先只能靠"媒体突然没了"反推房主走了，于是把一次正常结束
+     * 报成「连不上房主的手机 / 纯直连在部分网络下会失败 / 没有中继兜底」，还附赠三条
+     * 换网络建议 —— 用户照做就是白折腾。道个歉再说再见就能把这两种情况分开。
+     *
+     * 但"发了"不等于"到了"：这里的写是排队的（见 [sendToViewer]），而 [stop] 会
+     * `outbox.clear()`、`TunnelManager.stop()` 会直接杀掉隧道进程 —— 任何一件先发生，
+     * 再见就死在队列里。所以要等 [writtenCount] 追平，且必须**在拆 peer 与拆隧道之前**调。
+     *
+     * 有界等待：拿不到观众返回 false（本来就没必要说）；超时也照样往下拆，
+     * 不能为了一个通知把停止按钮卡住。
+     */
+    fun sayGoodbye(graceMs: Long = 400L): Boolean {
+        if (!sendToViewer("""{"t":"bye"}""")) return false
+        val target = offeredCount.get()
+        val deadline = System.nanoTime() + graceMs * 1_000_000L
+        while (System.nanoTime() < deadline) {
+            if (writtenCount.get() >= target) {
+                Log.i(TAG, "已告知观众：分享结束")
+                return true
+            }
+            Thread.sleep(10)
+        }
+        Log.w(TAG, "再见没能在 ${graceMs}ms 内写完，直接拆通道")
+        return false
     }
 
     /**
@@ -157,7 +198,9 @@ object SignalHub {
     fun sendToViewer(json: String): Boolean {
         val hasViewer = synchronized(lock) { viewer != null }
         if (!hasViewer) return false
-        return outbox.offer(json)
+        if (!outbox.offer(json)) return false
+        offeredCount.incrementAndGet()
+        return true
     }
 
     /** 专职写线程：唯一持有 socket 写权限的地方，永远不在调用者线程上发包。 */
@@ -168,7 +211,12 @@ object SignalHub {
             } catch (e: InterruptedException) {
                 break
             } ?: continue
-            val c = synchronized(lock) { viewer } ?: continue // 观众走了就丢弃，不阻塞队列
+            val c = synchronized(lock) { viewer }
+            if (c == null) {
+                // 观众走了就丢弃，不阻塞队列。也算"处理完"——否则 sayGoodbye 会白等到超时。
+                writtenCount.incrementAndGet()
+                continue
+            }
             try {
                 synchronized(c.writeLock) { writeFrame(c.out, OP_TEXT, msg.toByteArray(Charsets.UTF_8)) }
             } catch (t: Throwable) {
@@ -176,6 +224,9 @@ object SignalHub {
                 // NetworkOnMainThreadException 都显示成"null"，白查了一轮。
                 val at = t.stackTrace.firstOrNull()?.let { "${it.fileName}:${it.lineNumber}" } ?: "?"
                 Log.w(TAG, "发给观众失败：${t.javaClass.name}（${t.message}）于 $at")
+            } finally {
+                // 失败也算处理完：它在队列里不会再有第二次机会，等下去只是拖住停止按钮。
+                writtenCount.incrementAndGet()
             }
         }
     }

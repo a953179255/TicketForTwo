@@ -44,6 +44,16 @@ object ViewerSession {
         data object Connected : State
 
         data class Failed(val reason: String, val verdict: com.ticketfortwo.app.rtc.Verdict? = null) : State
+
+        /**
+         * 正常收场：房主说了再见，或者信令通道自己断了（十有八九是他停止了分享）。
+         *
+         * 单独立一档，而不是复用 [Failed]，因为这两件事用户该做的动作完全相反：
+         * Failed 意味着"你们的网络对不上，去换网络/重试"；Ended 意味着"对方不播了，
+         * 等他自己再开一次"。以前只有 Failed，于是停止分享被画成"连不上房主的手机 +
+         * 三条换网络建议" —— 一个正常动作被报成了用户的网络有问题。
+         */
+        data class Ended(val reason: String) : State
     }
 
     private const val TAG = "ViewerSession"
@@ -67,6 +77,14 @@ object ViewerSession {
     private var audioSource: AudioSource? = null
     private var audioTrack: AudioTrack? = null
 
+    /**
+     * 信令通道现在通不通。ICE 失败时要拿它分诊：
+     * 通道还在 → 地址是真敲不通，报基于证据的失败；
+     * 通道已经断了 → 媒体必然维持不住，那是"结束"而不是"连不上"，不该提对称 NAT。
+     */
+    @Volatile
+    private var wsOpen = false
+
     /** 远端描述就绪前先攒着的候选（顺序错了 addIceCandidate 会抛）。 */
     private val pendingRemoteCandidates = mutableListOf<IceCandidate>()
 
@@ -89,16 +107,23 @@ object ViewerSession {
         val client = WsClient(
             url = wsUrl,
             onOpen = {
+                wsOpen = true
                 note("通道已建立，正在向房主打招呼")
                 send(JSONObject().apply { put("t", "hello"); put("role", "viewer") }.toString())
             },
             onText = { text -> scope.launch { onMessage(context, text) } },
             onClosed = { reason ->
+                // 通道一没，wsOpen 立刻归零：之后 ICE 再失败就不该报"对称 NAT"了。
+                wsOpen = false
                 scope.launch {
-                    if (_state.value is State.Connected) {
-                        fail("与房主的连接断了：${reason ?: "对方可能已停止分享"}")
-                    } else if (_state.value !is State.Failed) {
-                        fail(reason ?: "连不上房主的手机（可能分享已结束，或网络不允许）")
+                    when (_state.value) {
+                        // 看到过画面 → 中途断的，最可能就是房主点了停止（或隧道到期）。
+                        is State.Connected ->
+                            end("与房主的连接断了：${reason ?: "对方可能已停止分享"}")
+                        // 曾经连上过但还没出画面 → 同样归到"结束"，别让人去查自己网络。
+                        is State.Connecting ->
+                            end(reason ?: "连不上房主的手机（可能分享已结束，或网络不允许）")
+                        is State.Ended, is State.Failed, State.Idle -> Unit
                     }
                 }
             },
@@ -110,6 +135,7 @@ object ViewerSession {
     fun stop() {
         runCatching { ws?.close() }
         ws = null
+        wsOpen = false
         runCatching { peer?.close() }
         peer = null
         runCatching { audioTrack?.dispose() }
@@ -162,7 +188,7 @@ object ViewerSession {
                 if (p == null) pendingRemoteCandidates += c else p.addRemoteCandidate(c)
             }
 
-            "bye" -> fail("房主停止了分享")
+            "bye" -> end("房主结束了分享")
         }
     }
 
@@ -203,7 +229,11 @@ object ViewerSession {
                         PeerConnection.IceConnectionState.FAILED -> {
                             val v = peer?.probe?.verdict()
                             note("ICE 判定：${v?.headline}｜${peer?.probe?.summary()}")
-                            fail(v?.headline ?: "直连失败", v)
+                            // 分诊看的是信令通道还在不在。通道都断了，媒体直连必然撑不住 ——
+                            // 这时候把 verdict（"两边都拿到公网地址却敲不通/对称 NAT"）甩给用户，
+                            // 是拿一个真失败场景才成立的结论去解释一次正常结束，只会误导他去换网络。
+                            if (wsOpen) fail(v?.headline ?: "直连失败", v)
+                            else end("看不到画面了：与房主的连接先断了")
                         }
 
                         PeerConnection.IceConnectionState.DISCONNECTED ->
@@ -265,7 +295,26 @@ object ViewerSession {
         note(reason)
         runCatching { ws?.close() }
         ws = null
+        wsOpen = false
         _state.value = State.Failed(reason, verdict)
+    }
+
+    /**
+     * 正常收场。与 [fail] 的区别只在语义：不画红、不给换网络建议、不摆"重试"那条按钮，
+     * 因为该做的动作是"等房主重新开一次"，不是"你回去查自己网络"。
+     */
+    private fun end(reason: String) {
+        if (_state.value is State.Ended) return   // 再见与 socket 关闭会先后都到
+        note(reason)
+        wsOpen = false
+        runCatching { ws?.close() }
+        ws = null
+        // 轨道与 PeerConnection 必须在这里放掉：留着一个已经收不到包的 pc，
+        // 屏幕还停在"观看"那一层，用户会以为只是画面卡住了。
+        runCatching { peer?.close() }
+        peer = null
+        _remoteVideo.value = null
+        _state.value = State.Ended(reason)
     }
 
     private fun note(msg: String) {

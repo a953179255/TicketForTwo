@@ -43,12 +43,21 @@ def ui():
 
 
 def node(text, contains=True):
-    """按文字找节点。默认**子串**匹配：按钮实际叫「停止分享」，
-    精确等于「停止」是找不到的 —— 上一版就是这么白跑一轮。"""
+    """按文字**或 content-desc** 找节点，默认子串匹配。
+
+    两个坑都是实测踩出来的：
+    1. 按钮实际叫「停止分享」，精确等于「停止」找不到 —— 必须子串匹配。
+    2. 控制岛（ControlIsland）那个停止键是**纯图标**，文字挂在 `content-desc` 上而不是
+       `text` 上（Kit.kt:453 `Icon(Icons.Filled.Stop, contentDescription = "停止分享")`）。
+       只读 text 的话它永远"不存在"，于是脚本会说"找不到停止按钮"，
+       看着像界面坏了，其实是用量具错了。
+    """
     for m in re.finditer(r"<node\b[^>]*/?>", ui()):
         t = m.group(0)
         tx = (re.search(r'text="([^"]*)"', t) or [None, ""])[1]
-        hit = (text in tx) if contains else (tx == text)
+        cd = (re.search(r'content-desc="([^"]*)"', t) or [None, ""])[1]
+        hay = f"{tx} {cd}"
+        hit = (text in hay) if contains else (tx == text or cd == text)
         if not hit:
             continue
         b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', t)
@@ -119,6 +128,10 @@ def main():
     # 3) 判定：日志里出现"忽略本次请求"就是回归；出现新的"邀请链接已就绪"就是修好了
     # 窗口给 75 秒：cloudflared 要跑完 precheck 再注册，实测第二轮从授权完成到出链接
     # 约 7 秒，但隧道冷启动慢的时候能到 30 秒以上 —— 25 秒会误报 FAIL。
+    # ⚠ 判据的字必须跟 CallSession.kt 里的 note() 一字不差，否则**代码是好的、量具说 FAIL**。
+    #   上一版在这里等的是"信令就绪"，而界面上那句早就改成"邀请链接已就绪"
+    #   （CallSession.kt:203），于是第二轮明明正常出链接也照样红 —— 同一个坑这轮已踩三次
+    #   （drive_m0 找"开始分享"、本脚本找"停止"），改 UI 文案时记得回来扫脚本。
     for _ in range(75):
         time.sleep(1)
         now = logs()[len(before):]
@@ -128,13 +141,13 @@ def main():
                 if "CallSession" in line:
                     print("   " + line[-110:])
             return 1
-        if "信令就绪" in now:
+        if "邀请链接已就绪" in now:
             print("\nPASS —— 第二轮真的起来了，新链接已生成")
             for line in now.splitlines():
-                if "信令就绪" in line or "传话员已就位" in line:
+                if "邀请链接已就绪" in line or "传话员已就位" in line:
                     print("   " + line[-110:])
             return 0
-    print("\nFAIL —— 25 秒内第二轮没出链接")
+    print("\nFAIL —— 75 秒内第二轮没出链接")
     return 1
 
 
