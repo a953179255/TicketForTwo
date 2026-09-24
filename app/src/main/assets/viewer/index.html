@@ -284,6 +284,9 @@ function reportFailure(s){
 
 function startStats(){
   if (statsTimer) clearInterval(statsTimer);
+  // 上一轮的累计计数。stats 里 inbound-rtp 的字节数与抖动缓冲延迟都是"从连接开始累加"
+  // 的量，必须两次相减才是这一秒的实测值。
+  let prev = null;
   statsTimer = setInterval(async () => {
     if (!pc) return;
     try {
@@ -294,24 +297,43 @@ function startStats(){
         if (r.type === 'candidate-pair' && r.nominated) pair = r;
       });
       if (inbound) {
+        // 码率与抖动缓冲都要**差分**，两个原因各不同：
+        //  - Chrome 的 inbound-rtp 压根没有 `bitrate` 这个字段（那是 outbound 侧才有的），
+        //    上一版写 `inbound.bitrate||0`，于是右上角永远显示 "0k" —— 看着像没流量。
+        //  - `jitterBufferDelay / jitterBufferEmittedCount` 是**整个会话的累计均值**，
+        //    跑得越久越钝：实测同一段连接它从 236ms 一路滑到 13ms，中间那次抖动尖峰
+        //    全被平均值抹掉了。取两次之间的增量才看得懂"现在"的缓冲。
+        let kbps = 0, jbMs = 0;
+        const dt = prev ? (inbound.timestamp - prev.t) / 1000 : 0;
+        if (dt > 0) {
+          kbps = Math.round(Math.max(0, inbound.bytesReceived - prev.bytes) * 8 / dt / 1000);
+          const emitted = inbound.jitterBufferEmittedCount - prev.emitted;
+          if (emitted > 0) jbMs = 1000 * (inbound.jitterBufferDelay - prev.delay) / emitted;
+        }
+        prev = {
+          t: inbound.timestamp,
+          bytes: inbound.bytesReceived,
+          delay: inbound.jitterBufferDelay,
+          emitted: inbound.jitterBufferEmittedCount,
+        };
         if (window.t2) window.t2.stats = {
           framesDecoded: inbound.framesDecoded,
           fps: inbound.framesPerSecond,
           width: inbound.frameWidth, height: inbound.frameHeight,
-          kbps: Math.round((inbound.bitrate || 0) * 8 / 1000),
-          jitterMs: +(1000 * inbound.jitterBufferDelay / Math.max(1, inbound.jitterBufferEmittedCount)).toFixed(1),
+          kbps: kbps,
+          jitterMs: +jbMs.toFixed(1),
+          bytesReceived: inbound.bytesReceived,
           rttMs: pair && pair.currentRoundTripTime ? Math.round(pair.currentRoundTripTime * 1000) : null,
           connectionState: pc.connectionState,
           iceState: pc.iceConnectionState,
         };
         $('sFps').textContent = Math.round(inbound.framesPerSecond || 0);
-        const jb = ((inbound.jitterBufferDelay / Math.max(1, inbound.jitterBufferEmittedCount)) * 1000);
         const rtt = pair && pair.currentRoundTripTime ? pair.currentRoundTripTime * 1000 : 0;
-        const total = Math.round(jb + rtt / 2);
+        const total = Math.round(jbMs + rtt / 2);
         $('sLat').textContent = total + 'ms';
         $('sNet').innerHTML = bars(total < 250 ? 4 : total < 400 ? 3 : total < 700 ? 2 : 1,
           total < 250 ? 'var(--live)' : total < 400 ? 'var(--warn)' : 'var(--err)') + ' 抖动+单程';
-        $('topRight').textContent = `${inbound.frameWidth}×${inbound.frameHeight} · ${Math.round((inbound.bitrate||0)*8/1000)}k`;
+        $('topRight').textContent = `${inbound.frameWidth}×${inbound.frameHeight} · ${kbps}k`;
       }
     } catch (e) { /* 忽略瞬时统计失败 */ }
   }, 1000);
