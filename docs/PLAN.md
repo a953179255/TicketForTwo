@@ -704,3 +704,44 @@ bug，正是 §16 的教训。跨网结论仍然只能来自真机/异网。
 
 **顺手修的一处语义**：控制岛那颗停止键的 `contentDescription` 原本恒为「停止分享」，
 观众侧其实是"停止观看"。现在按角色分开（`stopDesc`）。
+
+## 21. 观众端连麦一直是坏的，且麦克风改成真正默认关闭（2026-09-25）
+
+两个问题同源。`ViewerSession.ensurePeer` 在连接时就 `addLocalTracks(null, ensureMicTrack())`，
+注释写着"中途加轨需要重新协商，做不到" —— **这句是错的**，而它同时造成两件事：
+
+1. libwebrtc 一建音频源就打开 `AudioRecord`，观众只是看画面，状态栏橙色麦克风灯却一直亮
+   （静音 ≠ 关闭）。这套 AAR 里 `AudioSource` 连 `setEnabled` 都没有，
+   `AudioDeviceModule` 干脆不在 classes.jar 里，没有"只关采集不拆轨"的口子。
+2. 整条观众链路**从没申请过 `RECORD_AUDIO`**（只有房主那条链申请）。于是
+   `ensureMicTrack` 返回 null、轨道根本不存在，而按钮走的是
+   `setMicMuted → audioTrack?.setEnabled(...)`，打在 null 上 ——
+   **图标翻了，什么都没发生**。观众以为自己在说话，房主一个字都收不到。
+   网页端反而是好的（它调 getUserMedia，实测 out:audio 有字节）。
+
+### 改法
+
+连接时**不建音频轨**（answer 里音频退成 recvonly，观众照样听得到房主）；观众第一次点
+「开麦」才：申请权限 → 建轨 → `addTrack` → **由观众主动发一轮 offer** → 房主
+`acceptOffer` 回 answer。谁改媒体谁发起，房主侧只需要多认一条 `"offer"` 分支，
+它的 `Peer` 本来就具备 acceptOffer 能力。复用同一条传输，不换 ICE 候选，所以画面不断。
+兜底：8 秒等不到 answer 就明说"房主版本太旧"，别让人对着亮着的麦克风图标说话。
+
+### 实测（t2test 分享 → t2view 收看，先 `pm revoke` 模拟新用户）
+
+| 检查 | 结果 |
+| --- | --- |
+| 默认是否关 | 房主日志**没有**「收到对方音频轨」；`appops` 显示 `RECORD_AUDIO: ignore` |
+| 点「开麦」 | 权限弹窗出现（以前从来不弹，这就是 bug 本身） |
+| 授权后 | 观众 `正在把麦克风加进这条连接…` → `麦克风已接入`（0.8 秒）；房主 `观众要加麦克风，重新协商中` → **`收到对方音频轨`** |
+| 按钮态 | 开麦后变「静音」（发言中），再点回「取消静音」 |
+| 画面 | ICE 异常 0 条，亮度均值 35.4 → 35.3，协商没有打断视频 |
+
+⚠ 中途自己埋的一个必现 bug 记下来：`enableMic` 先建轨、后 `_micMuted.value = false`，
+而 `ensureMicTrack` 里写死 `setEnabled(false)` —— 顺序一错就留下"已加入连接但永远发静音"
+的轨道，房主收得到、听不见。现在开关只有一处生效（`setMicMuted` 同时改状态与轨道）。
+还有 `micLive` 原本是 `get() = audioTrack != null` 的普通字段，Compose 不为它重组，
+于是麦克风已接入、按钮还停在「取消静音」—— 状态就得是 StateFlow，不能让组合去猜。
+
+**仍未验：** 真机上的回声表现（外放时观众的声音会不会回到观众自己的麦克风）——
+这属于 §10 那笔连麦外放的欠账，要真人耳朵或两台真机。

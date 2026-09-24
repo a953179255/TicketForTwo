@@ -124,6 +124,18 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     val viewerMicMuted by ViewerSession.micMuted.collectAsState()
     val viewerLandscape by ViewerSession.contentLandscape.collectAsState()
     val viewerOrient by ViewerSession.orientationMode.collectAsState()
+    val viewerMicPending by ViewerSession.micPending.collectAsState()
+    val viewerMicLive by ViewerSession.micLive.collectAsState()
+
+    // 观众侧的麦克风权限。以前整条观众链路从没申请过它 —— 于是 ensureMicTrack
+    // 永远返回 null，点「开麦」只翻图标。默认不申请是对的（只看画面不该开麦），
+    // 但点了就必须把权限要下来，所以这一条挂在按钮上，而不是挂在进入观看时。
+    val viewerMicGrant = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) ViewerSession.enableMic(context)
+        else context.toast("没给麦克风权限：只能看画面，说不了话")
+    }
     remember { ViewerSession.setOrientationMode(context.prefs().orientationMode()); Unit }
 
     var showConsent by remember { mutableStateOf(false) }
@@ -416,8 +428,15 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 remoteTrack = viewerVideo,
                 isHost = false,
                 peerLabel = "已直连",
-                micOn = !viewerMicMuted,
-                onToggleMic = { ViewerSession.setMicMuted(!viewerMicMuted) },
+                micOn = viewerMicLive && !viewerMicMuted,
+                onToggleMic = {
+                    if (!viewerMicLive && !granted(context, Manifest.permission.RECORD_AUDIO)) {
+                        viewerMicGrant.launch(Manifest.permission.RECORD_AUDIO)
+                    } else {
+                        ViewerSession.toggleMic(context)
+                        if (!viewerMicLive) context.toast("开麦中，约一秒…")
+                    }
+                },
                 latencyMs = null,
                 netLabel = "直连",
                 onContentResolution = { w, h -> ViewerSession.onContentResolution(w, h) },

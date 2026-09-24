@@ -228,6 +228,7 @@ object ViewerSession {
         peer = null
         runCatching { audioTrack?.dispose() }
         audioTrack = null
+        _micLive.value = false
         runCatching { audioSource?.dispose() }
         audioSource = null
         pendingRemoteCandidates.clear()
@@ -235,6 +236,22 @@ object ViewerSession {
         _contentLandscape.value = null
         _micMuted.value = true
         _state.value = State.Idle
+    }
+
+    /**
+     * 界面上那颗麦克风按钮的唯一入口。
+     *
+     * 上一版按钮直接调 [setMicMuted]，而它做的是 `audioTrack?.setEnabled(...)` ——
+     * 轨道还没建时打在 null 上，**图标翻了、什么都没发生**，观众以为自己在说话。
+     * 现在：没开过麦就走 enableMic（申请权限 + 建轨 + 重新协商），开过就只是静音。
+     */
+    fun toggleMic(context: Context) {
+        if (audioTrack == null) {
+            if (_micPending.value) return      // 正在协商，别重复点
+            enableMic(context)
+        } else {
+            setMicMuted(!_micMuted.value)      // 已经有轨：只是静音 / 取消静音
+        }
     }
 
     fun setMicMuted(muted: Boolean) {
@@ -278,6 +295,19 @@ object ViewerSession {
             }
 
             "bye" -> end("房主结束了分享")
+
+            // 观众开麦后会主动发一轮 offer，房主的回信走这里。
+            // 这是新支路：老版房主不认识观众发来的 offer，也就不会有这条 answer，
+            // 所以 enableMic 里那 8 秒超时是必要的兜底。
+            "answer" -> {
+                val sdp = obj.optString("sdp")
+                if (sdp.isEmpty()) return
+                peer?.acceptAnswer(sdp)
+                if (_micPending.value) {
+                    _micPending.value = false
+                    note("麦克风已接入，可以说话了")
+                }
+            }
         }
     }
 
@@ -350,12 +380,71 @@ object ViewerSession {
             },
         )
         p.open()
-        // 观众的麦克风：连接时就带上轨道（静音），这样 answer 里的方向是 sendrecv，
-        // 房主才收得到 —— 与房主侧同一个道理，中途加轨需要重新协商，做不到。
-        val mic = ensureMicTrack(context)
-        p.addLocalTracks(null, mic)
+        // 观众的麦克风**不在连接时创建**。上一版在这里就 addTrack，注释还写着
+        // "中途加轨需要重新协商，做不到" —— 那句话是错的，而代价是两个真问题：
+        // ① libwebrtc 一建音频源就打开 AudioRecord，观众只是看个画面，
+        //    手机状态栏的橙色麦克风灯却一直亮着（静音 ≠ 关闭）；
+        // ② 观众链路从没申请过 RECORD_AUDIO，于是 ensureMicTrack 返回 null、
+        //    轨道根本不存在，点「开麦」只是把图标翻了一下 —— 连麦一直是坏的。
+        // 现在改成：不建轨（answer 里音频方向退成 recvonly，观众照样听得到房主），
+        // 等观众真去点「开麦」时再建轨 + 由观众主动发一轮重新协商（见 enableMic）。
         peer = p
         return p
+    }
+
+    // ---- 麦克风：默认关闭，第一次点「开麦」才建轨 --------------------------
+
+    /** 点「开麦」之后、房主应答之前的中间态。界面用它画"开麦中…"。 */
+    private val _micPending = MutableStateFlow(false)
+    val micPending: StateFlow<Boolean> = _micPending.asStateFlow()
+
+    /**
+     * 有没有一条真正在发的音频轨。
+     *
+     * 必须是 StateFlow 而不是 `get() = audioTrack != null`：实测踩过 —— 普通字段参与
+     * 组合，Compose 不会为它重组，于是麦克风明明已经接入，按钮还停在「取消静音」，
+     * 用户以为自己没开成功。状态就得是状态，不能让组合去猜。
+     */
+    private val _micLive = MutableStateFlow(false)
+    val micLive: StateFlow<Boolean> = _micLive.asStateFlow()
+
+    /**
+     * 观众主动发起一轮重新协商，把自己的麦克风加进去。
+     *
+     * 为什么由观众发 offer：改的是观众这一侧的媒体，谁变谁发，房主只需要照着答；
+     * 房主侧 [Peer] 本来就同时具备 acceptOffer 能力（角色只决定第一次是谁发起）。
+     * 协商期间画面不受影响 —— 复用同一条传输，不换 ICE 候选。
+     */
+    fun enableMic(context: Context) {
+        if (peer == null) {
+            note("还没连上房主，开不了麦")
+            return
+        }
+        if (audioTrack != null) {
+            setMicMuted(false)
+            return
+        }
+        _micPending.value = true
+        if (ensureMicTrack(context) == null) {
+            // 权限没给。这里必须说清楚，否则用户以为"点了没反应"是 App 坏了。
+            note("未授予麦克风权限：只能看画面，说不了话")
+            return
+        }
+        // 开关只有一处生效：setMicMuted 同时改状态与轨道，
+        // 分两处写就会留下"状态说开了、轨道其实没开"的静音假连接。
+        setMicMuted(false)
+        peer?.addLocalTracks(null, audioTrack)
+        peer?.startOffer()
+        note("正在把麦克风加进这条连接…")
+        // 房主版本太旧会不认识观众发来的 offer，于是永远等不到 answer。
+        // 给 8 秒：到点就把状态说破，别让人对着一个亮着的麦克风图标说话。
+        scope.launch {
+            delay(8_000)
+            if (_micPending.value) {
+                _micPending.value = false
+                note("房主没能接收麦克风：请让他更新 App 后重新分享")
+            }
+        }
     }
 
     private fun ensureMicTrack(context: Context): AudioTrack? {
@@ -368,9 +457,12 @@ object ViewerSession {
         }
         val src = RtcEngine.factory.createAudioSource(MediaConstraints()) ?: return null
         val track = RtcEngine.factory.createAudioTrack("mic", src)
-        track.setEnabled(false)   // 观众默认静音，点麦克风按钮才发言
+        // 跟着 _micMuted 走，别写死 false：写死就把"要不要发声音"这个决定
+        // 复制到了两个地方，调用方一改顺序就会悄悄变成常发静音（房主收得到、听不见）。
+        track.setEnabled(!_micMuted.value)
         audioSource = src
         audioTrack = track
+        _micLive.value = true
         return track
     }
 

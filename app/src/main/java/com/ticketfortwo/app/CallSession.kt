@@ -219,6 +219,16 @@ object CallSession {
         when (obj.optString("t")) {
             "hello" -> onViewerJoined()
 
+            // 观众开麦克风时会主动发一轮 offer（谁改媒体谁发起）。
+            // 这里的 acceptOffer 会顺着 createAnswer → onLocalDescription(Answer)
+            // 把应答发回去，用的还是同一条传输，画面不会中断。
+            "offer" -> {
+                val sdp = obj.optString("sdp")
+                if (sdp.isEmpty()) return
+                note("观众要加麦克风，重新协商中")
+                peer?.acceptOffer(sdp)
+            }
+
             "answer" -> {
                 val sdp = obj.optString("sdp")
                 if (sdp.isNotEmpty()) {
