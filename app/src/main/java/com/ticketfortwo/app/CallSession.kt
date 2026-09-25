@@ -321,6 +321,20 @@ object CallSession {
     private fun onViewerJoined() {
         if (_role.value != Role.Host) return
         val context = sessionContext ?: return
+
+        // 信令重连：观众那边只是经隧道的 WS 断了，P2P 通道还活着。
+        // 这里若无条件重建 peer，等于把一通正在放画面的通话拆掉重来 —— 观众会看到
+        // 画面黑一下甚至直接失败。所以先问一句"手上这条还健康吗"，健康就只把新 socket 接上
+        // （SignalHub 会把 viewer 换成新连接，消息通道立刻恢复）。
+        val live = peer
+        if (live != null &&
+            live.connectionState == org.webrtc.PeerConnection.IceConnectionState.CONNECTED
+        ) {
+            note("观众信令重连，画面不断")
+            _state.value = State.Connected
+            return
+        }
+
         note("观众已加入，开始建立直连")
         _state.value = State.Connecting
 

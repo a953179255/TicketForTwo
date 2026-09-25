@@ -130,12 +130,28 @@ def main():
         print("找不到开始分享的入口按钮，界面：", [n["text"] for n in nodes(s) if n["text"]][:10])
         return 1
     print("== tap 开始分享 ==")
-    tap(start["cx"], start["cy"])
-    time.sleep(2)
+    # 这一颗要**能重试**：慢的时候（三台模拟器 + headless Chrome 一起抢 CPU）
+    # 点击会落在 AnimatedContent 的转场中间被吞掉，界面还停在首页，
+    # 于是脚本往下找系统对话框、找不到、报"界面坏了"——上一轮就是这么白查的。
+    # 判据用"首页那颗按钮还在不在"：还在就说明这一下没生效，再点一次。
+    consent = None
+    for attempt in range(3):
+        tap(start["cx"], start["cy"])
+        time.sleep(2)
+        # 玻璃化之后多了一屏"授权指引"（ConsentGuideScreen）：系统会连着问两件事，
+        # 不先讲清楚"要选整个屏幕"，用户十次有三次会选成单应用，然后以为 App 坏了。
+        # 按钮文案认两种：完整句「我知道了，继续」和简写「继续」——
+        # 只认一种时改版一次脚本就瞎一次。
+        s, consent = wait_for(
+            lambda x: find(x, text="我知道了，继续") or find(x, text="继续"),
+            tries=5,
+        )
+        if consent:
+            if attempt:
+                print(f"   第 {attempt + 1} 次点击才生效（前几次被转场吞了）")
+            break
+        print("   这点没生效，界面还在首页 → 再点一次")
 
-    # 玻璃化之后多了一屏"授权指引"（ConsentGuideScreen）：系统会连着问两件事，
-    # 不先讲清楚"要选整个屏幕"，用户十次有三次会选成单应用，然后以为 App 坏了。
-    s, consent = wait_for(lambda x: find(x, text="我知道了，继续"), tries=6)
     if consent:
         shot("02-consent")
         print("== 授权指引 → tap 我知道了，继续 ==")

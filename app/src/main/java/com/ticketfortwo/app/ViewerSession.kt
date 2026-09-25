@@ -187,6 +187,17 @@ object ViewerSession {
     @Volatile
     private var everOpened = false
 
+    /** 重连信令要用的三样东西：地址、上下文、"是不是已经在自救"。 */
+    private var lastWsUrl: String? = null
+    private var appContext: Context? = null
+
+    /** 挡住 onClosed 的递归：我们自己关旧 socket 也会回调它。 */
+    @Volatile
+    private var reconnecting = false
+
+    /** 信令重连的次数上限。房主真停了就不该无限重连下去。 */
+    private val reconnectTries = 4
+
     /** 远端描述就绪前先攒着的候选（顺序错了 addIceCandidate 会抛）。 */
     private val pendingRemoteCandidates = mutableListOf<IceCandidate>()
 
@@ -197,6 +208,7 @@ object ViewerSession {
     fun start(context: Context, inviteUrl: String) {
         stop()
         everOpened = false
+        appContext = context.applicationContext
         RtcEngine.init(context)
 
         val wsUrl = wsUrlOf(inviteUrl)
@@ -204,26 +216,40 @@ object ViewerSession {
             fail("链接看不懂：需要形如 https://xxx/?k=凭证 的邀请链接")
             return
         }
+        lastWsUrl = wsUrl
 
         _state.value = State.Connecting("正在连接房主的手机…")
+        openSocket()
+    }
 
+    /**
+     * 建一条信令通道；重连也走这里，所以回调里那套判断只有一份。
+     *
+     * `onOpen` 会重新发一次 hello —— 这正是房主那边"认回同一条通话"的信号，
+     * 那边看到 peer 还健康就只是把新 socket 接上，不会重建通话。
+     */
+    private fun openSocket() {
+        val url = lastWsUrl ?: return
         val client = WsClient(
-            url = wsUrl,
+            url = url,
             onOpen = {
                 wsOpen = true
                 everOpened = true
                 note("通道已建立，正在向房主打招呼")
                 send(JSONObject().apply { put("t", "hello"); put("role", "viewer") }.toString())
             },
-            onText = { text -> scope.launch { onMessage(context, text) } },
+            onText = { text ->
+                val c = appContext
+                if (c != null) scope.launch { onMessage(c, text) }
+            },
             onClosed = { reason ->
                 // 通道一没，wsOpen 立刻归零：之后 ICE 再失败就不该报"对称 NAT"了。
                 wsOpen = false
                 scope.launch {
                     when (_state.value) {
-                        // 看到过画面 → 中途断的，最可能就是房主点了停止（或隧道到期）。
-                        is State.Connected ->
-                            end("与房主的连接断了：${reason ?: "对方可能已停止分享"}")
+                        // 看到过画面 → 信令断了**不等于**通话该结束：媒体是 P2P 的，
+                        // 跟这条经隧道走的 WS 没关系。先抢救（重连信令），救不回来才收场。
+                        is State.Connected -> if (!reconnecting) rescueSignaling(reason)
                         // 曾经连上过但还没出画面 → 同样归到"结束"，别让人去查自己网络。
                         is State.Connecting ->
                             if (everOpened) end(reason ?: "连不上房主的手机（可能分享已结束）")
@@ -239,11 +265,52 @@ object ViewerSession {
         client.connect()
     }
 
+    /**
+     * 信令断了之后的抢救：画面还在动就别结束，退避着重连信令。
+     *
+     * 为什么值得做：Cloudflare quick tunnel 会回收它认为空闲的连接，
+     * 实测连上后双方什么都不干，t=121s 两侧同时 `ice=CLOSED`（房主以为观众走了、
+     * 观众以为房主停了），一通健康的 P2P 通话就这么被一条信令通道拖死。
+     * 心跳（见 SignalHub）把空闲压掉了，但隧道偶发掉线仍然会来 —— 这里兜第二层。
+     *
+     * 三条边界：① 只在 ICE 还健康时重试，媒体已经断了就如实结束，不假装能救；
+     * ② 有界（[RECONNECT_TRIES] 次），不做无限重连，否则房主真停了就一直挂着；
+     * ③ 期间 `reconnecting` 挡住 onClosed 的递归 —— 我们自己关旧 socket 也会回调它。
+     */
+    private fun rescueSignaling(reason: String?) {
+        val url = lastWsUrl
+        if (!shouldRescue(everOpened, url != null, peer?.connectionState)) {
+            end(reason ?: "与房主的连接断了")
+            return
+        }
+        reconnecting = true
+        scope.launch {
+            for (i in 0 until reconnectTries) {
+                if (!shouldRescue(everOpened, lastWsUrl != null, peer?.connectionState)) break
+                delay(2_000)
+                if (wsOpen) { reconnecting = false; note("信令自己回来了"); return@launch }
+                note("信令断了，画面还在 —— 第 ${i + 1} 次重连…")
+                runCatching { ws?.close() }
+                openSocket()
+                delay(2_500)
+                if (wsOpen) {
+                    reconnecting = false
+                    note("信令已重连，画面继续")
+                    return@launch
+                }
+            }
+            reconnecting = false
+            if (!wsOpen) end(reason ?: "与房主的信令断了")
+        }
+    }
+
     fun stop() {
         runCatching { ws?.close() }
         ws = null
         wsOpen = false
         everOpened = false
+        lastWsUrl = null
+        reconnecting = false
         runCatching { peer?.close() }
         peer = null
         runCatching { audioTrack?.dispose() }
