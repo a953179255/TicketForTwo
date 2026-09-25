@@ -782,6 +782,7 @@ function loadLocal(st) {
         cineHls = new Hls({ enableWorker: true, lowLatencyMode: false });
         cineHls.loadSource(st.url);
         cineHls.attachMedia(lv);
+        watchCineProgress();
         cineHls.on(Hls.Events.ERROR, (e, d) => {
           if (!d || !d.fatal) return;
           /* 把 HTTP 状态一起报回去：403/404 是防盗链或地址过期，0/-1 是
@@ -822,11 +823,7 @@ function loadLocal(st) {
   /* 看门狗：光等 `error` 事件不够 —— 签名过期、被 CDN 静默限速、需要会员的站点，
      往往是不报错、就是不出画面。8 秒没首帧就自己退回屏幕流，
      否则观众对着一块黑以为是自己网卡。 */
-  if (cineWatch) clearTimeout(cineWatch);
-  cineWatch = setTimeout(() => {
-    // 等人点一下的时候不停表：那时候"没画面"是我们自己没播，不是流坏了
-    if (cine && !cineReady && !cineAwaitTap) cineDown('这条流 8 秒没出画面', true, 'timeout');
-  }, 8000);
+  armCineWatchdog(8000);
 }
 
 /* play() 被拒 ≠ "浏览器要用户手势"。地址过期、格式不认识、CDN 直接断开
@@ -844,6 +841,25 @@ function startCinePlayback(){
       return;
     }
     askCinePlay();
+  });
+}
+
+/* 看门狗：光等 `error` 事件不够 —— 签名过期、被 CDN 静默限速、需要会员的站点，
+   往往是不报错、就是不出画面。8 秒没首帧就自己退回屏幕流，
+   否则观众对着一块黑以为是自己网卡。
+   但"慢"和"死"要分得开：只要 hls.js 还在推进（清单/分片不断到达），就把截止时间
+   往后推一段 —— 手机上实测过一条 mux 流 8 秒内没出首帧但其实一直在加载，
+   固定 8 秒会把这种"慢"报成"放不出"。 */
+function armCineWatchdog(ms){
+  if (cineWatch) clearTimeout(cineWatch);
+  cineWatch = setTimeout(() => {
+    // 等人点一下的时候不停表：那时候"没画面"是我们自己没播，不是流坏了
+    if (cine && !cineReady && !cineAwaitTap) cineDown('这条流一直没出画面', true, 'timeout');
+  }, ms);
+}
+function watchCineProgress(){
+  ['MANIFEST_PARSED', 'LEVEL_LOADED', 'FRAG_LOADED'].forEach(name => {
+    cineHls.on(Hls.Events[name], () => { if (cine && !cineReady) armCineWatchdog(6000); });
   });
 }
 
