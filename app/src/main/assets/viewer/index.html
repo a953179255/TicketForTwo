@@ -216,6 +216,10 @@ const video = $('v');
 
 let ws = null, pc = null, micTrack = null, micStream = null, micOn = false, micBusy = false, statsTimer = null;
 let gotVideo = false, voiceTimer = null;
+/* 建过几条 RTCPeerConnection。**用来量"复用有没有生效"**：
+   房主中途开画面会再发一份 offer，走复用的话这个数应该一直是 1；
+   一旦 >1，就是老毛病复发（新建一条 = 把正在跑的连麦整条丢掉、旧的还挂着）。 */
+let pcSeq = 0;
 /** 远端描述还没就绪时先攒着候选 —— 顺序错了 addIceCandidate 会抛错。 */
 let pendingCands = [];
 let closedByUs = false;
@@ -323,6 +327,7 @@ async function startPeer(offerSdp){
     return;
   }
   pc = new RTCPeerConnection({ iceServers: STUN, bundlePolicy:'max-bundle', rtcpMuxPolicy:'require' });
+  pcSeq++;
   // 调试钩子：模块作用域里的 pc 从外部读不到，量测需要能查连接状态与统计。
   window.t2 = { pc, video, stats: null, fail: null };
 
@@ -1241,6 +1246,9 @@ if (_q.get('report') === '1') {
       const payload = {
         at: Date.now(),
         conn: pc && pc.connectionState, ice: pc && pc.iceConnectionState,
+        // 重新协商的判据：pcSeq 必须还是 1（复用了同一条），而画面已经解码出尺寸。
+        pcSeq: pcSeq, gotVideo: gotVideo,
+        vW: video.videoWidth, vH: video.videoHeight,
         stats: window.t2 && window.t2.stats,
         panelHidden: $('panel').classList.contains('hide'),
         // 只报"面板出没出现"分不出"正常结束"和"连不上"这两类，而这次的缺陷恰恰是

@@ -532,13 +532,19 @@ v2.1 的主体结构就是"先开放映厅、对方先进来、房主再决定�
 **观众侧还有一处同源的**（网页端，`assets/viewer/index.html`）：`startPeer` 每次收到 offer
 都 `new RTCPeerConnection` ⇒ 房主中途开画面时，浏览器把正在跑的连麦整条丢掉、旧 pc 还挂着不关。
 改成"有活着的 pc 就复用"（新增 `renegotiate()`：setRemote → createAnswer → 回发）。
-⚠ 这一条**只做了 `node --check` 与逻辑推演**：初进房那份 offer 时 `pc` 还是 null，
-走的仍是原路径，所以不会把主流程变坏；但"复用分支真的把画面接上来"还没在无头 Edge 里端到端验过。
+**这一条也端到端验过了**（`scripts/drive_web_renegotiate.py`，无头 Edge + 页面自己
+POST 回来的统计）：进厅时 `pcSeq=1 / vW=0`（厅里确实只有语音），房主按「让他看我的屏幕」
+并过完系统弹窗之后，同一份统计变成 **`vW=540x1200`、`conn=connected`、`pcSeq` 仍是 1**
+⇒ 画面接上来了，而且**没有新建第二条连接**（`pcSeq` 就是为这一句加的计数器：
+一旦 >1 就是老毛病复发，连麦会被那次重建丢掉）。
 
-**回归**：新增 `scripts/check_share_after_join.py`（前置 = `open_room.py` +
-`drive_app_viewer.py --keep-sharing`），四条判据全绿才算通：
-房主日志「画面已接上」/ 观众 `first frame` / 观众截图均值 > 20 / 房主顶栏翻成「正在分享」。
-本轮实测 `PASS`（均值 36.0）。63 条单测 0 失败。
+**回归**：两条脚本各管一条观众路径，前置都是 `scripts/open_room.py`。
+- App 内观众：`check_share_after_join.py`（再配 `drive_app_viewer.py --keep-sharing`），
+  四条判据 —— 房主日志「画面已接上」/ 观众 `first frame` / 观众截图均值 > 20 /
+  房主顶栏翻成「正在分享」。本轮实测 `PASS`（均值 36.0）。
+- 网页观众：`drive_web_renegotiate.py`，判据是页面统计里的 `vW>0` 且 `pcSeq==1` 且没有 `failed`。
+  本轮实测 `PASS`（540x1200）。
+63 条单测 0 失败。
 
 ---
 
