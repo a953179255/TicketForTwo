@@ -986,7 +986,10 @@ function paintCine(drift) {
   document.getElementById('cTitle').textContent = cine.title || '一起看';
   const perm = document.getElementById('cPerm');
   perm.textContent = cine.allow ? '可控制' : '仅观看';
-  perm.className = 'chip' + (cine.allow ? ' g' : '');
+  /* class 名要和样式表对得上：这里原来写的是 ' g'，而 CSS 里只有 `.chip.ok`
+     （同看条那句就是 ' ok'）。于是房主明明放开了控制，观众那颗"可控制"却是灰的，
+     读起来像"不能按" —— 一个能力被自己的样式藏起来了。 */
+  perm.className = 'chip' + (cine.allow ? ' ok' : '');
   document.getElementById('cPlay').textContent = cine.playing ? '❚❚' : '▶';
   /* 没出画面之前不报时间：显示一个"0:00 / 10:34"会让人以为进度坏了，
      其实只是还没接上；Δ 也一样 —— 没同步过时它是个几千毫秒的假数字。 */

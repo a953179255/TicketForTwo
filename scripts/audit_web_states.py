@@ -138,6 +138,20 @@ def main():
                     break
                 time.sleep(0.8)
             a, shown, problems = audit(cdp)
+            # "可控制"必须看着就像可控制：房主放开进度时这颗 chip 要带 ok 类（绿色）。
+            # 之前它写成了一个 CSS 里根本不存在的 class 名（' g'），能力被样式藏住了。
+            r = cdp.eval("JSON.stringify([document.getElementById('cPerm').className,"
+                         "getComputedStyle(document.getElementById('cPerm')).color])")
+            v = (r.get("value") if isinstance(r, dict) else r) or "[]"
+            try:
+                cls, color = json.loads(v)
+            except Exception:
+                cls, color = "", ""
+            print(f"   权限徽章：class={cls!r} color={color}")
+            # 判据用**类名集合**，不要拿字符串去 in —— className 是整串 "chip ok"，
+            # 上一版找 '"ok"' 永远找不到，把一次修好的东西报成三条 STYLE 假警。
+            if "ok" not in cls.split():
+                problems.append("STYLE    可控制的 chip 没拿到 ok 类（看着像不能按）")
             for e in shown:
                 print(f"   ✓ {e['id']:9} [{e['x']:4},{e['y']:4}] {e['w']:4}x{e['h']:<4} {e['text'][:24]!r}")
             r = cdp.call("Page.captureScreenshot", {"format": "png"})
