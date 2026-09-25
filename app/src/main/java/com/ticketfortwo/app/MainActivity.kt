@@ -266,19 +266,6 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     /** 从「分享 → 双人票」递进来的链接；非空就直接开厅放这一页。 */
     val sharedUrl by CinemaIntents.pending.collectAsState()
     var cinemaUrl by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) {
-        // 冷启动时 onNewIntent 不会走，只能从 Activity 手里那份 intent 捞
-        CinemaIntents.fromActivity(context as? android.app.Activity)?.let {
-            cinemaUrl = it
-            showCinema = true
-        }
-    }
-    LaunchedEffect(sharedUrl) {
-        val u = sharedUrl ?: return@LaunchedEffect
-        cinemaUrl = u
-        showCinema = true
-        CinemaIntents.consume()
-    }
     var paste by remember { mutableStateOf("") }
     var viewerError by remember { mutableStateOf<String?>(null) }
 
@@ -386,6 +373,34 @@ private fun AppRouter(backdrop: LayerBackdrop) {
         }
         startAudioOnlyHost()
         showCinema = true
+    }
+
+    /**
+     * 「分享 → 双人票」递进来一条链接时：**开厅**，再进这一屏。
+     *
+     * 原来这两处只写了 `showCinema = true`，于是链接是打开了，**厅却没开** ——
+     * 没有邀请链接、没有信令，卡片上"复制邀请"那一行根本不出现，而顶栏还写着
+     * "厅已开 · 等对方进来"。实测（.dev/title-01-host.png）：从分享入口进来时
+     * 嗅到了 1 条可播地址，可观众那边连门都没有。上面那句"非空就直接开厅放这一页"
+     * 才是本意，这里把它补成事实。
+     *
+     * `showCinema = true` 在 openCinema 之后无条件执行：麦克风权限没给时
+     * openCinema 会停在授权那一步，但用户递进来的那一页不该因此被吞掉。
+     */
+    fun enterCinema(url: String) {
+        cinemaUrl = url
+        openCinema()
+        showCinema = true
+    }
+
+    LaunchedEffect(Unit) {
+        // 冷启动时 onNewIntent 不会走，只能从 Activity 手里那份 intent 捞
+        CinemaIntents.fromActivity(context as? android.app.Activity)?.let { enterCinema(it) }
+    }
+    LaunchedEffect(sharedUrl) {
+        val u = sharedUrl ?: return@LaunchedEffect
+        enterCinema(u)
+        CinemaIntents.consume()
     }
 
     val hostNotifGrant = rememberLauncherForActivityResult(

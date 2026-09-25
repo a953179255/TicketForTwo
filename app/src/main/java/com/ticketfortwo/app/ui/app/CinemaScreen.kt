@@ -471,7 +471,12 @@ fun CinemaScreen(
                 Column(Modifier.width(320.dp).fillMaxHeight()) {
                     addressRow(Modifier)
                     actionRow()
-                    panel(Modifier.weight(1f).padding(bottom = 6.dp))
+                    /* weight(1f, fill = false)：让卡片**贴着内容长**，但最多只到栏底。
+                       给满 weight(1f) 的实测结果是下面一大块空黑玻璃
+                       （.dev/land-01-cinema.png），内容只有三四行却被拉去填满剩余高度；
+                       完全不给 weight 又会在展开嗅探时把最后一行顶出屏幕外没得滚。
+                       fill=false 同时满足两条：短的时候不撑，长的时候封顶并可滚。 */
+                    panel(Modifier.weight(1f, fill = false))
                 }
             }
         } else {

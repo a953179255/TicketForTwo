@@ -25,6 +25,14 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import t2device  # noqa: E402
 
+# 控制台是 GBK 时，打印节点里的 ✓ / ❌ 会 UnicodeEncodeError —— 整个审计在
+# "已经量完、正要报结果"那一步崩掉，看着像脚本坏了（实测踩过）。
+# 判据本身和编码无关，所以这里只把输出换成"能编就编、不能编就替换"。
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 ADB = os.environ.get("ADB", "adb")
 PKG = "com.ticketfortwo.app"
 
@@ -164,7 +172,11 @@ def main():
         # 不是被裁 —— 上一版一屏报了六条假的 SQUISHED。
         if (n["y2"] - n["y1"]) <= 0 or (n["x2"] - n["x1"]) <= 0:
             continue
-        if tall and (n["y2"] - n["y1"]) < tall * 0.45:
+        # 还要过一道**绝对下限**：本 App 最小的正文是 9.5sp（约 25px @1080 高），
+        # 而这一屏里 12sp 的中位行高是 63px —— 只按"不到中位数 45%"判，
+        # 那些**故意做小**的辅助行（放映厅卡上的"只有视频声"，27px）会被报成被裁，
+        # 而截图上它清清楚楚是一整行。真正的被裁是"3px 只剩一条边"那种。
+        if tall and (n["y2"] - n["y1"]) < tall * 0.45 and (n["y2"] - n["y1"]) < 26 * h / 1080:
             problems.append(
                 f"SQUISHED {n['text'][:20]!r} 高 {n['y2'] - n['y1']}px，同屏正常文本 {tall}px —— 被裁了")
     for i in range(len(ns)):

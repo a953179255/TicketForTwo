@@ -34,12 +34,19 @@ data class ShareQuality(
     /** 分辨率档的用户文案。**必须带屏宽** —— 见 [resolutionLabelFor]。 */
     fun resolutionLabel(screenWidthPx: Int): String = resolutionLabelFor(scale, screenWidthPx)
 
-    /** 首页与设置页一行摘要。 */
-    fun summary(screenWidthPx: Int): String = if (!videoEnabled) {
-        VoiceMode.label(voiceMode)
-    } else {
-        "${VoiceMode.label(voiceMode)} · ${resolutionLabel(screenWidthPx)} · $fps 帧 · ${bpsLabel(maxVideoBps)}"
-    }
+    /** 首页与设置页一行摘要：声音档在最前，因为它才是"这场会怎样"的第一答案。 */
+    fun summary(screenWidthPx: Int): String =
+        if (videoEnabled) "${VoiceMode.label(voiceMode)} · ${pictureSummary(screenWidthPx)}"
+        else VoiceMode.label(voiceMode)
+
+    /**
+     * 只有画质那半截（"720p · 30 帧 · 2.0 Mbps"）。
+     *
+     * 首页的信息卡把声音和画质拆成两行放，所以这里要一个不带声音档的版本 ——
+     * 别在 UI 里再手拼一遍"分辨率 · 帧率 · 码率"，那正是设置页曾经出现两套算法的地方。
+     */
+    fun pictureSummary(screenWidthPx: Int): String =
+        "${resolutionLabel(screenWidthPx)} · $fps 帧 · ${bpsLabel(maxVideoBps)}"
 
     /**
      * 流量上限估算（MB/分钟）。1 Mbps = 7.5 MB/分钟，按码率上限算 —— 实际通常更低，

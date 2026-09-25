@@ -1,6 +1,7 @@
 package com.ticketfortwo.app.ui.app
 
 import android.content.Context
+import android.content.pm.PackageManager
 import android.view.WindowManager
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -84,8 +85,12 @@ fun HomeScreen(
     // 横屏（含平板、折叠屏展开）单独一套排法，见下面 wideHome 的两处分支。
     // 判据用**屏幕**长宽比，不用某一块容器的：信息卡那边也要同一个结论，
     // 两处各算各的会出现"圆并排了、信息卡还竖着堆三行"的半吊子布局。
+    val context = LocalContext.current
     val cfg = LocalConfiguration.current
     val wideHome = cfg.screenWidthDp > cfg.screenHeightDp
+    // 不 remember：授权之后这一屏要立刻改口，而 remember 会把"未授权"钉在屏幕上。
+    val micGranted = context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+        PackageManager.PERMISSION_GRANTED
 
     PageScaffold {
         Headline("双人票", "把你的屏幕，变成你和朋友的私人影院。")
@@ -185,9 +190,17 @@ fun HomeScreen(
         // 圆放大到 160dp 后垂直空间变紧，这里的内边距与行距各收一档。
         GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
             val info = buildList {
-                add("分享画质" to quality.summary(rememberScreenWidthPx()))
-                if (quality.videoEnabled) add("流量上限" to "约 ${quality.estMbPerMinute()} MB/分钟")
-                add("麦克风" to "开")
+                add("声音" to VoiceMode.label(quality.voiceMode))
+                if (quality.videoEnabled) {
+                    add("分享画质" to quality.pictureSummary(rememberScreenWidthPx()))
+                    add("流量上限" to "约 ${quality.estMbPerMinute()} MB/分钟")
+                }
+                /* 「麦克风 开」这一行以前是**写死的**，跟真实权限、跟声音档都没关系。
+                   现在多了「只有视频声」这一档（放映厅里对方本地播时麦克风会被自动关掉），
+                   这句假话就更容易误导人 —— 首页也说不出"这场麦克风到底开不开"，
+                   因为那要等对方的回执才知道。所以这里只说唯一一件首页能确定的事：
+                   权限给没给。*/
+                add("麦克风" to if (micGranted) "已授权" else "未授权（不能连麦）")
                 if (lastSummary != null) add("上次连接" to lastSummary)
             }
             if (wideHome) {
