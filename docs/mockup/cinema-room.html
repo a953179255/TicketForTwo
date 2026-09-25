@@ -153,12 +153,13 @@ input[type=range]{width:150px;accent-color:var(--live)}
 </head>
 <body>
 
-<h1>放映厅方案（v2）—— 不裁画面，改传片源</h1>
+<h1>放映厅（v2.1）—— 厅先开，人先进来，片子后选</h1>
 <p class="lead">
-上一版我提的「取景」你否掉了，两条理由我都认。第二条尤其关键，而且它把我上一版没想透的地方暴露出来了：
-<b>糊不糊，跟裁不裁没关系。</b>只要画面是从房主屏幕截下来的，它的分辨率上限就是"房主屏幕上那块播放器的大小"——
-1080×2400 的竖屏里一部 16:9 的片子只有 1080×607，观众全屏拉到 2400 宽，必然糊。裁一刀只是让码率分配好一点，
-救不了这个天花板；而框多框少这件事，本来也不该由房主负责、更不该是不可逆的。
+上一版的「取景」你否掉了，两条理由我都认；第二条尤其关键，它把我没想透的地方暴露出来了：
+<b>糊不糊，跟裁不裁没关系</b> —— 只要画面是从房主屏幕截下来的，上限就是那块屏幕的像素，裁一刀改不了天花板。
+所以核心换成另一句话：<b>要一起看清一部片，就别传画面，传片源</b>。
+而你补的那条（先开厅、对方先进来、我再选片）改的不是按钮位置，是<b>主体</b>：
+厅才是入口，放映是厅里的一个动作 —— 见第 3 节。
 </p>
 <div class="kbox">
   <h3>所以这版的核心换成了另一句话</h3>
@@ -216,16 +217,18 @@ input[type=range]{width:150px;accent-color:var(--live)}
     <div class="card"><div class="tagline">A 档 · 房主手机当中继</div>
       <h3>观众打不开这个源时，让房主手机替他取</h3>
       <p>跨域、要 Cookie、签名 URL、观众那边被站点拦 —— 这些在 S 档会失败的情况，
-      都由房主手机做一层流式转发解决（<b style="color:#fff">双人票已经在手机上跑了 HTTP 服务 + WS + 隧道，
-      这是同一套能力的延伸，不是新起一套服务端</b>）。画质仍是原生。</p>
-      <p style="margin-top:9px"><b class="warnc">代价要说在前面：</b>观众看的量算在房主流量上，
-      1080P 一小时约 0.6~1.5 GB。所以这一档必须自带清晰度上限 + 实时用量条，
-      默认给到 720P 并显示"本次已用 xx MB"。</p></div>
+      都由房主手机做一层流式转发解决。<b style="color:#fff">不需要任何第三方服务器</b>：
+      双人票本来就在手机上跑了 HTTP + WebSocket（<code>SignalHub</code>）并已通过隧道暴露出去，
+      A 档只是给这个<b style="color:#fff">已经在你手机上的</b>服务加一条 Range 转发。
+      外部依赖没有增加 —— 唯一那条 Cloudflare 隧道今天就已经在用了，没它连邀请链接都发不出去。</p>
+      <p style="margin-top:9px"><b class="warnc">但这一档我建议先不做</b>，理由不是服务器，是<b style="color:#fff">该用数据决定</b>：
+      等 P0 量出 S 档在真实站点上的覆盖率，再决定要不要花这 2~3 天。真要做，代价是观众看的量算房主流量
+      （1080P 一小时约 0.6~1.5 GB），所以它必须自带清晰度上限 + 实时用量条 + 总量熔断。</p></div>
     <div class="card" style="margin-top:14px"><div class="tagline">B 档 · 屏幕像素（现状保留）</div>
       <h3>DRM 站点唯一的解，且把"框"搬到观众手里</h3>
       <p>Netflix/Disney+ 这类放不了 S/A。退回整屏分享，但加一颗<b style="color:#fff">观众自己的</b>
       「只看画面」开关：自动贴合内容区，不满意可以微调，一键还原。
-      见第 3 节 —— 这颗开关就是取景 v1 该变成的样子。</p></div>
+      见第 4 节 —— 这颗开关就是取景 v1 该变成的样子。</p></div>
   </div>
 </div>
 
@@ -253,8 +256,156 @@ input[type=range]{width:150px;accent-color:var(--live)}
   </div>
 </div>
 
-<!-- ===== 3 观众侧开关 ===== -->
-<h2><span class="n">3</span>B 档那颗「只看画面」开关 —— 可以打开试试</h2>
+<!-- ===== 3 厅的生命周期 ===== -->
+<h2><span class="n">3</span>厅先开，人先进来，片子后选 —— 这是结构上的改动</h2>
+<p class="lead">你这一条改得对，而且改的不是按钮位置，是<b>主体</b>：原方案里"放映"是入口，
+现在<b>厅</b>才是入口，放映是厅里的一个动作。连带三个好处：语音在选片之前就通了（两个人可以边挑边聊）、
+观众点进来看到的不是黑屏也不是"对方的桌面"而是"一间还没开演的厅"、换片不用重新发链接。
+下面四屏是同一个厅的四个时刻：</p>
+
+<div class="row">
+  <div class="cell">
+    <div class="phone" style="background:linear-gradient(170deg,#141a16,#08090a 60%)">
+      <div class="island top"><span class="dot"></span>放映厅已开<span class="grow">链接没变</span></div>
+      <div style="position:absolute;left:20px;right:20px;top:96px;z-index:5">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="avatar" style="width:38px;height:38px;font-size:15px">周</span>
+          <div style="font-size:13px;line-height:1.5">周周 已经在厅里了<br>
+            <span style="font-size:11px;color:var(--low)">语音已通 · 00:41</span></div>
+        </div>
+        <div style="margin-top:14px;display:flex;align-items:center;gap:6px;height:34px">
+          <span style="font-size:10.5px;color:var(--low)">他在说话</span>
+          <span style="display:inline-block;width:4px;height:9px;border-radius:2px;background:var(--live)"></span>
+          <span style="display:inline-block;width:4px;height:18px;border-radius:2px;background:var(--live)"></span>
+          <span style="display:inline-block;width:4px;height:26px;border-radius:2px;background:var(--live)"></span>
+          <span style="display:inline-block;width:4px;height:14px;border-radius:2px;background:var(--live)"></span>
+          <span style="display:inline-block;width:4px;height:6px;border-radius:2px;background:var(--live)"></span>
+        </div>
+      </div>
+      <div style="position:absolute;left:20px;right:20px;bottom:104px;z-index:5">
+        <div style="border-radius:22px;padding:16px;background:rgba(255,255,255,.06);
+             border:1px solid rgba(255,255,255,.10)">
+          <div style="font-size:12.5px;color:#fff">选一部，一起看</div>
+          <div style="display:flex;gap:8px;margin-top:12px">
+            <div class="ctl pri" style="width:auto;padding:0 13px;font-size:11.5px;display:flex;align-items:center;gap:6px">🔗 递进来的链接</div>
+            <div class="ctl" style="width:auto;padding:0 13px;font-size:11.5px;display:flex;align-items:center;gap:6px">⌨ 输地址</div>
+          </div>
+          <div style="margin-top:12px;font-size:10.5px;color:var(--low)">最近在看</div>
+          <div style="margin-top:6px;font-size:11.5px;color:var(--mid);line-height:1.8">
+            《漫长的季节》3 · 看到 04:12<br>《宇宙探索编辑部》· 看到 1:12:40</div>
+        </div>
+      </div>
+      <div class="island bottom" style="bottom:22px">
+        <div class="ctl">📤</div><div class="vr"></div>
+        <div class="stat"><b>0</b><span>已放映</span></div>
+        <div class="vr"></div><div class="ctl">🎙</div><div class="ctl">■</div>
+      </div>
+    </div>
+    <p class="cap"><b>① 房主 · 厅已开，还没选片。</b>那颗 📤 就是"给他看我的屏幕"（B 档）——
+    它从主入口降级成厅里的一个按钮。</p>
+  </div>
+
+  <div class="cell">
+    <div class="phone" style="background:linear-gradient(170deg,#1a1420,#08090a 60%)">
+      <div class="island top"><span class="avatar">周</span>周周的厅<span class="grow">已连麦</span></div>
+      <div style="position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);text-align:center;
+           padding:0 26px;z-index:5">
+        <div style="width:74px;height:74px;margin:0 auto 14px;border-radius:50%;display:grid;place-items:center;
+             font-size:27px;font-weight:700;color:#04160a;
+             background:linear-gradient(135deg,var(--live),#0d5c2f);box-shadow:0 0 0 8px rgba(30,215,96,.10)">周</div>
+        <div style="font-size:15px">周周还没选片</div>
+        <div style="font-size:11.5px;color:var(--low);margin-top:7px;line-height:1.75">
+          语音已经通了，可以直接聊<br>他选好就会自动开始</div>
+        <div class="chip g" style="display:inline-block;margin-top:12px">等着就行，不用操作</div>
+      </div>
+      <div class="react" style="bottom:96px"><div class="r">❤</div><div class="r">😆</div><div class="r">💬</div></div>
+      <div class="island bottom">
+        <div class="ctl pri">🎙</div><div class="vr"></div>
+        <div class="stat"><b>00:41</b><span>在厅里</span></div>
+        <div class="vr"></div><div class="ctl">🔊</div><div class="ctl"></div><div class="ctl">■</div>
+      </div>
+    </div>
+    <p class="cap"><b>② 观众 · 进厅了。</b>这一屏是关键：他看到的<b>不是黑屏、不是"对方的桌面"、
+    也不是"等待中"三个干巴巴的字</b>，而是一间有人在说话的厅 —— 能聊、能比心、能看到对方在不在。</p>
+  </div>
+
+  <div class="cell">
+    <div class="phone">
+      <div class="srcscreen">
+        <div class="statusbar"><span>08:31</span><span>5G ▮▮▮</span></div>
+        <div class="addrbar"><span>≡</span><span>◀</span><div class="u">🔒 movie.example.com/play/8821</div><span>☆</span></div>
+        <div class="webpage">
+          <div class="webhead">《漫长的季节》第 3 集<small>3.4 万播放 · 清晰度 1080P</small></div>
+          <div class="movie" style="width:100%;height:186px">
+            <video src="sample.mp4" muted loop autoplay playsinline></video>
+            <div class="vig"></div><div class="sub">"往前看，别回头。"</div>
+          </div>
+          <div class="weblist"><div class="it"><span class="th"></span><span class="ln"></span></div>
+            <div class="it"><span class="th"></span><span class="ln s"></span></div></div>
+        </div>
+        <div class="homebar"><i></i></div>
+      </div>
+      <div style="position:absolute;left:12px;right:12px;bottom:26px;z-index:9;
+           display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:22px;
+           background:rgba(14,20,16,.94);backdrop-filter:blur(20px);
+           border:1px solid rgba(30,215,96,.35);box-shadow:0 12px 34px rgba(0,0,0,.6)">
+        <span class="dot"></span>
+        <div style="font-size:11.5px;line-height:1.5">嗅到一条 1080P 片源<br>
+          <span style="color:var(--low)">movie.example.com/…/ep03.m3u8</span></div>
+        <div class="ctl pri" style="margin-left:auto;width:auto;padding:0 14px;font-size:11.5px;
+             display:flex;align-items:center;gap:6px">开始放映</div>
+      </div>
+    </div>
+    <p class="cap"><b>③ 房主 · 选片。</b>他在自己习惯的浏览器里点「分享 → 双人票」，链接落进厅里；
+    双人票打开这一页、<b>嗅到真实片源</b>后弹一条"开始放映"。<b>不自动切</b> ——
+    万一嗅错了（广告分片、预览片），房主有权利先看一眼。</p>
+  </div>
+
+  <div class="cell">
+    <div class="phone" style="background:#08080a">
+      <video class="ambv" src="sample.mp4" muted loop autoplay playsinline></video>
+      <div class="movie" style="left:12px;right:12px;top:50%;transform:translateY(-50%);height:172px;
+           border-radius:14px;box-shadow:0 18px 60px rgba(0,0,0,.65)">
+        <video src="sample.mp4" muted loop autoplay playsinline></video>
+        <div class="vig"></div><div class="sub">"往前看，别回头。"</div>
+      </div>
+      <div class="island top"><span class="avatar">周</span>周周的厅<span class="chip">换片中</span></div>
+      <div style="position:absolute;left:12px;right:12px;bottom:20px;z-index:6">
+        <div style="padding:12px 14px;border-radius:20px;background:rgba(0,0,0,.66);
+             backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,.10)">
+          <div style="font-size:12px">周周去找下一集了</div>
+          <div style="font-size:10.5px;color:var(--low);margin-top:4px">
+            暂停在 04:12 · 语音还在 · 厅不用退</div>
+          <div style="display:flex;gap:8px;margin-top:10px">
+            <div class="ctl" style="width:auto;padding:0 12px;font-size:11px;display:flex;align-items:center;gap:5px">▶ 继续</div>
+            <div class="ctl" style="width:auto;padding:0 12px;font-size:11px;display:flex;align-items:center;gap:5px">💬 聊会儿</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="cap"><b>④ 观众 · 换片间隙。</b>厅还在、链接没变、语音没断，画面停在最后一帧并写明"对方在选下一部"。
+    原方案里这一步等于"分享结束"，得重新来一遍。</p>
+  </div>
+</div>
+
+<div class="row">
+  <div class="cell" style="width:100%;max-width:1000px">
+    <p class="flowlabel">厅的生命周期（全程同一个链接，不用重发）</p>
+    <div class="flow">
+      <div class="step new"><b>开厅</b>起隧道、出链接</div><div class="arw">→</div>
+      <div class="step new"><b>对方进来</b>语音先通</div><div class="arw">→</div>
+      <div class="step new"><b>选片</b>递链接 / 输地址 / 最近在看</div><div class="arw">→</div>
+      <div class="step new"><b>放映</b>各自本地播 + 对表</div><div class="arw">→</div>
+      <div class="step new"><b>暂停 / 换片</b>厅不退</div><div class="arw">→</div>
+      <div class="step"><b>收厅</b>或转投屏（B 档）</div>
+    </div>
+    <p class="note"><b>R1 因此更彻底：</b>不是"每部片从 6 步变 2 步"，而是<b>一晚上只开一次厅</b>。
+    对方可以提前进来等着，你随时换片、随时暂停聊两句，都不用他重新点链接。</p>
+  </div>
+</div>
+
+<!-- ===== 4 B 档开关 ===== -->
+<h2><span class="n">4</span>B 档那颗「只看画面」开关 —— 可以打开试试</h2>
 <p class="lead">下面是一台横过来的观众手机，里面是房主的<b>整块竖屏</b>（浏览器的地址栏、房主 App 的控件都在）。
 打开开关看效果：裁的动作为什么要放在观众这边 —— 因为框错了只有他自己知道，而且随时能还原。</p>
 
@@ -317,7 +468,7 @@ input[type=range]{width:150px;accent-color:var(--live)}
 </div>
 
 <!-- ===== 4 流程 ===== -->
-<h2><span class="n">4</span>R1：把"切 App"变成一次分享动作</h2>
+<h2><span class="n">5</span>「递链接」怎么把切 App 变成一次分享动作</h2>
 <p class="flowlabel">今天的流程（5 步，中间要换一次 App）</p>
 <div class="flow">
   <div class="step"><b>浏览器找片</b>打开电影页</div><div class="arw">→</div>
@@ -389,7 +540,7 @@ input[type=range]{width:150px;accent-color:var(--live)}
 </div>
 
 <!-- ===== 5 参考项目 ===== -->
-<h2><span class="n">5</span>那三家 PC 端项目，映射到我们这边是什么</h2>
+<h2><span class="n">6</span>那三家 PC 端项目，映射到我们这边是什么</h2>
 <table>
   <tr><th style="width:190px">他们（PC / Web）的做法</th><th>为什么那样行得通</th><th>双人票的等价物</th></tr>
   <tr><td><b>SyncWatch</b>：<code>getDisplayMedia</code> 选<b>单个标签页</b> + <code>systemAudio:'include'</code></td>
@@ -412,25 +563,37 @@ input[type=range]{width:150px;accent-color:var(--live)}
 屏幕流（带声音）正是它做不到的那一块 —— 这三家没有一个能覆盖"异地 + 手机房主"。</p>
 
 <!-- ===== 6 决策点 ===== -->
-<h2><span class="n">6</span>要你拍的三个问题</h2>
-<div class="q"><h3>Q1 · 先做哪一头？</h3>
-  <p>S 档（放映厅）是终局但要 1~2 周；B 档那颗观众侧「只看画面」1~2 天就能见效，且不动房主的编码。</p>
-  <span class="opt sel" data-g="q1">先做 S 档，一步到位（我推荐）</span>
-  <span class="opt" data-g="q1">先做观众侧开关，止血再说</span>
-  <span class="opt" data-g="q1">两个一起，先开关后放映厅</span></div>
-<div class="q"><h3>Q2 · A 档中继（烧房主流量换原生画质）要不要？</h3>
-  <p>S 档失败时才用得上。做了它，"观众那边打不开这个源"的情况也能救回来；代价是房主流量。</p>
-  <span class="opt sel" data-g="q2">要，但默认限 720P + 显示实时用量</span>
-  <span class="opt" data-g="q2">先不做，S 失败就直接降 B</span></div>
-<div class="q"><h3>Q3 · 内置播放器长成什么样？</h3>
-  <p>它决定"递链接进来之后"的体验，也决定工作量。</p>
-  <span class="opt sel" data-g="q3">只做"够放片"：地址栏 + 后退 + 最近打开 + 自动接管播放页</span>
-  <span class="opt" data-g="q3">做成正经浏览器（多标签/书签/下载）</span>
-  <span class="opt" data-g="q3">连这个都不要，只保留系统分享入口 + 中继</span></div>
-<p class="note">点一下选项就行，默认（绿色）是我的推荐。开工前我还会先花半天验两条外部事实：
-① <code>shouldInterceptRequest</code> 在真实站点上能不能抓到可复用的媒体地址；
-② 内置 WebView 到底有没有 EME（MDN 的兼容表说 WebView Android 从 v43 支持 <code>requestMediaKeySystemAccess</code>，
-但我的印象是 WebView 不放 DRM 内容 —— <b class="warnc">这条我没实测，不下结论</b>，它只决定 DRM 站点归不归 S/A 管）。</p>
+<h2><span class="n">7</span>你已拍的三条 + 厅先开之后新冒出来的三条</h2>
+<div class="q"><h3>已定 · 不用再看</h3>
+  <p><b class="good">Q1 先做 S 档</b>（放映厅一步到位，观众侧那颗「只看画面」留到 B 档一起做）。
+  <b class="good">Q2 A 档先不做</b> —— 但纠正一下理由：A 档<b>不需要第三方服务器</b>，中继就跑在你自己手机上
+  （<code>SignalHub</code> 已经是手机上的 HTTP 服务，隧道也已经在用）。真正"先不做"的理由是<b>该用数据决定</b>：
+  等 P0 量出 S 档在真实站点上的覆盖率，掉到 B 的比例高再补 A。
+  <b class="good">Q3 内置播放器只做"够放片"</b>：地址栏 + 前进后退 + 最近在看 + 播放页自动接管，不长成正经浏览器。</p></div>
+
+<div class="q"><h3>N1 · 观众在厅里能"点单"吗？</h3>
+  <p>厅先开之后多出来的问题：对方进来干等着，还是也能把自己想看的链接递进来给你挑？
+  成本很小（递链接这个入口本来就要做，观众端多一个输入框 + 一条信令消息）。</p>
+  <span class="opt sel" data-g="n1">能点单：他递链接进来，你决定放不放（推荐）</span>
+  <span class="opt" data-g="n1">不能，选片权完全在房主</span>
+  <span class="opt" data-g="n1">能点单，且房主设了"自动接受"</span></div>
+<div class="q"><h3>N2 · 厅在后台能活多久？</h3>
+  <p>你切去浏览器找片这段时间，厅必须一直在 —— 现在分享是跑在 <code>ShareService</code> 前台服务里的，
+  放映厅要复用同一套保活。风险是国产 ROM 杀后台（这条只能真机验）。</p>
+  <span class="opt sel" data-g="n2">前台服务常驻，通知栏一颗"回厅里"（推荐）</span>
+  <span class="opt" data-g="n2">只保 10 分钟，超时提示重开</span></div>
+<div class="q"><h3>N3 · 没选片的时候，观众看到什么？</h3>
+  <p>第 3 节那屏"周周还没选片 + 语音已通"是我推荐的形态。另一条路是这时候允许房主投屏（B 档）先聊着。</p>
+  <span class="opt sel" data-g="n3">等候屏 + 语音，投屏要房主主动按（推荐）</span>
+  <span class="opt" data-g="n3">等候屏，但语音默认不开，省得突然被听到</span>
+  <span class="opt" data-g="n3">直接进整屏分享，选片也在里面完成</span></div>
+<p class="note"><b>开工前我先花半天验两条外部事实</b>（不通过就不承诺 S 档）：
+① <code>shouldInterceptRequest</code> 在真实站点上能不能抓到可复用的媒体地址 —— 这个数出来才知道
+S 档覆盖率、也才知道 A 档到底要不要做；
+② 内置 WebView 到底有没有 EME（MDN 的兼容表说 WebView Android 从 v43 支持
+<code>requestMediaKeySystemAccess</code>，但我的印象是 WebView 不放 DRM 内容 ——
+<b class="warnc">这条我没实测，不下结论</b>，它只决定 DRM 站点归不归 S/A 管）。
+探针做成厅里的一个调试页，跑完就顺手变成放映厅的片源层。</p>
 
 <script>
 // 观众端：点画面收起/唤出控件
