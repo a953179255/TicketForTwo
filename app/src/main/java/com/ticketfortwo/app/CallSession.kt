@@ -84,6 +84,14 @@ object CallSession {
     /** 控制岛上 RTT / 通路类型的刷新间隔。 */
     private const val STATS_INTERVAL_MS = 2_000L
 
+    /**
+     * 观众信令断了之后，最多保留这条直连多久。
+     *
+     * 观众侧的重连是"最多 4 次、每次约 4.5 秒"，也就是十几秒的量；
+     * 这边给 20 秒，比它长一点，免得观众还在努力我们就先把通话收了。
+     */
+    private const val VIEWER_RECONNECT_GRACE_MS = 20_000L
+
     private val _state = MutableStateFlow<State>(State.Idle)
     val state: StateFlow<State> = _state.asStateFlow()
 
@@ -148,6 +156,8 @@ object CallSession {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var statsJob: Job? = null
+    /** 观众信令断了之后的"最多等你这么久"兜底。 */
+    private var viewerGoneJob: Job? = null
     private var peer: Peer? = null
     private var capture: ScreenShareController? = null
     private var audioSource: AudioSource? = null
@@ -253,6 +263,12 @@ object CallSession {
         _state.value = State.Failed(reason)
     }
 
+    /** 回到"等人加入"那一步，邀请链接本身不变（和原来逐字一致，只是三处共用）。 */
+    private fun backToWaiting() {
+        val url = (_state.value as? State.WaitingViewer)?.inviteUrl
+        _state.value = if (url != null) State.WaitingViewer(url) else State.Idle
+    }
+
     // ---- 观众消息处理（全部来自 SignalHub）------------------------------
 
     private fun onViewerMessage(text: String) {
@@ -293,11 +309,41 @@ object CallSession {
                 }
             }
 
+            // 观众**主动**告别：立刻收，不用等。
             "bye" -> {
                 note("观众已离开；链接仍然有效，让他再点一次即可")
+                viewerGoneJob?.cancel(); viewerGoneJob = null
                 teardownPeer()
-                val url = (_state.value as? State.WaitingViewer)?.inviteUrl
-                _state.value = if (url != null) State.WaitingViewer(url) else State.Idle
+                backToWaiting()
+            }
+
+            // 信令通道无声无息地关了：可能是隧道掐线、也可能是观众被系统回收。
+            // 媒体是 P2P 的，信令断了画面照样能传 —— 先看 ICE 还健康吗：
+            // 健康就保留通话等对方 rescueSignaling 回来；不健康才真收场。
+            // 但**必须有兜底时限**：观众若是被直接杀掉（来不及发 bye），
+            // 不能让它留下的 peer 永远挂着。
+            "gone" -> {
+                val live = peer
+                if (live != null &&
+                    live.connectionState == org.webrtc.PeerConnection.IceConnectionState.CONNECTED
+                ) {
+                    note("观众信令断了，画面先不断，等他重连")
+                    viewerGoneJob?.cancel()
+                    viewerGoneJob = scope.launch {
+                        delay(VIEWER_RECONNECT_GRACE_MS)
+                        viewerGoneJob = null
+                        if (!SignalHub.viewerConnected.value) {
+                            note("观众没回来，结束这一次直连")
+                            teardownPeer()
+                            backToWaiting()
+                        }
+                    }
+                } else {
+                    note("观众已离开；链接仍然有效，让他再点一次即可")
+                    viewerGoneJob?.cancel(); viewerGoneJob = null
+                    teardownPeer()
+                    backToWaiting()
+                }
             }
 
             // 同看：对方想快进/暂停。权限判定放在**收消息这一侧**，
@@ -331,6 +377,7 @@ object CallSession {
             live.connectionState == org.webrtc.PeerConnection.IceConnectionState.CONNECTED
         ) {
             note("观众信令重连，画面不断")
+            viewerGoneJob?.cancel(); viewerGoneJob = null
             _state.value = State.Connected
             return
         }

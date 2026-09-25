@@ -468,7 +468,11 @@ object SignalHub {
         }
         if (wasViewer) {
             _viewerConnected.value = false
-            _incoming.tryEmit("""{"t":"bye"}""")
+            // 这是"socket 关了"，不是"观众按了退出"——观众那边根本不发 bye。
+            // 之前把它伪造成 bye，于是隧道一掐线房主就 teardownPeer，
+            // 把一条媒体还活着的 P2P 通话一起带走了。现在如实报"gone"，
+            // 由 CallSession 按 ICE 健康度决定是保留等重连、还是真收场。
+            _incoming.tryEmit("""{"t":"gone"}""")
             Log.i(TAG, "观众已离开")
         }
     }

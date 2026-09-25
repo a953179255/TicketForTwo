@@ -304,7 +304,20 @@ object ViewerSession {
         }
     }
 
+    /**
+     * 只给 debug 变体的调试入口用（见 `src/debug/.../DebugReceiver.kt`）：
+     * 掐掉信令通道，媒体一概不碰 —— 用来验证 [rescueSignaling] 真的会去救。
+     * 故意复用同一句 `ws.close()`，不另做一条"测试专用路径"。
+     */
+    fun debugDropSignaling() {
+        runCatching { ws?.close() }
+    }
+
     fun stop() {
+        // 主动走之前先道别。不发这句的话，房主只能从"socket 关了"去猜，
+        // 而它现在的策略是"信令断了先保留通话等重连"（见 CallSession 的 gone 分支），
+        // 房主就会白等一整个宽限期。尽力而为：写不出去也无所谓，那边有兜底时限。
+        if (wsOpen) runCatching { send("""{"t":"bye"}""") }
         runCatching { ws?.close() }
         ws = null
         wsOpen = false

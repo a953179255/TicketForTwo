@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  只进 debug 变体：AGP 会把它与 src/main/AndroidManifest.xml 合并，
+  所以这个"能从 adb 打进来的调试入口"在 release 包里根本不存在 ——
+  不写进主清单是刻意的，否则就等于对外开了一个可以掐自己信令的广播。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver
+            android:name=".DebugReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.ticketfortwo.app.DEBUG_DROP_WS" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>
