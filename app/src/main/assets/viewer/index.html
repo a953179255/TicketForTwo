@@ -38,6 +38,18 @@ video{width:100%;height:100%;object-fit:contain;background:#000;display:block}
   border-radius:16px;box-shadow:0 18px 60px rgba(0,0,0,.6)}
 /* 浮层：视频区之上只能用 scrim —— SurfaceView/原生视频内容抓不到，玻璃盖不上去 */
 .overlay{position:absolute;left:12px;right:12px;z-index:5}
+/* 手势层要拿到完整的指针流：默认 touch-action 会让浏览器把横滑当成"侧滑返回/滚动"
+   并在中途发 pointercancel —— 实测手机上横滑快进就是这么被系统吃掉的。
+   只在 #stage 上关掉，控件和卡片里照常。 */
+#stage{touch-action:none}
+.overlay,#panel{touch-action:auto}
+/* 播放器手感：控件收起 + 手势反馈的浮层（见文件末尾那一段） */
+.overlay,#lvBadge{transition:opacity .3s ease,transform .3s ease}
+.chrome-out{opacity:0;transform:translateY(8px);pointer-events:none}
+#hud{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:7;
+  padding:9px 16px;border-radius:var(--pill);background:rgba(0,0,0,.62);color:#fff;
+  font-size:13px;letter-spacing:.3px;opacity:0;transition:opacity .18s;pointer-events:none}
+#hud.on{opacity:1}
 /* 本地播放层：盖住屏幕流，但**不销毁**它 —— 撤层时要能立刻退回来看屏幕 */
 #lv{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;z-index:3}
 #lvBadge{position:absolute;right:12px;top:14px;z-index:6;font-size:11px;padding:6px 11px;
@@ -109,6 +121,7 @@ button.primary{background:var(--accent);color:#fff;border:0;border-radius:var(--
        它盖在屏幕流上面；放不出来就撤掉这层，退回看对方的屏幕，不留黑屏。 -->
   <video id="lv" class="hide" autoplay playsinline></video>
   <div id="lvBadge" class="hide">本地播放 · <b id="lvRes">—</b></div>
+  <div id="hud"></div>
 
   <div class="overlay top hide" id="topBar">
     <span class="live"><i></i>直连</span>
@@ -449,6 +462,12 @@ function askCinePlay(){
   if (cineWatch) { clearTimeout(cineWatch); cineWatch = null; }
   const st = cine;
   cineAck(false, 'gesture', '浏览器要先点一下才开始放（点页面任意处即可）', st ? st.ver : -1);
+  /* 画面已经出来了就别用整张卡去盖它 —— 那时候只差声音，一条贴在底部的胶囊就够；
+     整屏黑的时候才需要那张"就差一下点击"的大卡。 */
+  if (lv.videoWidth) {
+    showCineSoundPill();
+    return;
+  }
   show(`<h1>就差一下点击</h1>
     <p class="muted">浏览器不允许网页自己放出声音。点下面开始，进度会自动对齐到对方的位置。</p>
     <button class="primary" id="btnCine">开始播放</button>`);
@@ -633,7 +652,8 @@ $('btnVol').onclick = () => {
 };
 $('btnPip').innerHTML = ICON.pip;
 $('btnPip').onclick = async () => {
-  try { if (document.pictureInPictureElement) await document.exitPictureInPicture(); else await video.requestPictureInPicture(); }
+  // 放映厅里在放的是 lv：原来写死 video，小窗弹出来是那条**没在播**的屏幕流（一片黑）
+  try { if (document.pictureInPictureElement) await document.exitPictureInPicture(); else await activePlayer().requestPictureInPicture(); }
   catch (e) { /* Safari 可能走系统播控 */ }
 };
 $('btnFull').innerHTML = ICON.full;
@@ -652,7 +672,7 @@ $('btnFull').onclick = async () => {
   } catch (e) {
     // 退一步：让视频自己进全屏（iOS Safari 与部分安卓内核只认这一条）
     try {
-      if (video.webkitEnterFullscreen) { video.webkitEnterFullscreen(); tried.push('video-webkit'); }
+      if (activePlayer().webkitEnterFullscreen) { activePlayer().webkitEnterFullscreen(); tried.push('video-webkit'); }
       else throw new Error('no-video-api');
     } catch (e2) {
       toast('这个浏览器不让网页全屏（安卓上很常见）。' +
@@ -665,7 +685,8 @@ $('btnFull').onclick = async () => {
     if (!document.fullscreenElement) toast('浏览器拒绝了网页全屏，改用画中画试试');
   }, 400);
 };
-video.addEventListener('click', () => { if (video.paused) video.play(); });
+/* 原来这里挂的是 `video` 的 click：放映厅里 `lv` 盖在它上面，
+   于是"点画面继续播"在本地播放时完全失效。手势统一挂到 #stage 上，见文件末尾。 */
 
 // ---- 一起看（同看条） ---------------------------------------------------
 
@@ -789,7 +810,10 @@ function loadLocal(st) {
   lv.muted = true;
   cineNeedSound = true;
   armSoundOnce();
-  lv.play().catch(() => { askCinePlay(); });
+  /* 起播兜底要分两层：静音播 → 还不行才请人点一下。
+     原来只有一层 `play().catch(askCinePlay)`，于是任何一次拒绝都会把一张
+     居中大卡盖在**本来能放的画面**上（实测：拖过音量、再换一次片之后就是这样）。 */
+  startCinePlayback();
   // 等候屏那张卡得收掉，不然它盖在刚接上的片源上面
   hidePanel();
   $('topBar').classList.remove('hide');
@@ -805,6 +829,24 @@ function loadLocal(st) {
   }, 8000);
 }
 
+/* play() 被拒 ≠ "浏览器要用户手势"。地址过期、格式不认识、CDN 直接断开
+   都会让 play() 带着别的名字失败 —— 一律报成"点一下开始放"，房主就会去等一次
+   永远等不来的点击，而真正该说的是"这条地址取不到"。（实测：B 站那条签名 mp4
+   过期后回执正是 gesture，而它其实是 fetch 失败。） */
+function isAutoplayBlock(err){ return !!err && err.name === 'NotAllowedError'; }
+
+function startCinePlayback(){
+  lv.play().catch(err => {
+    if (!isAutoplayBlock(err)) return;      // 让 error 事件 / 8 秒看门狗去说真话
+    if (!lv.muted) {                        // 有可能是上一段留下的"有声"状态
+      lv.muted = true; cineNeedSound = true; armSoundOnce();
+      lv.play().catch(e2 => { if (isAutoplayBlock(e2)) askCinePlay(); });
+      return;
+    }
+    askCinePlay();
+  });
+}
+
 function stopLocalPlayer() {
   if (cineWatch) { clearTimeout(cineWatch); cineWatch = null; }
   cineReady = false;
@@ -813,6 +855,8 @@ function stopLocalPlayer() {
   if (cineHls) { runCute(() => cineHls.destroy()); cineHls = null; }
   runCute(() => { lv.pause(); lv.removeAttribute('src'); lv.load(); });
   lv.classList.add('hide'); lvBadge.classList.add('hide');
+  // 撤层时把"点一下开声音"那颗胶囊一起收掉，否则会留着一个没有对象的按钮
+  const pill = $('cineSound'); if (pill) pill.classList.add('hide');
 }
 
 function cineDown(reason, failed, code, ver) {
@@ -880,6 +924,28 @@ function unMuteCine(){
   runCute(() => lv.play());
   paintCine();
   cineNote('声音已开');
+}
+
+function showCineSoundPill(){
+  let pill = $('cineSound');
+  if (!pill) {
+    pill = document.createElement('div');
+    pill.id = 'cineSound';
+    pill.className = 'overlay bottom';
+    pill.style.bottom = '86px';
+    pill.style.zIndex = '7';
+    pill.innerHTML = '<span class="muted">画面已经在放了，点一下开声音</span>' +
+      '<button class="ctl" id="btnCineSound" title="开声音">🔇</button>';
+    $('stage').appendChild(pill);
+  }
+  pill.classList.remove('hide');
+  $('btnCineSound').onclick = () => {
+    lv.muted = false; cineNeedSound = false; volOn = true;
+    $('btnVol').innerHTML = ICON.vol;
+    runCute(() => lv.play());
+    paintCine();
+    pill.classList.add('hide');
+  };
 }
 
 function sendCine(act) {
@@ -1132,6 +1198,96 @@ if (_q.get('report') === '1') {
     } catch (e) { /* 采集器没起就算了，不影响观看 */ }
   }, 2000);
 }
+
+// ---- 播放器手感：控件自动收起 + 手势（音量 / 亮度 / 快进退）----------------
+/* 为什么这一整块要存在：网页观众端从接上画面到结束，顶栏、底岛、放映条**一直亮着**。
+   用户最初的抱怨就是"观看端像进了直播间，不像在看一部片" —— 而 App 那边早就做了
+   自动收起与手势，网页这边一直没补上。桌面播放器二十年的共识：画面在动，控件就该让位。
+   顺带修掉一类同源缺陷：凡是写死 `video`（屏幕流那个元素）的控件，在放映厅里
+   管的都是"没在播的那一路"（音量、画中画、点画面继续播，三处都是）。 */
+
+/** 现在真正在放的是哪一个：放映厅里是本地播放层，其余是屏幕流。 */
+function activePlayer(){ return (typeof cine !== 'undefined' && cine) ? lv : video; }
+
+const CHROME_PARTS = ['topBar','ctlBar','cineBar','watchBar','lvBadge'];
+let lastTouch = Date.now();
+function chromeShown(){ return !CHROME_PARTS.some(id => { const e=$(id); return e && e.classList.contains('chrome-out'); }); }
+function raiseChrome(){ lastTouch = Date.now(); CHROME_PARTS.forEach(id => { const e=$(id); if (e) e.classList.remove('chrome-out'); }); }
+function dropChrome(){ CHROME_PARTS.forEach(id => { const e=$(id); if (e) e.classList.add('chrome-out'); }); }
+setInterval(() => {
+  const pl = activePlayer();
+  // 暂停时不收：那时候控件正是人要看的东西
+  if (pl.paused || !chromeShown()) return;
+  // 等待卡还在（没画面 / 要点一下开始）也不收，收了人就找不到入口
+  if (!$('panel').classList.contains('hide')) return;
+  if (Date.now() - lastTouch > 3500) dropChrome();
+}, 800);
+
+function hud(text){
+  const h = $('hud'); if (!h) return;
+  h.textContent = text; h.classList.add('on');
+  if (hud._t) clearTimeout(hud._t);
+  hud._t = setTimeout(() => h.classList.remove('on'), 650);
+}
+function curBright(){
+  const m = /brightness\(([\d.]+)\)/.exec(activePlayer().style.filter || '');
+  return m ? +m[1] : 1;
+}
+function setBright(b){ activePlayer().style.filter = 'brightness(' + b.toFixed(2) + ')'; }
+
+(function playerGestures(){
+  const stage = $('stage');
+  let g = null;
+  stage.addEventListener('pointerdown', ev => {
+    if (ev.target.closest && ev.target.closest('.overlay,#panel')) { raiseChrome(); g = null; return; }
+    g = { x: ev.clientX, y: ev.clientY, side: ev.clientX > innerWidth / 2 ? 'r' : 'l',
+          vol: activePlayer().volume, bright: curBright(), moved: false };
+  }, { passive: true });
+  stage.addEventListener('pointermove', ev => {
+    if (!g) return;
+    const dx = ev.clientX - g.x, dy = ev.clientY - g.y;
+    if (!g.moved && Math.hypot(dx, dy) < 16) return;
+    g.moved = true;
+    if (Math.abs(dy) >= Math.abs(dx)) {
+      const k = Math.max(-1, Math.min(1, -dy / 220));
+      if (g.side === 'r') {
+        const v = Math.max(0, Math.min(1, g.vol + k));
+        const pl = activePlayer();
+        pl.volume = v; pl.muted = v <= 0.001;
+        if (pl === lv && v > 0) { cineNeedSound = false; paintCine(); }   // 拖音量就是要声音
+        hud('音量 ' + Math.round(v * 100) + '%');
+      } else {
+        const b = Math.max(0.35, Math.min(1.6, g.bright + k * 0.6));
+        setBright(b);
+        /* 按"相对正常亮度的倍数"报，别按"在可调区间里的位置"报：
+           实测同一档画面下前者是 40%、后者是 4%，而 4% 看着像快黑屏了。 */
+        hud('亮度 ' + Math.round(b * 100) + '%');
+      }
+      lastTouch = Date.now();   // 拖动期间别把控件收走
+      return;
+    }
+    if (Math.abs(dx) > 96) {
+      // 横滑快进只在放映厅里有意义：屏幕流那条轴在房主手里，拖它等于拖一根拖不动的进度条
+      if (typeof cine !== 'undefined' && cine) {
+        const fwd = dx > 0;
+        sendCine(fwd ? 'step|10000' : 'step|-10000');
+        hud(fwd ? '⏩ +10 秒' : '⏪ −10 秒');
+      }
+      g = null;
+    }
+  }, { passive: true });
+  const end = () => {
+    if (g && !g.moved) {
+      // 点一下画面：控件收着就放出来，放着就收起；暂停时先继续播
+      if (!chromeShown()) raiseChrome();
+      else if (activePlayer().paused) runCute(() => activePlayer().play());
+      else dropChrome();
+    }
+    g = null;
+  };
+  stage.addEventListener('pointerup', end, { passive: true });
+  stage.addEventListener('pointercancel', () => { g = null; }, { passive: true });
+})();
 
 /* 演示模式不启动信令：没有 ?k= 本来也连不上，一路报错的卡片会盖住要检查的画面 */
 if (!DEMO) boot();
