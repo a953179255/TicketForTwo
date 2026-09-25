@@ -42,10 +42,19 @@ def sh(*args, timeout=180):
 
 def phone_serial():
     out = sh(ADB, "devices").stdout
-    devs = [l.split()[0] for l in out.splitlines()[1:] if l.strip().endswith("device")]
+    # **按制表符切，不能 split()**：无线 adb 的真机 serial 本身就带空格
+    # （`adb-391QYFCP2266T-VtTJb1 (2)._adb-tls-connect._tcp`），split()[0] 会把它砍成
+    # `adb-391QYFCP2266T-VtTJb1` —— 那不是任何一台设备，于是后面每条 dumpsys 都失败，
+    # 体检就报"手机上没装过"，而实际装着 0.2.0（实测踩过）。
+    devs = [l.split("	")[0].strip() for l in out.splitlines()[1:]
+            if l.strip().endswith("device") and "	" in l]
     phones = [d for d in devs if not d.startswith("emulator-")]
     if not phones:
         return None
+    # 同一台手机可能被列两次（一次是重连前的旧 transport）：挑一条真的会答话的。
+    for d in phones:
+        if sh(ADB, "-s", d, "shell", "getprop", "ro.product.model").stdout.strip():
+            return d
     return phones[0]
 
 
