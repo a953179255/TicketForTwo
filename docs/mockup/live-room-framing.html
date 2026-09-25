@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>双人票 · 取景直播方案 · 效果图</title>
+<style>
+:root{
+  --bg:#07070a; --surface-0:#121212; --surface-1:#181818; --surface-2:#1f1f1f;
+  --text-hi:#fff; --text-mid:#b3b3b3; --text-low:#7a7a7a;
+  --accent:#2997ff; --live:#1ed760; --warn:#ffa42b; --err:#f3727f; --pink:#f0a6c8;
+  --scrim:rgba(0,0,0,.60); --pill:9999px; --r-card:26px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text-hi);
+  font-family:system-ui,-apple-system,"Segoe UI","Noto Sans SC",sans-serif;padding:34px 26px 70px}
+h1{font-size:23px;margin:0 0 6px}
+h2{font-size:16px;margin:44px 0 4px;display:flex;align-items:center;gap:10px}
+h2 .n{display:grid;place-items:center;width:24px;height:24px;border-radius:var(--pill);
+  background:var(--live);color:#04160a;font-size:12.5px;font-weight:700;flex:none}
+.lead{color:var(--text-mid);font-size:13.5px;max-width:960px;line-height:1.75;margin:0 0 8px}
+.lead b{color:var(--text-hi)}
+.note{color:var(--text-low);font-size:12.5px;max-width:960px;line-height:1.75;margin:6px 0 0}
+.note b{color:var(--text-mid)}
+.row{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start;margin-top:18px}
+.cell{width:330px;flex:none}
+.cell.w{width:700px}
+.cap{font-size:12.5px;color:var(--text-low);margin:11px 2px 0;line-height:1.7}
+.cap b{color:var(--text-mid)}
+.bad{color:var(--err)} .good{color:var(--live)} .warnc{color:var(--warn)}
+
+/* ---------- 手机框 ---------- */
+.phone{width:330px;height:700px;border-radius:38px;background:#000;position:relative;overflow:hidden;
+  border:1px solid rgba(255,255,255,.10);box-shadow:0 18px 44px rgba(0,0,0,.6)}
+.phone.wide{width:700px;height:330px}
+.phone .label{position:absolute;left:50%;transform:translateX(-50%);bottom:-26px;font-size:11px;
+  color:var(--text-low);letter-spacing:.05em;white-space:nowrap}
+
+/* 假装"房主的屏幕"：一个外部浏览器在全屏放片 */
+.srcscreen{position:absolute;inset:0;background:#050506;display:flex;flex-direction:column}
+.statusbar{height:26px;flex:none;display:flex;align-items:center;justify-content:space-between;
+  padding:0 12px;font-size:10px;color:rgba(255,255,255,.75);background:#0b0b0e}
+.addrbar{height:40px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px;
+  background:#15151a;border-bottom:1px solid rgba(255,255,255,.06);font-size:10.5px;color:var(--text-low)}
+.addrbar .u{flex:1;background:#1f1f26;border-radius:var(--pill);padding:6px 10px;color:var(--text-mid);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pagearea{flex:1;position:relative;background:#000;display:flex;align-items:center;justify-content:center}
+.pagearea video{width:100%;height:auto;display:block}
+.homebar{height:16px;flex:none;display:grid;place-items:center;background:#0b0b0e}
+.homebar i{width:110px;height:4px;border-radius:var(--pill);background:rgba(255,255,255,.35)}
+/* 房主自己 App 的控件 —— 观众不该看到的那一层 */
+.hostui{position:absolute;left:12px;right:12px;bottom:26px;display:flex;align-items:center;gap:8px;
+  padding:8px 11px;border-radius:var(--pill);background:rgba(20,20,24,.86);backdrop-filter:blur(14px);
+  border:1px solid rgba(255,255,255,.12);font-size:11px;z-index:4}
+.hostui .k{width:30px;height:30px;border-radius:var(--pill);display:grid;place-items:center;
+  background:rgba(255,255,255,.13);font-size:13px;flex:none}
+.hostui .k.pri{background:var(--live);color:#04160a}
+
+/* ---------- 观众端浮层 ---------- */
+.island{position:absolute;left:12px;right:12px;display:flex;align-items:center;gap:9px;
+  padding:9px 13px;border-radius:var(--pill);background:var(--scrim);backdrop-filter:blur(12px);
+  border:1px solid rgba(255,255,255,.10);font-size:12px;z-index:6}
+.island.top{top:14px}
+.island.bottom{bottom:20px;justify-content:center;width:max-content;margin:0 auto;left:auto;right:auto}
+.island .grow{margin-left:auto;color:var(--text-mid)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--live);
+  box-shadow:0 0 0 3px rgba(30,215,96,.2);flex:none}
+.ctl{width:40px;height:40px;border-radius:var(--pill);display:grid;place-items:center;font-size:16px;
+  border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.13);flex:none;cursor:pointer}
+.ctl.on{background:#fff;color:#0a0a0a}
+.ctl.pri{background:var(--live);color:#04160a}
+.stat{display:flex;flex-direction:column;font-size:9.5px;color:var(--text-mid);line-height:1.25}
+.stat b{font-size:12.5px;color:#fff;font-weight:640}
+.vr{width:1px;height:24px;background:rgba(255,255,255,.18);flex:none}
+.hide{display:none!important}
+.hint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:7px 14px;
+  border-radius:var(--pill);background:rgba(0,0,0,.55);font-size:11.5px;color:#ddd;z-index:7}
+.avatar{width:24px;height:24px;border-radius:var(--pill);flex:none;
+  background:linear-gradient(135deg,var(--live),#0d5c2f);display:grid;place-items:center;
+  font-size:11px;font-weight:700;color:#04160a}
+.chip{font-size:10px;padding:3px 8px;border-radius:var(--pill);background:rgba(255,255,255,.12);
+  color:var(--text-mid);white-space:nowrap}
+.chip.g{background:rgba(30,215,96,.16);color:var(--live)}
+.chip.w{background:rgba(255,164,43,.16);color:var(--warn)}
+
+/* 反应柱（不是弹幕） */
+.react{position:absolute;right:12px;bottom:78px;display:flex;flex-direction:column;gap:9px;z-index:6}
+.react .r{width:38px;height:38px;border-radius:var(--pill);display:grid;place-items:center;font-size:16px;
+  background:rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.10);backdrop-filter:blur(10px);cursor:pointer}
+.blow{position:absolute;right:20px;bottom:110px;font-size:20px;z-index:8;pointer-events:none;
+  animation:blow 1.5s ease-out forwards}
+@keyframes blow{0%{opacity:0;transform:translateY(0) scale(.5)}
+  20%{opacity:1}100%{opacity:0;transform:translateY(-150px) scale(1.5)}}
+
+/* ---------- 假装"一部片子" ---------- */
+/* 直接放测试卡太刺眼，也不像电影：压一点饱和 + 暗角 + 一行字幕，
+   让"取景后观众看到什么"这件事一眼能判断，而不是被彩色条抢走注意力 */
+.movie{position:absolute;background:#000;overflow:hidden}
+.movie video{width:100%;height:100%;object-fit:cover;display:block;filter:saturate(.8) brightness(.88)}
+.movie .vig{position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse at 50% 42%,transparent 42%,rgba(0,0,0,.5) 100%)}
+.movie .sub{position:absolute;left:6px;right:6px;bottom:8%;text-align:center;font-size:10px;
+  color:#fff;text-shadow:0 1px 3px #000,0 0 7px #000;letter-spacing:.02em;z-index:2}
+/* 环境底：和观众端 #vbg 同一套做法（同一条流放大 + 模糊 + 压暗垫后面） */
+.ambv{position:absolute;inset:-8%;width:116%;height:116%;object-fit:cover;
+  filter:blur(38px) saturate(1.05) brightness(.36);z-index:0}
+/* 网页里的播放器：上面有标题、下面有剧集列表，才像"用别的浏览器看片" */
+.webpage{position:relative;flex:1;min-height:0;display:flex;flex-direction:column;background:#0f0f12}
+.webhead{padding:9px 12px 8px;font-size:11px;color:#d6d6d6;line-height:1.5;flex:none}
+.webhead small{display:block;color:#6a6a72;font-size:9.5px;margin-top:2px}
+.weblist{flex:1;padding:8px 12px;display:flex;flex-direction:column;gap:7px;overflow:hidden}
+.weblist .it{display:flex;gap:7px;align-items:center}
+.weblist .th{width:50px;height:30px;border-radius:5px;flex:none;
+  background:linear-gradient(120deg,#22222a,#17171d)}
+.weblist .ln{flex:1;height:7px;border-radius:var(--pill);background:#1d1d23}
+.weblist .ln.s{width:60%;flex:none}
+
+/* ---------- 取景交互 ---------- */.stagebox{position:relative}
+.framing{position:absolute;inset:0;z-index:9;cursor:crosshair;touch-action:none}
+.framing .mask{position:absolute;background:rgba(0,0,0,.62);pointer-events:none;transition:all .06s linear}
+.rect{position:absolute;border:1.5px solid var(--live);border-radius:6px;pointer-events:none;
+  box-shadow:0 0 0 9999px rgba(0,0,0,0);}
+.rect .h{position:absolute;width:16px;height:16px;border-radius:4px;background:var(--live);
+  border:2px solid #04160a}
+.rect .h.tl{left:-8px;top:-8px} .rect .h.br{right:-8px;bottom:-8px}
+.rect .rlabel{position:absolute;left:0;top:-22px;font-size:10px;color:var(--live);white-space:nowrap}
+.readout{font-variant-numeric:tabular-nums;font-size:12px;color:var(--text-mid);line-height:1.9}
+.readout b{color:#fff}
+.preview{position:relative;background:#000;border-radius:12px;overflow:hidden;
+  border:1px solid rgba(255,255,255,.10);box-shadow:0 12px 30px rgba(0,0,0,.5)}
+.preview video{position:absolute;display:block}
+.preview .plabel{position:absolute;left:8px;top:8px;z-index:3;font-size:10px;color:rgba(255,255,255,.7)}
+
+/* ---------- 表格 / 卡片 ---------- */
+table{border-collapse:collapse;font-size:12.5px;margin-top:16px;max-width:1000px}
+th,td{padding:9px 13px;border-bottom:1px solid rgba(255,255,255,.08);text-align:left;vertical-align:top}
+th{color:var(--text-low);font-weight:600;font-size:11.5px;letter-spacing:.04em}
+td b{color:#fff}
+td .y{color:var(--live)} td .n{color:var(--err)} td .m{color:var(--warn)}
+.cards{display:flex;gap:16px;flex-wrap:wrap;margin-top:18px}
+.card{width:300px;background:var(--surface-1);border:1px solid rgba(255,255,255,.08);
+  border-radius:18px;padding:16px 18px}
+.card h3{margin:0 0 8px;font-size:13.5px}
+.card p{margin:0;font-size:12.5px;color:var(--text-mid);line-height:1.75}
+.card .tagline{font-size:10.5px;color:var(--text-low);letter-spacing:.06em;margin-bottom:9px}
+.q{width:100%;background:var(--surface-1);border:1px solid rgba(255,255,255,.09);border-radius:18px;
+  padding:15px 18px;margin-top:12px}
+.q h3{margin:0 0 6px;font-size:13.5px}
+.q p{margin:0;font-size:12.5px;color:var(--text-mid);line-height:1.7}
+.q .opt{display:inline-block;margin:9px 8px 0 0;padding:7px 13px;border-radius:var(--pill);
+  background:rgba(255,255,255,.08);font-size:12px;color:var(--text-mid);cursor:pointer;
+  border:1px solid rgba(255,255,255,.10)}
+.q .opt.sel{background:var(--live);color:#04160a;border-color:transparent;font-weight:600}
+.strip{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;max-width:1000px}
+.strip .s{font-size:11.5px;color:var(--text-mid);background:var(--surface-1);
+  border:1px solid rgba(255,255,255,.07);border-radius:var(--pill);padding:7px 13px}
+hr{border:0;border-top:1px solid rgba(255,255,255,.07);margin:46px 0 0}
+code{background:rgba(255,255,255,.07);padding:1px 6px;border-radius:6px;font-size:11.5px;color:#cfe}
+</style>
+</head>
+<body>
+
+<h1>从「分享屏幕」到「一起看片」</h1>
+<p class="lead">
+你说的三件事我拆成一句话的方案：<b>在房主手机上做「取景」，只把视频那一块编成画面推过去</b>。
+观众收到的就不再是"别人的手机桌面"，而是一段干净的视频流 —— 于是他的控件是屏幕上<b>唯一一层</b> UI，
+自然就像进了直播间 / 打开播放器；而房主那边爱用哪个浏览器用哪个浏览器，不用换成 App 内置的。
+</p>
+<div class="strip">
+  <span class="s">① 画面层：逐帧裁掉房主的 UI、状态栏、通知</span>
+  <span class="s">② 观众层：直播间化，只有一层控件</span>
+  <span class="s">③ 控制层：能控就控，不能控就"点歌式"请求</span>
+</div>
+
+<!-- ============ 1. 问题对照 ============ -->
+<h2><span class="n">1</span>先看问题出在哪：两层 UI 打架</h2>
+<p class="lead">左边是你刚才体验到的样子（示意）：观众画面里既压着<b>房主 App 的控件</b>，又叠着<b>观众自己的控件</b>。
+右边是取景之后：视频以外的一切在房主手机上就被裁掉了。</p>
+
+<div class="row">
+  <div class="cell">
+    <div class="phone">
+      <div class="srcscreen">
+        <div class="statusbar"><span>08:26</span><span>5G ▮▮▮</span></div>
+        <div class="addrbar"><span>≡</span><span>◀</span><div class="u">🔒 movie.example.com/play/8821</div><span>☆</span></div>
+        <div class="webpage">
+          <div class="webhead">《漫长的季节》第 3 集<small>3.4 万播放 · 2 天前 · 清晰度 1080P</small></div>
+          <div class="movie" style="position:relative;left:auto;right:auto;width:100%;height:186px;flex:none">
+            <video src="sample.mp4" muted loop autoplay playsinline></video>
+            <div class="vig"></div><div class="sub">"往前看，别回头。"</div>
+          </div>
+          <div class="weblist">
+            <div class="it"><span class="th"></span><span class="ln"></span></div>
+            <div class="it"><span class="th"></span><span class="ln s"></span></div>
+            <div class="it"><span class="th"></span><span class="ln"></span></div>
+            <div class="it"><span class="th"></span><span class="ln s"></span></div>
+          </div>
+        </div>
+        <div class="homebar"><i></i></div>
+      </div>
+      <div class="hostui">
+        <div class="k">🎙</div><div class="k">⏸</div>
+        <div class="k pri">⛶</div><span style="margin-left:auto;font-size:10.5px;color:#9a9a9a">房主的控件</span>
+      </div>
+      <div class="island top" style="top:34px"><span class="dot"></span>正在观看<span class="grow">148ms</span></div>
+      <div class="island bottom" style="bottom:52px">
+        <div class="ctl">🔊</div><div class="vr"></div><div class="ctl">⧉</div><div class="ctl">⛶</div><div class="ctl">■</div>
+      </div>
+      <div class="hint" style="background:rgba(243,114,127,.9);color:#2b0710">两层控件 · 互相压</div>
+    </div>
+    <p class="cap"><b class="bad">现状。</b>整屏采集 ⇒ 房主的状态栏、地址栏、App 控件全都进了流；
+    观众自己的浮层只能压在它们上面。而且房主为了不被挡住，只能把片子往中间缩。</p>
+  </div>
+
+  <div class="cell">
+    <div class="phone" data-room style="cursor:pointer;background:#08080a">
+      <video class="ambv" src="sample.mp4" muted loop autoplay playsinline></video>
+      <div class="movie" style="left:12px;right:12px;top:50%;transform:translateY(-50%);height:172px;
+           border-radius:14px;box-shadow:0 18px 60px rgba(0,0,0,.65)">
+        <video src="sample.mp4" muted loop autoplay playsinline></video>
+        <div class="vig"></div><div class="sub">"往前看，别回头。"</div>
+      </div>
+      <div class="island top"><span class="avatar">周</span>周周<span class="chip g">直连</span>
+        <span class="grow">12:41 · 148ms</span></div>
+      <div class="island bottom">
+        <div class="ctl">🔊</div><div class="vr"></div>
+        <div class="stat"><b>27</b><span>fps</span></div>
+        <div class="vr"></div><div class="ctl">⧉</div><div class="ctl">⛶</div><div class="ctl">■</div>
+      </div>
+      <div class="react"><div class="r">❤</div><div class="r">😆</div><div class="r">😴</div></div>
+      <div class="hint">轻触屏幕收起控件</div>
+    </div>
+    <p class="cap"><b class="good">取景后 · 竖屏。</b>推过去的就是视频本身 ⇒ 观众端是"一块会动的画面 + 我自己的控件"。
+    16:9 的内容在竖屏里居中，左右黑边用<b>同一条流放大模糊</b>垫成余晖（观众端页面里已经做了这套 ambient 底）。
+    顶栏是房主身份 + 观看时长，底岛是音量/小窗/全屏/退出，右侧三颗反应（点了飘一下，<b>没有弹幕</b>）。点一下画面全部收起。</p>
+  </div>
+
+  <div class="cell w">
+    <div class="phone wide" data-room style="cursor:pointer">
+      <video src="sample.mp4" muted loop autoplay playsinline
+             style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>
+      <div class="island top" style="top:10px;left:14px;right:auto;width:max-content">
+        <span class="avatar">周</span>周周<span class="chip g">直连</span></div>
+      <div class="island top" style="top:10px;right:14px;left:auto;width:max-content">
+        <span style="color:var(--text-mid)">12:41 · 27fps · 148ms</span></div>
+      <div class="island bottom" style="bottom:14px">
+        <div class="ctl">🔊</div><div class="vr"></div>
+        <div class="stat"><b>04:12</b><span>片长 41:08</span></div>
+        <div style="flex:1;min-width:180px;height:3px;border-radius:var(--pill);background:rgba(255,255,255,.2);position:relative">
+          <i style="position:absolute;left:0;top:0;bottom:0;width:17%;border-radius:var(--pill);background:var(--live)"></i></div>
+        <div class="ctl">⧉</div><div class="ctl on">⛶</div><div class="ctl">■</div>
+      </div>
+      <div class="hint">这就是"像打开浏览器看视频"的那一屏</div>
+    </div>
+    <p class="cap"><b class="good">取景后 · 横屏。</b>观众把手机一转，画面铺满整块屏，底部一条进度 + 一颗退出。
+    进度条是<b>只读的镜像</b>（房主在别的浏览器里，我读不到真实时间轴，这条按"画面里有没有黑边在动"给个大概，
+    拿不到就不显示 —— 宁可空着也不编）。真正能显示精确进度的只有内置浏览器那一档。</p>
+  </div>
+
+  <div class="cell" style="width:300px">
+    <div class="card"><div class="tagline">顺带解决的两件事</div>
+      <h3>隐私是白送的</h3>
+      <p>裁掉的不是像素而是<b style="color:#fff">数据</b>：房主的微信弹窗、验证码、通知、地址栏里的历史记录，
+      观众<b class="good">根本收不到</b>，不是"到了对端再涂黑"。这一条比涂黑强得多。</p>
+    </div>
+    <div class="card" style="margin-top:14px"><div class="tagline">同样白送</div>
+      <h3>码率花在片子上</h3>
+      <p>原来 720p 的额度里有一大半在传房主的黑色 App 背景和状态栏文字。裁掉之后同样的码率全给画面，
+      <b style="color:#fff">片子更清楚、还更省流量</b>。</p>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 2. 取景怎么做 ============ -->
+<h2><span class="n">2</span>「取景」在房主手机上长什么样（可以拖着试）</h2>
+<p class="lead">下面左边那块<b>可以拖</b>：按住绿色框的角改取景范围，右边"观众收到的就是这一块"会跟着变。
+实际产品里房主不需要每次都拖 —— 三种自动来源，手动只是兜底。</p>
+
+<div class="row">
+  <div class="cell stagebox">
+    <div class="phone" id="hostPhone">
+      <div class="srcscreen">
+        <div class="statusbar"><span>08:26</span><span>5G ▮▮▮</span></div>
+        <div class="addrbar"><span>≡</span><span>◀</span><div class="u">🔒 movie.example.com/play/8821</div><span>☆</span></div>
+        <div class="pagearea" id="pageArea"><video src="sample.mp4" muted loop autoplay playsinline id="srcV"></video></div>
+        <div class="homebar"><i></i></div>
+      </div>
+      <div class="hostui">
+        <div class="k">🎙</div><div class="k">⏸</div><div class="k pri">⛶</div>
+        <span style="margin-left:auto;font-size:10.5px;color:#9a9a9a">取景中 · 点一下遮屏</span>
+      </div>
+      <div class="framing" id="framing">
+        <div class="mask" id="mT"></div><div class="mask" id="mB"></div>
+        <div class="mask" id="mL"></div><div class="mask" id="mR"></div>
+        <div class="rect" id="rect"><span class="rlabel" id="rectLabel">取景框</span>
+          <span class="h tl"></span><span class="h br"></span></div>
+      </div>
+    </div>
+    <p class="cap"><b>房主侧。</b>共享一开始就自动贴合内容；框只在房主主动点「调整取景」时才出现，
+    拖完记住（横屏/竖屏各存一份）。</p>
+  </div>
+
+  <div class="cell" style="width:380px">
+    <div style="font-size:12px;color:var(--text-low);letter-spacing:.05em;margin-bottom:8px">观众收到的画面</div>
+    <div class="preview" id="preview" style="width:356px;height:200px">
+      <video src="sample.mp4" muted loop autoplay playsinline id="pvV"></video>
+      <span class="plabel">实际推流内容</span>
+    </div>
+    <div class="readout" style="margin-top:14px">
+      裁剪区：<b id="roCrop">—</b><br>
+      编码输出：<b id="roOut">—</b><br>
+      相比整屏少传：<b id="roSave" style="color:var(--live)">—</b>
+    </div>
+    <p class="cap">这三行就是产品里房主会看到的读数（裁掉了多少、省了多少码率），
+    让他知道对方<b>看不到</b>自己的状态栏。</p>
+
+    <div class="card" style="width:auto;margin-top:16px">
+      <div class="tagline">技术上已核实（不是印象）</div>
+      <h3>公开 API 就够，不用 root / 不用无障碍</h3>
+      <p>本机 AAR 里 <code>VideoSource.setVideoProcessor()</code>、
+      <code>VideoFrame.Buffer.cropAndScale()</code>、<code>TextureBufferImpl.cropAndScale()</code> 全部存在，
+      采集帧是 GPU 纹理缓冲，裁剪走纹理路径。裁完再缩到 720p，等于给编码器减负。</p>
+    </div>
+  </div>
+</div>
+
+<div class="cards">
+  <div class="card"><div class="tagline">取景框来源 · 优先级 1</div><h3>自动：黑边检测</h3>
+    <p>全屏播放时视频上下常带黑边。每 ~2 秒抽一帧统计亮度，找出"四周全黑、中间有内容"的最大内接矩形。
+    零操作、零权限，覆盖"全屏看电影"这个主场景。</p></div>
+  <div class="card"><div class="tagline">优先级 2</div><h3>手动：拖一次</h3>
+    <p>非全屏（小窗、网页里嵌一块播放器）时黑边检测会失手，房主点「调整取景」拖一下。
+    按横竖屏各记一份，下次自动恢复。</p></div>
+  <div class="card"><div class="tagline">优先级 3</div><h3>内置浏览器：直接问 DOM</h3>
+    <p>用 App 里那个「一起看片」时，<code>&lt;video&gt;</code> 的位置尺寸是精确已知的，
+    取景框可以零误差贴合，还能同时拿到片名和进度。</p></div>
+  <div class="card"><div class="tagline">失败兜底</div><h3>检测不确信就退回整屏</h3>
+    <p>置信度不够（画面本来大片纯黑、或刚切 App）时不动框，宁可多传 UI 也不把片子裁掉半张脸。
+    顶栏标一句"未取景"。</p></div>
+</div>
+
+<!-- ============ 3. 遮屏 ============ -->
+<h2><span class="n">3</span>取景顺手换来的两个能力</h2>
+<div class="row">
+  <div class="cell">
+    <div class="phone">
+      <div style="position:absolute;inset:0;background:
+        radial-gradient(circle at 50% 40%,#17321f,#050506 70%)"></div>
+      <div style="position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:0 30px">
+        <div>
+          <div style="font-size:34px">🙈</div>
+          <div style="font-size:14px;margin-top:10px">对方把画面遮住了</div>
+          <div style="font-size:11.5px;color:var(--text-low);margin-top:6px;line-height:1.7">
+            08:31 起 · 声音还在<br>（他随时能松开）</div>
+        </div>
+      </div>
+      <div class="island bottom"><div class="ctl pri">🙈</div><div class="vr"></div><div class="ctl">🔊</div><div class="ctl">⛶</div></div>
+    </div>
+    <p class="cap"><b>一键遮屏。</b>取景管线里"丢掉这一帧"是一个布尔值（<code>FrameAdaptationParameters.drop</code>），
+    所以房主想挡脸/回微信/接电话时按一下就不推画面，声音留着继续聊。观众看到一张明确的卡，不是黑屏发呆。</p>
+  </div>
+
+  <div class="cell">
+    <div class="phone" style="background:#08080a">
+      <video class="ambv" src="sample.mp4" muted loop autoplay playsinline></video>
+      <div class="movie" style="left:12px;right:12px;top:50%;transform:translateY(-50%);height:172px;
+           border-radius:14px;box-shadow:0 18px 60px rgba(0,0,0,.65)">
+        <video src="sample.mp4" muted loop autoplay playsinline></video>
+        <div class="vig"></div><div class="sub">"往前看，别回头。"</div>
+      </div>
+      <div class="island top" style="top:14px"><span class="dot"></span>周周<span class="grow">12:41</span></div>
+      <div style="position:absolute;left:12px;right:12px;bottom:32px;z-index:6">
+        <div style="padding:11px 13px;border-radius:20px;background:rgba(0,0,0,.62);
+             backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,.10)">
+          <div style="font-size:11px;color:var(--text-low);margin-bottom:8px">想让对方帮你做点什么</div>
+          <div style="display:flex;gap:8px">
+            <div class="ctl" style="width:auto;padding:0 13px;font-size:11.5px;gap:6px;display:flex;align-items:center">⏸ 暂停</div>
+            <div class="ctl" style="width:auto;padding:0 13px;font-size:11.5px;display:flex;align-items:center">⏪ 10s</div>
+            <div class="ctl" style="width:auto;padding:0 13px;font-size:11.5px;display:flex;align-items:center">⏩ 10s</div>
+            <div class="ctl" style="width:auto;padding:0 13px;font-size:11.5px;display:flex;align-items:center">🔊+</div>
+          </div>
+        </div>
+        <div style="margin-top:8px;font-size:10.5px;color:var(--text-low);text-align:center">
+          对方在用别的浏览器 —— 这些是「请求」，会在他手机上弹一条</div>
+      </div>
+    </div>
+    <p class="cap"><b class="warnc">控制要分档。</b>片子在第三方浏览器里，我拿不到它的 DOM，
+    观众按 ±10 秒只能是<b>请求</b>（房主手机上弹提示 + 震动，他自己按）。
+    只有用内置浏览器才是真·直接控制。这条不能含糊，见第 4 节。</p>
+  </div>
+</div>
+
+<!-- ============ 4. 三档控制 ============ -->
+<h2><span class="n">4</span>「让对方也能控制进度」的三条路，各自能做到什么</h2>
+<table>
+  <tr><th style="width:150px">路线</th><th>画面质量</th><th>流量</th><th>观众能直接控制进度</th><th style="width:80px">权限</th><th>能看什么内容</th></tr>
+  <tr>
+    <td><b>A 取景直播</b><br><span style="color:var(--text-low);font-size:11px">推荐做底座</span></td>
+    <td class="m">重编码，720p/2Mbps 档</td><td class="m">约 15 MB/分钟</td>
+    <td class="n">否（只能请求）</td><td class="y">无新增</td>
+    <td><b>任何 App</b>：Netflix、B 站、本地播放器、网盘</td>
+  </tr>
+  <tr>
+    <td><b>B 内置浏览器</b><br><span style="color:var(--text-low);font-size:11px">现状，保留</span></td>
+    <td class="m">同上（也可以走取景只传画面）</td><td class="m">约 15 MB/分钟</td>
+    <td class="y">是（注入 JS，精确到秒）</td><td class="y">无新增</td>
+    <td class="n">只有本网页播放器，别的 App 进不去</td>
+  </tr>
+  <tr>
+    <td><b>C 链接同播</b><br><span style="color:var(--text-low);font-size:11px">synctv 那套</span></td>
+    <td class="y">观众本地原生播放，无损</td><td class="y">几乎为零（只传时间戳）</td>
+    <td class="y">是（双方各自本地播，同步时间轴）</td><td class="y">无新增</td>
+    <td class="n">观众那边也得打得开这个源；会员/DRM 直接废</td>
+  </tr>
+</table>
+<p class="note">
+<b>我的建议：</b>A 当底座（它解决的是"割裂"和"双层 UI"这两个你真正难受的点，而且对任何浏览器都成立）；
+B 保留成"要对方帮你拖进度时才进"的模式；C 作为 A 的<b>升级按钮</b> —— 当同看的内容恰好是个能直接打开的链接时，
+观众端出现一颗"用我的账号看高清"，点了就换成本地播放 + 只同步时间轴，两个人都不用心疼流量。
+</p>
+
+<div class="row" style="margin-top:22px">
+  <div class="cell" style="width:300px">
+    <div class="card"><div class="tagline">C 的代价要说清楚</div><h3>它不是"更好的 A"，是另一件事</h3>
+      <p>C 传的是<b style="color:#fff">片源</b>不是画面，所以"我在看什么"必须能被对方独立复现。
+      情侣两人会员不在同一个账号上时，这条路当场断掉，只能回 A。
+      所以它是加分项，不能当主方案。</p></div>
+  </div>
+  <div class="cell" style="width:300px">
+    <div class="card"><div class="tagline">还有一条更狠的，我不建议</div><h3>无障碍服务代按</h3>
+      <p>开了无障碍就能读第三方 App 的控件、直接替观众点 ±10 秒。代价：房主要授予系统级权限、
+      Flyme/MIUI 会杀、重装会掉、误点风险，而且"对方在我手机上点按钮"这件事本身让人不安。
+      <b class="bad">除非你明确要，我不做。</b></p></div>
+  </div>
+</div>
+
+<!-- ============ 5. 参考项目 ============ -->
+<h2><span class="n">5</span>你给的四家，各自解决的是哪一半</h2>
+<p class="lead">我把四个仓库都读了源码（不只是 README）。结论有点意外：<b>没有一家做"逐帧裁剪"</b> ——
+因为它们都不需要：桌面端可以直接选"一个标签页"，Web 端可以各自本地播。
+只有<b>手机当房主 + 内容在第三方 App 里</b>这个组合需要裁剪，而这个组合上四家全都退化了。</p>
+<table>
+  <tr><th style="width:170px">项目</th><th>它怎么拿到画面</th><th>我们能抄什么</th><th>为什么不能照搬</th></tr>
+  <tr>
+    <td><b>synctv-app</b><br><span style="color:var(--text-low);font-size:11px">Flutter，活跃，72★</span></td>
+    <td>服务端按站点解析出真实播放地址（Rust 的 <code>bilibili/client.rs</code>），<b>观众本地播自己的播放器</b></td>
+    <td>整套时间轴同步模型：<code>(position, generatedAt, rate)</code> + NTP 式对钟 + 偏差 &gt;1.2s 才 seek + 单调 <code>version</code> 丢过期帧 + 回声抑制</td>
+    <td class="n">要一个跑在服务端的 provider 代理（manifest 重写、签名 URL、切片缓存）。手机跑不了，也不该跑</td>
+  </tr>
+  <tr>
+    <td><b>SyncWatch</b><br><span style="color:var(--text-low);font-size:11px">Node+Socket.IO，活跃，134★</span></td>
+    <td>桌面：<code>getDisplayMedia({preferCurrentTab, selfBrowserSurface:'exclude', systemAudio:'include'})</code> 选单个标签页<br>
+        Android：MediaProjection→ImageReader→<b>JPEG 8–12fps、无声</b></td>
+    <td>「申请控制权」这个交互（= 我说的请求式）；共享时把自己的播放控件全禁掉；immersive 去系统栏；直播间浮层清单（状态卡 / 延迟 / 偏差 / 反应层）</td>
+    <td class="n">它自己写了"Cloudflare 没有 Android 版 cloudflared"⇒ 手机当房主它做不到公网；我们的隧道 + 真 WebRTC 屏幕流正是它缺的那块</td>
+  </tr>
+  <tr>
+    <td><b>192_lab-couple-cinema</b><br><span style="color:var(--text-low);font-size:11px">Node，单次提交，像课程作业</span></td>
+    <td>只同步 <code>{paused,time,rate}</code>，双方各自播同一个 URL（hls.js）</td>
+    <td>回声抑制的具体写法：一个 <code>applying</code> 计数器 + 700ms 衰减，跟随者 <b>|Δ|&gt;1.8s 才 seek</b>。我现在的 <code>WatchSync</code> 只有 250ms 防抖，<b class="warnc">缺这一条</b></td>
+    <td class="n">片源是灰产 m3u8 采集站；语音只有 Google STUN 没 TURN，对称 NAT 下必挂</td>
+  </tr>
+  <tr>
+    <td><b>star-syncplayer</b><br><span style="color:var(--text-low);font-size:11px">JavaFX+VLC，2023 年后停更</span></td>
+    <td>双方各自打开本地同一个文件，谁都不传画面</td>
+    <td>服务器把控制消息<b>同时回给两端</b>，于是漂移是 <code>|t1−t2|</code> 而不是 <code>t1+t2</code> —— 一条很便宜的信令改进</td>
+    <td class="n">桌面 VLC，且要求两人有同一个文件；默认服务器 2024-09 已过期</td>
+  </tr>
+</table>
+<p class="note"><b>所以方案这么定：</b>画面层用「取景」（四家都没有、也只有我们需要）；观众层抄 synctv/SyncWatch 的直播间浮层；
+控制层抄 SyncWatch 的「申请控制权」+ 那两家的漂移/回声模型；「链接同播」作为可选升级，抄 synctv 的同步协议而不是它的代理。</p>
+
+<!-- ============ 6. 决策点 ============ -->
+<h2><span class="n">6</span>要你拍的三个问题</h2>
+<div class="q"><h3>Q1 · 取景默认开还是默认关？</h3>
+  <p>开了以后观众只看到片子；但有些场景（教对方用手机、一起逛淘宝、打游戏）整屏才是对的。</p>
+  <span class="opt sel" data-g="q1">自动判断：识别到全屏视频就取景，否则整屏</span>
+  <span class="opt" data-g="q1">默认整屏，房主手动开「电影模式」</span>
+  <span class="opt" data-g="q1">默认取景，房主手动切「看我的屏幕」</span></div>
+<div class="q"><h3>Q2 · 观众用别的浏览器时，控制做到哪一档？</h3>
+  <p>真·代按要无障碍权限；请求式零权限但要房主动手。</p>
+  <span class="opt sel" data-g="q2">请求式（房主手机弹提示，他自己按）</span>
+  <span class="opt" data-g="q2">请求式 + 房主可临时授权代按</span>
+  <span class="opt" data-g="q2">不做控制，只保留连麦喊话</span></div>
+<div class="q"><h3>Q3 · 「链接同播」（C）要不要一起做？</h3>
+  <p>省流量最狠（约 15 MB/分钟 → 接近 0），画质原生；但只有双方都能打开同一个源才成立。</p>
+  <span class="opt sel" data-g="q3">先做 A，C 留到下一轮</span>
+  <span class="opt" data-g="q3">A + C 一起，观众端加"用我的账号看高清"</span>
+  <span class="opt" data-g="q3">只做 C，画面共享保持现状</span></div>
+<p class="note">点一下选项就行，我按你选的次序开工。默认（绿色）是我的推荐。</p>
+
+<hr>
+<p class="note" style="margin-top:20px">
+本页是方案示意，不是实现截图。除"取景框可拖"和"点画面收起控件"两处交互外，画面内容用的是仓库里自带的
+<code>sample.mp4</code> 测试卡。真实链路里观众端还包含：连麦开关、方向跟随、画中画、以及上一轮已经修好的
+信令心跳 —— 这些都不受本方案影响。</p>
+
+<script>
+// ---------- 观众端：点画面收起/唤出控件 ----------
+document.querySelectorAll('.phone[data-room]').forEach(ph=>{
+  let shown=true;
+  ph.addEventListener('click',()=>{shown=!shown;
+    ph.querySelectorAll('.island,.react,.hint').forEach(el=>el.classList.toggle('hide',!shown));});
+  ph.querySelectorAll('.react .r').forEach(b=>b.addEventListener('click',e=>{
+    e.stopPropagation();
+    const s=document.createElement('div'); s.className='blow'; s.textContent=b.textContent;
+    ph.appendChild(s); setTimeout(()=>s.remove(),1500);}));
+});
+
+// ---------- 取景框：可拖 + 实时预览 ----------
+const host=document.getElementById('hostPhone');
+const srcV=document.getElementById('srcV'), pvV=document.getElementById('pvV');
+const rect=document.getElementById('rect'), framing=document.getElementById('framing');
+const masks={T:document.getElementById('mT'),B:document.getElementById('mB'),
+             L:document.getElementById('mL'),R:document.getElementById('mR')};
+const HW=330, HH=700;
+// 初始贴合 pagearea 里的视频（16:9，宽 330 → 高 185.6，居中）
+let box=null;
+function initBox(){
+  const r=srcV.getBoundingClientRect(), h=host.getBoundingClientRect();
+  box={x:r.left-h.left, y:r.top-h.top, w:r.width, h:r.height};
+  apply();
+}
+function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+function apply(){
+  const {x,y,w,h}=box;
+  rect.style.left=x+'px'; rect.style.top=y+'px'; rect.style.width=w+'px'; rect.style.height=h+'px';
+  masks.T.style.cssText=`left:0;top:0;width:${HW}px;height:${y}px`;
+  masks.B.style.cssText=`left:0;top:${y+h}px;width:${HW}px;height:${HH-y-h}px`;
+  masks.L.style.cssText=`left:0;top:${y}px;width:${x}px;height:${h}px`;
+  masks.R.style.cssText=`left:${x+w}px;top:${y}px;width:${HW-x-w}px;height:${h}px`;
+  // 预览：把源视频按 w/h 放大铺满预览框
+  const P=document.getElementById('preview'), pw=P.clientWidth, ph=P.clientHeight;
+  const k=Math.max(pw/w, ph/h);           // cover
+  pvV.style.width=(w*k)+'px'; pvV.style.height=(h*k)+'px';
+  pvV.style.left=((pw-w*k)/2 - x*0)+'px'; pvV.style.top=((ph-h*k)/2)+'px';
+  // 读数：短边固定 720，裁掉的部分不占码率
+  const outW=Math.round(clamp(w/HW*720,320,1280)/2)*2, outH=Math.round(outW*h/w/2)*2;
+  const fullW=720, fullH=Math.round(fullW*HH/HW/2)*2;
+  const save=1-(w*h)/(HW*HH);
+  document.getElementById('roCrop').textContent=
+    `x=${Math.round(x)}, y=${Math.round(y)}, ${Math.round(w)}×${Math.round(h)} px`;
+  document.getElementById('roOut').textContent=
+    `${outW}×${outH}（整屏时是 ${fullW}×${fullH}）`;
+  document.getElementById('roSave').textContent=
+    `${(save*100).toFixed(0)}% 的画面不推流 · 每个像素多分 ${(1/(1-save)).toFixed(1)}× 码率`;
+  document.getElementById('rectLabel').textContent=
+    `${(w/h).toFixed(2)}:1` + (Math.abs(w/h-16/9)<0.12?'（16:9，看起来是片子）':'');
+}
+let drag=null;
+framing.addEventListener('pointerdown',e=>{
+  const r=host.getBoundingClientRect(), px=e.clientX-r.left, py=e.clientY-r.top;
+  const near=(a,b)=>Math.abs(a-b)<18;
+  if(near(px,box.x)&&near(py,box.y)) drag={c:'tl'};
+  else if(near(px,box.x+box.w)&&near(py,box.y+box.h)) drag={c:'br'};
+  else if(px>box.x&&px<box.x+box.w&&py>box.y&&py<box.y+box.h) drag={c:'mv',ox:px-box.x,oy:py-box.y};
+  else { box={x:clamp(px-90,0,HW-40),y:clamp(py-60,0,HH-40),w:180,h:120}; drag={c:'mv',ox:90,oy:60}; apply(); }
+  framing.setPointerCapture(e.pointerId);
+});
+framing.addEventListener('pointermove',e=>{
+  if(!drag) return;
+  const r=host.getBoundingClientRect(), px=clamp(e.clientX-r.left,0,HW), py=clamp(e.clientY-r.top,0,HH);
+  if(drag.c==='mv'){ box.x=clamp(px-drag.ox,0,HW-box.w); box.y=clamp(py-drag.oy,0,HH-box.h); }
+  else if(drag.c==='tl'){ const rr=box.x+box.w, bb=box.y+box.h;
+    box.x=Math.min(px,rr-40); box.y=Math.min(py,bb-40); box.w=rr-box.x; box.h=bb-box.y; }
+  else { box.w=Math.max(40,px-box.x); box.h=Math.max(30,py-box.y); }
+  apply();
+});
+framing.addEventListener('pointerup',()=>drag=null);
+// 两个 video 对齐（同一文件，避免肉眼看出不同步）
+// 页面上十几处放的是同一段测试片：不锁时间轴，肉眼会看出"这两块不是同一刻"
+const vids=[...document.querySelectorAll('video')], master=vids[0];
+setInterval(()=>{ if(!master||master.paused||!isFinite(master.currentTime))return;
+  vids.forEach(v=>{ if(v!==master&&Math.abs(v.currentTime-master.currentTime)>0.15)
+    try{v.currentTime=master.currentTime}catch(e){} }); },700);
+// 选项单选
+document.querySelectorAll('.opt').forEach(o=>o.addEventListener('click',()=>{
+  document.querySelectorAll(`.opt[data-g="${o.dataset.g}"]`).forEach(x=>x.classList.remove('sel'));
+  o.classList.add('sel');}));
+requestAnimationFrame(initBox);
+addEventListener('resize',()=>requestAnimationFrame(initBox));
+// 截图辅助：?off=1700 把整页往上推，好分段拍清楚（只在带参数时生效，正常打开不受影响）
+{const off=+new URLSearchParams(location.search).get('off')||0;
+ if(off)document.body.style.transform=`translateY(${-off}px)`;}
+</script>
+</body>
+</html>
