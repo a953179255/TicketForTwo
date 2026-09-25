@@ -190,8 +190,14 @@ function send(obj){
 
 // ---- 连接传话员 --------------------------------------------------------
 
+/* 演示模式：?demo=canvas。它存在的意义是"呈现层能脱离隧道单独检查" ——
+   隧道是整条链路上最不稳的一环，连不上房主时就再也看不见观看端长什么样。
+   注意 boot() 里的"链接不完整"要在演示模式下让路，否则弹出来的卡片正好
+   盖住画面中间，验了个寂寞（headless 截图实测就是这样）。 */
+const DEMO = new URLSearchParams(location.search).get('demo') === 'canvas';
+
 function boot(){
-  if (!KEY) {
+  if (!KEY && !DEMO) {
     show(`<h1>这条链接不完整</h1>
       <p class="muted">邀请链接后面的 <code>?k=…</code> 是接入凭证。聊天软件经常把它折成卡片、
       或者只复制了前半截 —— 请让房主重新发一条完整的。</p>`);
@@ -645,19 +651,25 @@ if (wideQ && wideQ.addEventListener) wideQ.addEventListener('change', applyAmbie
    检查观看端的呈现层（环境底有没有生效、居中的比例对不对、窄屏是不是真的关掉）。
    正常邀请链接不带这个参数，所以它不参与真实使用；但没有它，"打开就是全屏很丑"
    这类问题只能靠连上真房主才能复现，而隧道恰恰是最不稳定的一环。 */
-if (new URLSearchParams(location.search).get('demo') === 'canvas') {
+if (DEMO) {
   const c = document.createElement('canvas'); c.width = 480; c.height = 900;
-  const x = c.getContext('2d'); let t = 0;
-  (function draw(){
+  const x = c.getContext('2d');
+  const ds = c.captureStream(0);       // 0 = 不自动出帧，改由 requestFrame 驱动
+  const trk = ds.getVideoTracks()[0];
+  let t = 0;
+  function drawFrame(){
     t += 1; x.fillStyle = '#101014'; x.fillRect(0, 0, 480, 900);
     for (let i = 0; i < 8; i++) {
-      x.fillStyle = 'hsl(' + ((i * 40 + t) % 360) + ' 70% 55%)';
+      x.fillStyle = 'hsl(' + ((i * 40 + t * 6) % 360) + ' 70% 55%)';
       x.fillRect(24, 120 + i * 92, 432, 64);
     }
     x.fillStyle = '#fff'; x.font = 'bold 54px sans-serif'; x.fillText('PHONE', 130, 90);
-    requestAnimationFrame(draw);
-  })();
-  const ds = c.captureStream(25);
+    if (trk && trk.requestFrame) trk.requestFrame();
+  }
+  drawFrame();
+  // 用 setInterval 而不是 rAF：headless Chrome 的 --virtual-time-budget 遇到 rAF 循环
+  // 会永远追不完（实测整个进程挂死），定时器能被预算正常消耗掉。
+  setInterval(drawFrame, 400);
   video.srcObject = ds; $('vbg').srcObject = ds;
   video.play().catch(() => {}); $('vbg').play().catch(() => {});
   hidePanel();
@@ -744,7 +756,8 @@ if (_q.get('report') === '1') {
   }, 2000);
 }
 
-boot();
+/* 演示模式不启动信令：没有 ?k= 本来也连不上，一路报错的卡片会盖住要检查的画面 */
+if (!DEMO) boot();
 </script>
 </body>
 </html>
