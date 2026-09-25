@@ -109,6 +109,15 @@ button.primary{background:var(--accent);color:#fff;border:0;border-radius:var(--
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .kv{display:flex;justify-content:space-between;gap:12px;font-size:13px;padding:3px 0;flex-wrap:wrap}
 .kv>*{min-width:0}
+/* cineNote 的提示条。**这个 class 之前在整个样式表里根本不存在**：
+   于是"对方收了厅""这条地址在观众这边取不到""声音已开"这些消息，
+   是一个没有样式的静态 div，排在满屏高的 video 后面 ——
+   实测竖屏 390x844 上它落在 y=844..864（**整条在视口下方，观众永远看不到**），
+   只有横屏才恰好露出来。补成底部居中的深色胶囊，跟着视口走。 */
+.hint{position:absolute;left:50%;transform:translateX(-50%);bottom:96px;z-index:8;
+  max-width:calc(100% - 24px);padding:8px 14px;border-radius:999px;text-align:center;
+  background:rgba(0,0,0,.78);border:1px solid rgba(255,255,255,.14);
+  color:#f2f4f7;font-size:13px;line-height:1.35;pointer-events:none}
 .hide{display:none!important}
 .meter{display:inline-flex;align-items:flex-end;gap:2px;height:14px}
 .meter i{width:3px;background:var(--live);border-radius:2px}
