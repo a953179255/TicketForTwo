@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -236,8 +237,13 @@ fun CallScreen(
                 onFirstFrame = { firstFrame = true },
                 onResolution = onContentResolution,
             )
+            // 放映中时**这句让位给下面那条放映条**：条上已经写着"厅里现在只有语音…
+            // 用浏览器打开链接可以本地播原画"，中间再叠一句同义的话，横屏实测两句正好
+            // 压在同一个带上（.dev/cinebar-capped.png："正在放映…"那行和"他在放片…"
+            // 那行直接重叠）。但控件收起时条也没了，那时中间这句必须回来当唯一的说明。
             when {
-                voiceMode -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                voiceMode && !(cinema != null && chromeShown) ->
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
                         /* 厅先开 + 观众用 App：他这边一块黑，底部条却写着"正在放映"，
                            两句都对、合起来却读不出"该干什么"。放映中时直接把下一步说出来。 */
@@ -251,9 +257,13 @@ fun CallScreen(
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     )
                 }
-                !firstFrame -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("等待对方画面…", fontSize = 13.sp, color = Ink.TextMid)
-                }
+                // 只有**真的有视频轨**才谈得上"等画面"。厅先开那条路房主根本不投屏
+                // （remoteTrack 为 null），这句却会永远挂在屏幕正中 —— 实测它还压在
+                // 放映条那行字上（.dev/cinebar-final.png："…的那条"与"等待对方画面…"重叠）。
+                !firstFrame && remoteTrack != null ->
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("等待对方画面…", fontSize = 13.sp, color = Ink.TextMid)
+                    }
             }
             // 手势层铺在视频之上、控件之下：它自己是全透明的，只吃指针事件。
             // 画中画时不挂：那颗小窗的点击归系统，我们不该拦。
@@ -376,6 +386,11 @@ private fun CinemaMirrorBar(
     val cs = com.ticketfortwo.app.cinema.CinemaSync
     Box(
         modifier
+            // 横屏实测（2400x1080，.dev/viewer-cinebar-land3.png）：不封顶时这张条被
+            // 里面那行 weight(1f) 撑到整屏宽 —— "正在放映"贴最左、"可控制"和三颗按钮贴最右，
+            // 一句话被拉到 2300px 两头，读起来要来回扫，而且中间空成一片。
+            // 竖屏 411dp 减掉左右 12dp 还是 387dp，封顶 560dp 对竖屏毫无影响。
+            .widthIn(max = 560.dp)
             .padding(horizontal = 12.dp)
             .background(androidx.compose.ui.graphics.Color(0xA0000000), RoundedCornerShape(20.dp))
             .padding(horizontal = 13.dp, vertical = 10.dp),

@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -334,7 +335,8 @@ fun WatchMirrorBar(
     GlassPanel(
         backdrop = backdrop,
         modifier = modifier
-            .fillMaxWidth()
+            // 同 CinemaMirrorBar：横屏不封顶会被撑成整屏宽的一条，文字两头读。
+            .widthIn(max = 560.dp)
             .padding(horizontal = 12.dp, vertical = 6.dp),
         radius = GlassDimens.radiusIsland,
         surfaceAlpha = 0.72f,
