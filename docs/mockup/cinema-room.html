@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>双人票 · 放映厅方案（v2）· 效果图</title>
+<style>
+:root{
+  --bg:#07070a; --s0:#121212; --s1:#181818; --s2:#1f1f1f;
+  --hi:#fff; --mid:#b3b3b3; --low:#7a7a7a;
+  --accent:#2997ff; --live:#1ed760; --warn:#ffa42b; --err:#f3727f; --pink:#f0a6c8;
+  --scrim:rgba(0,0,0,.60); --pill:9999px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--hi);
+  font-family:system-ui,-apple-system,"Segoe UI","Noto Sans SC",sans-serif;padding:34px 26px 70px}
+h1{font-size:23px;margin:0 0 6px}
+h2{font-size:16px;margin:46px 0 4px;display:flex;align-items:center;gap:10px}
+h2 .n{display:grid;place-items:center;width:24px;height:24px;border-radius:var(--pill);
+  background:var(--live);color:#04160a;font-size:12.5px;font-weight:700;flex:none}
+.lead{color:var(--mid);font-size:13.5px;max-width:980px;line-height:1.78;margin:0 0 8px}
+.lead b{color:var(--hi)}
+.note{color:var(--low);font-size:12.5px;max-width:980px;line-height:1.78;margin:8px 0 0}
+.note b{color:var(--mid)}
+.row{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start;margin-top:18px}
+.cell{flex:none}
+.cap{font-size:12.5px;color:var(--low);margin:11px 2px 0;line-height:1.75;max-width:360px}
+.cap b{color:var(--mid)}
+.bad{color:var(--err)} .good{color:var(--live)} .warnc{color:var(--warn)}
+.kbox{max-width:980px;background:linear-gradient(160deg,rgba(30,215,96,.10),rgba(0,0,0,0));
+  border:1px solid rgba(30,215,96,.28);border-radius:18px;padding:16px 20px;margin-top:18px}
+.kbox h3{margin:0 0 8px;font-size:14px;color:var(--live)}
+.kbox p{margin:0;font-size:13px;color:#dcdcdc;line-height:1.8}
+table{border-collapse:collapse;font-size:12.5px;margin-top:16px;max-width:1060px}
+th,td{padding:9px 13px;border-bottom:1px solid rgba(255,255,255,.08);text-align:left;vertical-align:top}
+th{color:var(--low);font-weight:600;font-size:11.5px;letter-spacing:.04em}
+td b{color:#fff}
+.y{color:var(--live)} .n2{color:var(--err)} .m{color:var(--warn)}
+.card{background:var(--s1);border:1px solid rgba(255,255,255,.08);border-radius:18px;padding:16px 18px}
+.card h3{margin:0 0 8px;font-size:13.5px}
+.card p{margin:0;font-size:12.5px;color:var(--mid);line-height:1.78}
+.card .tagline{font-size:10.5px;color:var(--low);letter-spacing:.06em;margin-bottom:9px}
+code{background:rgba(255,255,255,.07);padding:1px 6px;border-radius:6px;font-size:11.5px;color:#cfe}
+
+/* 手机框 */
+.phone{width:330px;height:700px;border-radius:38px;background:#000;position:relative;overflow:hidden;
+  border:1px solid rgba(255,255,255,.10);box-shadow:0 18px 44px rgba(0,0,0,.6)}
+.phone.land{width:700px;height:330px}
+.srcscreen{position:absolute;inset:0;background:#050506;display:flex;flex-direction:column}
+.statusbar{height:26px;flex:none;display:flex;align-items:center;justify-content:space-between;
+  padding:0 12px;font-size:10px;color:rgba(255,255,255,.75);background:#0b0b0e}
+.addrbar{height:40px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px;
+  background:#15151a;border-bottom:1px solid rgba(255,255,255,.06);font-size:10.5px;color:var(--low)}
+.addrbar .u{flex:1;background:#1f1f26;border-radius:var(--pill);padding:6px 10px;color:var(--mid);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.homebar{height:16px;flex:none;display:grid;place-items:center;background:#0b0b0e}
+.homebar i{width:110px;height:4px;border-radius:var(--pill);background:rgba(255,255,255,.35)}
+.webpage{position:relative;flex:1;min-height:0;display:flex;flex-direction:column;background:#0f0f12}
+.webhead{padding:9px 12px 8px;font-size:11px;color:#d6d6d6;line-height:1.5;flex:none}
+.webhead small{display:block;color:#6a6a72;font-size:9.5px;margin-top:2px}
+.weblist{flex:1;padding:8px 12px;display:flex;flex-direction:column;gap:7px;overflow:hidden}
+.weblist .it{display:flex;gap:7px;align-items:center}
+.weblist .th{width:50px;height:30px;border-radius:5px;flex:none;background:linear-gradient(120deg,#22222a,#17171d)}
+.weblist .ln{flex:1;height:7px;border-radius:var(--pill);background:#1d1d23}
+.weblist .ln.s{width:60%;flex:none}
+.movie{position:relative;background:#000;overflow:hidden;flex:none}
+.movie video{width:100%;height:100%;object-fit:cover;display:block;filter:saturate(.8) brightness(.9)}
+.movie .vig{position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse at 50% 42%,transparent 42%,rgba(0,0,0,.5) 100%)}
+.movie .sub{position:absolute;left:6px;right:6px;bottom:8%;text-align:center;font-size:10px;
+  color:#fff;text-shadow:0 1px 3px #000,0 0 7px #000;z-index:2}
+.hostui{position:absolute;left:12px;right:12px;bottom:26px;display:flex;align-items:center;gap:8px;
+  padding:8px 11px;border-radius:var(--pill);background:rgba(20,20,24,.86);backdrop-filter:blur(14px);
+  border:1px solid rgba(255,255,255,.12);font-size:11px;z-index:4}
+.hostui .k{width:30px;height:30px;border-radius:var(--pill);display:grid;place-items:center;
+  background:rgba(255,255,255,.13);font-size:13px;flex:none}
+.hostui .k.pri{background:var(--live);color:#04160a}
+/* 观众浮层 */
+.island{position:absolute;left:12px;right:12px;display:flex;align-items:center;gap:9px;
+  padding:9px 13px;border-radius:var(--pill);background:var(--scrim);backdrop-filter:blur(12px);
+  border:1px solid rgba(255,255,255,.10);font-size:12px;z-index:6}
+.island.top{top:14px} .island.bottom{bottom:20px}
+.island .grow{margin-left:auto;color:var(--mid)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--live);
+  box-shadow:0 0 0 3px rgba(30,215,96,.2);flex:none}
+.avatar{width:24px;height:24px;border-radius:var(--pill);flex:none;display:grid;place-items:center;
+  background:linear-gradient(135deg,var(--live),#0d5c2f);font-size:11px;font-weight:700;color:#04160a}
+.avatar.him{background:linear-gradient(135deg,var(--pink),#7a3357);color:#2b0710}
+.chip{font-size:10px;padding:3px 8px;border-radius:var(--pill);background:rgba(255,255,255,.12);
+  color:var(--mid);white-space:nowrap}
+.chip.g{background:rgba(30,215,96,.16);color:var(--live)}
+.chip.w{background:rgba(255,164,43,.16);color:var(--warn)}
+.chip.b{background:rgba(41,151,255,.16);color:var(--accent)}
+.ctl{width:40px;height:40px;border-radius:var(--pill);display:grid;place-items:center;font-size:16px;
+  border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.13);flex:none;cursor:pointer}
+.ctl.on{background:#fff;color:#0a0a0a}
+.ctl.pri{background:var(--live);color:#04160a}
+.stat{display:flex;flex-direction:column;font-size:9.5px;color:var(--mid);line-height:1.25}
+.stat b{font-size:12.5px;color:#fff;font-weight:640}
+.vr{width:1px;height:24px;background:rgba(255,255,255,.18);flex:none}
+.hide{display:none!important}
+.hint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:7px 14px;
+  border-radius:var(--pill);background:rgba(0,0,0,.55);font-size:11.5px;color:#ddd;z-index:7}
+.react{position:absolute;right:12px;bottom:78px;display:flex;flex-direction:column;gap:9px;z-index:6}
+.react .r{width:38px;height:38px;border-radius:var(--pill);display:grid;place-items:center;font-size:16px;
+  background:rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.10);backdrop-filter:blur(10px);cursor:pointer}
+.blow{position:absolute;right:20px;bottom:110px;font-size:20px;z-index:8;pointer-events:none;
+  animation:blow 1.5s ease-out forwards}
+@keyframes blow{0%{opacity:0;transform:translateY(0) scale(.5)}20%{opacity:1}
+  100%{opacity:0;transform:translateY(-150px) scale(1.5)}}
+.bar{height:3px;border-radius:var(--pill);background:rgba(255,255,255,.22);position:relative;flex:1}
+.bar i{position:absolute;left:0;top:0;bottom:0;border-radius:var(--pill);background:var(--live)}
+.badge{position:absolute;right:12px;top:12px;z-index:7;font-size:10.5px;padding:5px 10px;
+  border-radius:var(--pill);background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.12)}
+
+/* 流程步骤 */
+.flow{display:flex;align-items:stretch;gap:8px;flex-wrap:wrap;margin-top:14px;max-width:1060px}
+.step{background:var(--s1);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:11px 13px;
+  font-size:12px;color:var(--mid);min-width:120px}
+.step b{display:block;color:#fff;font-size:12.5px;margin-bottom:3px}
+.step.cut{border-color:rgba(243,114,127,.5);background:rgba(243,114,127,.08)}
+.step.new{border-color:rgba(30,215,96,.45);background:rgba(30,215,96,.08)}
+.arw{align-self:center;color:var(--low);font-size:14px}
+.flowlabel{font-size:11.5px;color:var(--low);letter-spacing:.05em;margin-top:18px}
+
+/* 开关 */
+.sw{width:46px;height:27px;border-radius:var(--pill);background:rgba(255,255,255,.18);position:relative;
+  cursor:pointer;transition:background .18s;flex:none}
+.sw:after{content:"";position:absolute;left:3px;top:3px;width:21px;height:21px;border-radius:50%;
+  background:#fff;transition:transform .18s cubic-bezier(.32,2.32,.61,.27)}
+.sw.on{background:var(--live)} .sw.on:after{transform:translateX(19px)}
+.ctlrow{display:flex;align-items:center;gap:10px;background:var(--s1);border:1px solid rgba(255,255,255,.09);
+  border-radius:16px;padding:12px 15px;font-size:12.5px;color:var(--mid);max-width:360px;margin-top:14px}
+input[type=range]{width:150px;accent-color:var(--live)}
+.q{width:100%;max-width:1000px;background:var(--s1);border:1px solid rgba(255,255,255,.09);
+  border-radius:18px;padding:15px 18px;margin-top:12px}
+.q h3{margin:0 0 6px;font-size:13.5px}
+.q p{margin:0;font-size:12.5px;color:var(--mid);line-height:1.7}
+.q .opt{display:inline-block;margin:9px 8px 0 0;padding:7px 13px;border-radius:var(--pill);
+  background:rgba(255,255,255,.08);font-size:12px;color:var(--mid);cursor:pointer;
+  border:1px solid rgba(255,255,255,.10)}
+.q .opt.sel{background:var(--live);color:#04160a;border-color:transparent;font-weight:600}
+/* 分享面板 */
+.sheet{position:absolute;left:0;right:0;bottom:0;background:rgba(18,18,22,.97);backdrop-filter:blur(20px);
+  border-top:1px solid rgba(255,255,255,.12);border-radius:22px 22px 0 0;padding:14px 12px 22px;z-index:9}
+.sheet .t{font-size:11.5px;color:var(--low);margin:0 4px 11px}
+.icons{display:flex;gap:12px;overflow:hidden}
+.icons .ic{width:58px;flex:none;text-align:center;font-size:9.5px;color:var(--mid)}
+.icons .ic u{display:grid;place-items:center;width:46px;height:46px;margin:0 auto 5px;border-radius:13px;
+  background:#232329;font-size:19px;text-decoration:none}
+.icons .ic.hi u{background:var(--live);color:#04160a;box-shadow:0 0 0 3px rgba(30,215,96,.25)}
+</style>
+</head>
+<body>
+
+<h1>放映厅方案（v2）—— 不裁画面，改传片源</h1>
+<p class="lead">
+上一版我提的「取景」你否掉了，两条理由我都认。第二条尤其关键，而且它把我上一版没想透的地方暴露出来了：
+<b>糊不糊，跟裁不裁没关系。</b>只要画面是从房主屏幕截下来的，它的分辨率上限就是"房主屏幕上那块播放器的大小"——
+1080×2400 的竖屏里一部 16:9 的片子只有 1080×607，观众全屏拉到 2400 宽，必然糊。裁一刀只是让码率分配好一点，
+救不了这个天花板；而框多框少这件事，本来也不该由房主负责、更不该是不可逆的。
+</p>
+<div class="kbox">
+  <h3>所以这版的核心换成了另一句话</h3>
+  <p><b>要一起看清一部片，就别传画面，传片源。</b>观众自己把那条流播出来，画质是原生的，
+  屏幕上只有他自己一层控件，进度是真的能同步的 —— 你提的"割裂 / 双层 UI / 全屏糊"三条一起消失，
+  而且不需要任何"框"。双人票要做的从"摄像机"变成"放映机 + 对表员"。</p>
+</div>
+
+<!-- ===== 1 需求 ===== -->
+<h2><span class="n">1</span>先把需求理清楚（你要的不是"分享屏幕更好看"）</h2>
+<p class="lead">把你的三段话拆成五条可以拿数字验收的需求，再逐条看谁能满足：</p>
+<table>
+  <tr><th style="width:60px">编号</th><th style="width:300px">需求</th><th>取景 v1</th><th>放映厅 v2</th></tr>
+  <tr><td><b>R1</b></td><td>找片 → 开播 → 拉对方，别来回切 App</td>
+      <td class="n2">没解决（还是两个 App）</td><td class="y">解决：系统分享菜单递链接，2 步</td></tr>
+  <tr><td><b>R2</b></td><td>观众全屏看要清晰</td>
+      <td class="n2">救不了（受限于房主屏幕像素）</td><td class="y">解决：观众本地播原片，1080P 就是 1080P</td></tr>
+  <tr><td><b>R3</b></td><td>看到的是"一部片"，屏幕上只允许一层控件</td>
+      <td class="m">能解决，但要冒框错的风险</td><td class="y">天然成立：根本没有"对方的屏幕"</td></tr>
+  <tr><td><b>R4</b></td><td>观众能自己拖进度，不用开口求</td>
+      <td class="n2">不能（第三方 App 拿不到 DOM）</td><td class="y">能：两边各自本地播，同步时间轴</td></tr>
+  <tr><td><b>R5</b></td><td>流量可控（你手机只剩 200MB），工作量不能是"造浏览器"</td>
+      <td class="m">15 MB/min 不变</td><td class="y">S 档几乎为 0；A 档才烧流量，且有上限开关</td></tr>
+</table>
+<p class="note"><b>一句话总结：</b>取景优化的是 R3，动不了 R2 和 R4；放映厅四条全能给到，代价是要处理"片源拿不到"的情况 ——
+所以它必须带一个降级档，不能只有一条路。</p>
+
+<!-- ===== 2 三档 ===== -->
+<h2><span class="n">2</span>三档链路，按"能拿到什么"自动降级</h2>
+<div class="row">
+  <div class="cell">
+    <div class="phone land" style="box-shadow:0 18px 44px rgba(0,0,0,.6)">
+      <video src="sample.mp4" muted loop autoplay playsinline
+             style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>
+      <div class="badge"><span class="chip b">S 档 · 观众本地播 1080P</span></div>
+      <div class="island top" style="top:10px;left:14px;right:auto;width:max-content">
+        <span class="avatar">周</span>周周<span class="chip g">在一起看</span></div>
+      <div class="island top" style="top:10px;right:14px;left:auto;width:max-content">
+        <span style="color:var(--mid)">《漫长的季节》3</span></div>
+      <div class="island bottom" style="bottom:14px">
+        <div class="ctl">⏸</div>
+        <span style="font-size:11px;color:var(--mid)">04:12</span>
+        <div class="bar"><i style="width:17%"></i></div>
+        <span style="font-size:11px;color:var(--mid)">41:08</span>
+        <div class="vr"></div><div class="ctl">🔊</div><div class="ctl">⛶</div><div class="ctl">■</div>
+      </div>
+    </div>
+    <p class="cap"><b class="good">S 档 · 同一片源各自播。</b>房主手机只做两件事：把媒体地址递给观众、把时间轴对齐。
+    观众端是<b>真的在播那部片</b>，不是看录像 —— 原生清晰度、真进度条、能自己拖，双人票的流量近乎为零。
+    拿地址这步靠 <code>WebViewClient.shouldInterceptRequest</code>：就算网站的 <code>&lt;video&gt;.src</code> 是
+    <code>blob:</code>（MSE），分片请求也照样要过我们的 WebView。</p>
+  </div>
+
+  <div class="cell" style="width:330px">
+    <div class="card"><div class="tagline">A 档 · 房主手机当中继</div>
+      <h3>观众打不开这个源时，让房主手机替他取</h3>
+      <p>跨域、要 Cookie、签名 URL、观众那边被站点拦 —— 这些在 S 档会失败的情况，
+      都由房主手机做一层流式转发解决（<b style="color:#fff">双人票已经在手机上跑了 HTTP 服务 + WS + 隧道，
+      这是同一套能力的延伸，不是新起一套服务端</b>）。画质仍是原生。</p>
+      <p style="margin-top:9px"><b class="warnc">代价要说在前面：</b>观众看的量算在房主流量上，
+      1080P 一小时约 0.6~1.5 GB。所以这一档必须自带清晰度上限 + 实时用量条，
+      默认给到 720P 并显示"本次已用 xx MB"。</p></div>
+    <div class="card" style="margin-top:14px"><div class="tagline">B 档 · 屏幕像素（现状保留）</div>
+      <h3>DRM 站点唯一的解，且把"框"搬到观众手里</h3>
+      <p>Netflix/Disney+ 这类放不了 S/A。退回整屏分享，但加一颗<b style="color:#fff">观众自己的</b>
+      「只看画面」开关：自动贴合内容区，不满意可以微调，一键还原。
+      见第 3 节 —— 这颗开关就是取景 v1 该变成的样子。</p></div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="cell" style="width:330px">
+    <div class="card"><div class="tagline">降级怎么判</div>
+      <h3>不猜，试了才知道</h3>
+      <p>观众端页面拿到地址后先<b style="color:#fff">探一次</b>（发一个 Range 请求，看能不能回 200/206、
+      首帧能不能解码出来）。探通走 S；探不通自动改走 A（房主中继）；A 也失败或站点是 DRM，
+      就提示房主"这一部只能共享屏幕"，一键降到 B。<b style="color:#fff">整个过程观众不用选。</b></p></div>
+  </div>
+  <div class="cell" style="width:330px">
+    <div class="card"><div class="tagline">语音不变</div>
+      <h3>连麦这一路照旧</h3>
+      <p>三档里语音都是同一条 WebRTC 音频，跟画面解耦。S/A 档下观众端不再需要"屏幕声音"这条轨
+      （声音是他自己播出来的），<b class="good">回声问题自动消失</b> —— 那条一直挂着等验证的 #10 在 S 档下不再是前提。</p></div>
+  </div>
+  <div class="cell" style="width:330px">
+    <div class="card"><div class="tagline">同步协议（抄来的）</div>
+      <h3>四个数字就够</h3>
+      <p><code>(position, generatedAt, rate, version)</code> + 对钟：偏差 &gt;1.2s 才 seek，
+      小偏差用 0.94~1.06 倍速悄悄追（synctv / SyncWatch 都是这个套路），
+      <code>version</code> 用来丢过期指令，<code>applying</code> 计数器防回声。
+      一条消息几十字节，跟流量无关。</p></div>
+  </div>
+</div>
+
+<!-- ===== 3 观众侧开关 ===== -->
+<h2><span class="n">3</span>B 档那颗「只看画面」开关 —— 可以打开试试</h2>
+<p class="lead">下面是一台横过来的观众手机，里面是房主的<b>整块竖屏</b>（浏览器的地址栏、房主 App 的控件都在）。
+打开开关看效果：裁的动作为什么要放在观众这边 —— 因为框错了只有他自己知道，而且随时能还原。</p>
+
+<div class="row">
+  <div class="cell">
+    <div class="phone land" id="land">
+      <!-- 未开：整块房主竖屏，旋转 90° 铺满这台横屏（330×700 转过来正好是 700×330） -->
+      <div class="wrapfull" id="wrapFull" style="position:absolute;inset:0;background:#000">
+        <div style="position:absolute;left:50%;top:50%;width:330px;height:700px;
+             transform:translate(-50%,-50%) rotate(90deg)">
+          <div class="srcscreen">
+            <div class="statusbar"><span>08:26</span><span>5G ▮▮</span></div>
+            <div class="addrbar"><span>≡</span><span>◀</span><div class="u">🔒 movie.example.com/play/8821</div><span>☆</span></div>
+            <div class="webpage">
+              <div class="webhead">《漫长的季节》第 3 集<small>3.4 万播放 · 清晰度 1080P</small></div>
+              <div class="movie" style="width:100%;height:186px">
+                <video src="sample.mp4" muted loop autoplay playsinline></video>
+                <div class="vig"></div><div class="sub">"往前看，别回头。"</div>
+              </div>
+              <div class="weblist"><div class="it"><span class="th"></span><span class="ln"></span></div>
+                <div class="it"><span class="th"></span><span class="ln s"></span></div>
+                <div class="it"><span class="th"></span><span class="ln"></span></div></div>
+            </div>
+            <div class="homebar"><i></i></div>
+          </div>
+        </div>
+      </div>
+      <!-- 开了：只把内容区放大铺满 -->
+      <div id="cropOnly" class="hide" style="position:absolute;inset:0;background:#000">
+        <video src="sample.mp4" muted loop autoplay playsinline id="cropV"
+               style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>
+        <div class="sub" id="cropSub" style="position:absolute;left:0;right:0;bottom:9%;text-align:center;
+             font-size:12px;text-shadow:0 1px 3px #000,0 0 7px #000">"往前看，别回头。"</div>
+      </div>
+      <div class="badge" id="modeBadge"><span class="chip w">整屏 · 画面只占中间一条</span></div>
+    </div>
+    <div class="ctlrow">
+      <span>只看画面</span><div class="sw" id="sw"></div>
+      <span style="margin-left:auto;font-size:11px">微调</span>
+      <input type="range" id="nudge" min="-30" max="30" value="0">
+    </div>
+    <p class="cap"><b>为什么放观众这边：</b>
+      ① 房主侧裁 = 框错一次两边都难看，还得房主重框；观众侧裁 = 各人按各人口味调，<b>随时还原</b>；
+      ② 不会触发"输出分辨率变化 → 编码器重启"那一帧停顿；
+      ③ 不给房主手机加逐帧处理的负担（他正在放片）；
+      ④ 观众想看整屏（比如房主去选下一集）时，关一下就行。</p>
+  </div>
+
+  <div class="cell" style="width:330px">
+    <div class="card"><div class="tagline">强迫症这条正面回应</div>
+      <h3>不做"一个框"，做"贴边 + 余量"</h3>
+      <p>自动检测给的是<b style="color:#fff">外扩 2 像素</b>的框而不是精确框：宁可留一圈黑边，
+      也绝不切到画面。黑边在播放器里是正常现象，切掉演员半张脸不是。
+      滑杆只在 ±30 像素范围内可调，超出就吸附回检测值。</p></div>
+    <div class="card" style="margin-top:14px"><div class="tagline">还有一条保险</div>
+      <h3>检测不确信就不动</h3>
+      <p>夜景片、纯黑开场、刚切 App 这几类，检测置信度低 → <b style="color:#fff">保持整屏</b>，
+      开关上标一句"没把握，手动开"。默认关，观众不点就永远是他熟悉的整屏。</p></div>
+  </div>
+</div>
+
+<!-- ===== 4 流程 ===== -->
+<h2><span class="n">4</span>R1：把"切 App"变成一次分享动作</h2>
+<p class="flowlabel">今天的流程（5 步，中间要换一次 App）</p>
+<div class="flow">
+  <div class="step"><b>浏览器找片</b>打开电影页</div><div class="arw">→</div>
+  <div class="step cut"><b>切出</b>回桌面</div><div class="arw">→</div>
+  <div class="step cut"><b>打开双人票</b>等首页加载</div><div class="arw">→</div>
+  <div class="step"><b>点分享</b>起隧道、等链接</div><div class="arw">→</div>
+  <div class="step"><b>复制链接</b>发出去</div><div class="arw">→</div>
+  <div class="step"><b>回到浏览器</b>再点播放</div>
+</div>
+<p class="flowlabel" style="margin-top:22px">目标流程（2 步，找片的地方不变）</p>
+<div class="flow">
+  <div class="step new"><b>浏览器找片</b>还是用你习惯的那个浏览器</div><div class="arw">→</div>
+  <div class="step new"><b>分享 → 双人票</b>系统分享菜单里点一下</div><div class="arw">→</div>
+  <div class="step new"><b>放映厅自动开</b>链接已填好、自动开播、自动把观众拉进来</div>
+</div>
+<div class="row">
+  <div class="cell">
+    <div class="phone">
+      <div class="srcscreen">
+        <div class="statusbar"><span>08:26</span><span>5G ▮▮▮</span></div>
+        <div class="addrbar"><span>≡</span><span>◀</span><div class="u">🔒 movie.example.com/play/8821</div><span>☆</span></div>
+        <div class="webpage">
+          <div class="webhead">《漫长的季节》第 3 集<small>3.4 万播放 · 清晰度 1080P</small></div>
+          <div class="movie" style="width:100%;height:186px">
+            <video src="sample.mp4" muted loop autoplay playsinline></video>
+            <div class="vig"></div><div class="sub">"往前看，别回头。"</div>
+          </div>
+          <div class="weblist"><div class="it"><span class="th"></span><span class="ln"></span></div>
+            <div class="it"><span class="th"></span><span class="ln s"></span></div>
+            <div class="it"><span class="th"></span><span class="ln"></span></div></div>
+        </div>
+        <div class="homebar"><i></i></div>
+      </div>
+      <div class="sheet">
+        <p class="t">共享到</p>
+        <div class="icons">
+          <div class="ic hi"><u>🎬</u>双人票</div>
+          <div class="ic"><u>💬</u>微信</div>
+          <div class="ic"><u>🔗</u>复制链接</div>
+          <div class="ic"><u>📋</u>备忘录</div>
+          <div class="ic"><u>⋯</u>更多</div>
+        </div>
+      </div>
+    </div>
+    <p class="cap"><b>实现代价：3~5 天。</b>双人票注册一个 <code>ACTION_SEND / text/plain</code> 的
+    intent-filter，链接进来后直接落到放映厅页。再补一颗常驻通知（"继续上次那部片 / 叫对方进来"）
+    和一个桌面小组件。<b>你找片的习惯一点不用改。</b></p>
+  </div>
+
+  <div class="cell" style="width:600px">
+    <div class="card"><div class="tagline">你问的那个问题，正面回答</div>
+      <h3>要不要改造 / 自研一个浏览器？</h3>
+      <p><b class="n2">不要。</b>不是因为做不出来，是因为<b style="color:#fff">它换不到你缺的那样东西</b>。
+      你要的其实是三件事：拿到片源地址、拿到播放进度、能把进度写回去。
+      这三件事在<b style="color:#fff">我们自己的 WebView 里已经全能做</b>
+      （<code>shouldInterceptRequest</code> 抓请求、注入 JS 读写 <code>&lt;video&gt;</code>，
+      后者已经在跑）。fork 一个 Chromium 换来的主要是 DRM 和站点兼容 ——
+      而 DRM 内容<b style="color:#fff">本来就不能转发给观众</b>（密钥绑设备，法律上也不行），
+      所以那份能力对"一起看"没有增量。</p>
+      <p style="margin-top:10px">成本对比：自研 WebView 壳（多标签/书签/UA）3~6 周、包体不变；
+      fork Chromium 半年起、跟版本、包体 +100~150MB、要自己签名；
+      "递链接 + 放映厅"3~5 天。<b class="bad">一个人做 fork 是自杀式工作量，而且做完发现要的功能已经有了。</b></p></div>
+    <div class="card" style="margin-top:14px"><div class="tagline">但有一个真实的口子</div>
+      <h3>内置播放器要不要长成"正经浏览器"</h3>
+      <p>建议<b style="color:#fff">不要</b>长成浏览器，只长成"够放片"：地址栏 + 前进后退 + 最近打开 +
+      一个"这是不是个播放页"的自动接管。理由：浏览器是个无底洞（下载、扩展、书签同步、隐私模式…），
+      而放映厅需要的只是"能把这一页打开并注入"。<b>越像浏览器，越做不完。</b></p></div>
+  </div>
+</div>
+
+<!-- ===== 5 参考项目 ===== -->
+<h2><span class="n">5</span>那三家 PC 端项目，映射到我们这边是什么</h2>
+<table>
+  <tr><th style="width:190px">他们（PC / Web）的做法</th><th>为什么那样行得通</th><th>双人票的等价物</th></tr>
+  <tr><td><b>SyncWatch</b>：<code>getDisplayMedia</code> 选<b>单个标签页</b> + <code>systemAudio:'include'</code></td>
+      <td>桌面浏览器能只交一个标签页，天然没有别人的桌面</td>
+      <td><b>S 档</b>就是它的移动端等价：不交"屏幕"，只交"这一页的内容"</td></tr>
+  <tr><td><b>synctv-app</b>：服务端按站点解析真实播放地址，观众本地播</td>
+      <td>他们有 Rust 服务端，可以跑 provider 代理、manifest 重写</td>
+      <td>同样"观众本地播"，但解析换成<b>自己 WebView 里抓请求</b>；解析不到时由<b>房主手机</b>做中继（A 档）</td></tr>
+  <tr><td><b>couple-cinema</b>：只同步 <code>{paused,time,rate}</code>，两边各自播同一 URL</td>
+      <td>最轻，一条消息几十字节</td><td>S 档的传输形态就是它，但补上它没有的：对钟、<code>version</code>、阈值 seek</td></tr>
+  <tr><td><b>star-syncplayer</b>：控制消息由服务器<b>同时回给两端</b></td>
+      <td>漂移变成 <code>|t1−t2|</code> 而不是 <code>t1+t2</code></td>
+      <td>信令已经在房主手机上，照抄：一条指令回给两端，别只回给发起方</td></tr>
+  <tr><td>三家共同点：<b>都假设"内容在自己的播放器里"</b></td>
+      <td>所以他们永远不需要处理"对方在用别的 App"</td>
+      <td>这正是双人票的难点，也是为什么必须有 B 档兜底 + 递链接入口</td></tr>
+</table>
+<p class="note">顺带一个 SyncWatch 帮不上、而我们已经有优势的地方：它代码里明确写着
+"Cloudflare 没有 Android 版 cloudflared"，所以手机当房主只能局域网/热点。我们的手机自跑隧道 + 真 WebRTC
+屏幕流（带声音）正是它做不到的那一块 —— 这三家没有一个能覆盖"异地 + 手机房主"。</p>
+
+<!-- ===== 6 决策点 ===== -->
+<h2><span class="n">6</span>要你拍的三个问题</h2>
+<div class="q"><h3>Q1 · 先做哪一头？</h3>
+  <p>S 档（放映厅）是终局但要 1~2 周；B 档那颗观众侧「只看画面」1~2 天就能见效，且不动房主的编码。</p>
+  <span class="opt sel" data-g="q1">先做 S 档，一步到位（我推荐）</span>
+  <span class="opt" data-g="q1">先做观众侧开关，止血再说</span>
+  <span class="opt" data-g="q1">两个一起，先开关后放映厅</span></div>
+<div class="q"><h3>Q2 · A 档中继（烧房主流量换原生画质）要不要？</h3>
+  <p>S 档失败时才用得上。做了它，"观众那边打不开这个源"的情况也能救回来；代价是房主流量。</p>
+  <span class="opt sel" data-g="q2">要，但默认限 720P + 显示实时用量</span>
+  <span class="opt" data-g="q2">先不做，S 失败就直接降 B</span></div>
+<div class="q"><h3>Q3 · 内置播放器长成什么样？</h3>
+  <p>它决定"递链接进来之后"的体验，也决定工作量。</p>
+  <span class="opt sel" data-g="q3">只做"够放片"：地址栏 + 后退 + 最近打开 + 自动接管播放页</span>
+  <span class="opt" data-g="q3">做成正经浏览器（多标签/书签/下载）</span>
+  <span class="opt" data-g="q3">连这个都不要，只保留系统分享入口 + 中继</span></div>
+<p class="note">点一下选项就行，默认（绿色）是我的推荐。开工前我还会先花半天验两条外部事实：
+① <code>shouldInterceptRequest</code> 在真实站点上能不能抓到可复用的媒体地址；
+② 内置 WebView 到底有没有 EME（MDN 的兼容表说 WebView Android 从 v43 支持 <code>requestMediaKeySystemAccess</code>，
+但我的印象是 WebView 不放 DRM 内容 —— <b class="warnc">这条我没实测，不下结论</b>，它只决定 DRM 站点归不归 S/A 管）。</p>
+
+<script>
+// 观众端：点画面收起/唤出控件
+document.querySelectorAll('.phone[data-room]').forEach(ph=>{
+  let shown=true;
+  ph.addEventListener('click',()=>{shown=!shown;
+    ph.querySelectorAll('.island,.react,.hint').forEach(el=>el.classList.toggle('hide',!shown));});
+});
+// B 档「只看画面」开关 + 微调
+const sw=document.getElementById('sw'), full=document.getElementById('wrapFull'),
+      crop=document.getElementById('cropOnly'), badge=document.getElementById('modeBadge'),
+      cropV=document.getElementById('cropV'), nudge=document.getElementById('nudge');
+let on=false;
+function paint(){
+  full.classList.toggle('hide',on); crop.classList.toggle('hide',!on);
+  sw.classList.toggle('on',on);
+  badge.innerHTML=on?'<span class="chip g">只看画面 · 自动贴合，可微调</span>'
+                    :'<span class="chip w">整屏 · 画面只占中间一条</span>';
+  const k=(+nudge.value);
+  // 微调：上下平移内容，模拟"框偏了"时观众自己修
+  cropV.style.transform=`translateY(${k}px)`;
+  document.getElementById('cropSub').style.bottom=(9-k/4)+'%';
+}
+sw.addEventListener('click',()=>{on=!on;paint();});
+nudge.addEventListener('input',paint);
+{const q=new URLSearchParams(location.search);
+ if(q.get('crop')==='1'){on=true;paint();}}
+// 同一段测试片放在多处：锁一下时间轴，免得看出"两块不是同一刻"
+const vids=[...document.querySelectorAll('video')], master=vids[0];
+setInterval(()=>{ if(!master||master.paused||!isFinite(master.currentTime))return;
+  vids.forEach(v=>{ if(v!==master&&Math.abs(v.currentTime-master.currentTime)>0.15)
+    try{v.currentTime=master.currentTime}catch(e){} }); },700);
+// 决策点单选
+document.querySelectorAll('.opt').forEach(o=>o.addEventListener('click',()=>{
+  document.querySelectorAll(`.opt[data-g="${o.dataset.g}"]`).forEach(x=>x.classList.remove('sel'));
+  o.classList.add('sel');}));
+{const off=+new URLSearchParams(location.search).get('off')||0;
+ if(off)document.body.style.transform=`translateY(${-off}px)`;}
+</script>
+</body>
+</html>
