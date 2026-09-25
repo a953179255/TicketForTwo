@@ -198,7 +198,7 @@ const ICON = {
 const $ = id => document.getElementById(id);
 const video = $('v');
 
-let ws = null, pc = null, micTrack = null, micOn = false, statsTimer = null;
+let ws = null, pc = null, micTrack = null, micStream = null, micOn = false, micBusy = false, statsTimer = null;
 let gotVideo = false, voiceTimer = null;
 /** 远端描述还没就绪时先攒着候选 —— 顺序错了 addIceCandidate 会抛错。 */
 let pendingCands = [];
@@ -270,6 +270,7 @@ function onMessage(text){
   try { m = JSON.parse(text); } catch (e) { return; }
 
   if (m.t === 'offer') startPeer(m.sdp);
+  else if (m.t === 'answer') acceptAnswer(m.sdp);
   else if (m.t === 'cand') addRemoteCandidate(m);
   else if (m.t === 'bye') { closedByUs = true; reportEnded('房主结束了分享'); }
   else if (m.t === 'watch') onWatch(m.f);
@@ -333,18 +334,15 @@ async function startPeer(offerSdp){
   for (const c of pendingCands) { try { await pc.addIceCandidate(c); } catch (e) {} }
   pendingCands = [];
 
-  // 观众也开麦（连麦）：浏览器侧的 AEC/NS/AGC 由 constraints 打开
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:true },
-      video: false,
-    });
-    micTrack = stream.getAudioTracks()[0];
-    micTrack.enabled = false;          // 默认静音，点麦克风按钮才发言
-    pc.addTrack(micTrack, stream);
-  } catch (e) {
-    $('btnMic').classList.add('hide'); // 拒绝麦克风不阻断观看
-  }
+  /* 麦克风**不在这里申请**。
+   *
+   * 原来每次收到 offer 就 getUserMedia —— 于是观众一打开链接，手机上先弹
+   * "xxx.trycloudflare.com 想要使用你的麦克风"。人只是来看片的，第一件事却是对一个
+   * 随机域名批准话筒，绝大多数人会拒绝甚至被吓退；而这一版麦克风本来就是默认关的
+   * （`micTrack.enabled = false`），等于白要一次权限。
+   * App 那边早就是"点按钮才申请"（ViewerSession.enableMic），这里向它对齐。
+   * 只有已经给过话筒、后来重连重建了 pc 的情况，才把那条轨重新挂回去。 */
+  if (micTrack) { try { pc.addTrack(micTrack, micStream); } catch (e) {} }
 
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
@@ -358,6 +356,16 @@ async function addRemoteCandidate(m){
   try { await pc.addIceCandidate(c); } catch (e) {}
 }
 
+/** 观众发起重协商（开话筒）之后，房主的那份 answer 落在这儿。 */
+async function acceptAnswer(sdp){
+  if (!pc) return;
+  try {
+    await pc.setRemoteDescription({ type: 'answer', sdp });
+  } catch (e) {
+    cineNote('连麦没接上：' + e);
+  }
+}
+
 /** 连上 2.5 秒仍无视频轨 → 房主开的是「仅语音」。给控件条、给收听入口，别让人对着黑屏等。 */
 /**
  * S 档时把底岛上"描述屏幕流"的那两格收掉。
@@ -366,10 +374,15 @@ async function addRemoteCandidate(m){
  * 挂在那儿会让人以为"画面坏了"。延迟那格留着 —— 它量的是连麦那条路，仍然有用。
  */
 function paintCtlForCine(on){
-  ['sFps', 'sNet'].forEach(id => {
-    const el = $(id) && $(id).closest('.stat');
-    if (el) el.style.display = on ? 'none' : '';
-  });
+  /* 只收"描述屏幕流"的两处：fps 那一整格、以及延迟旁边的网络标签。
+   *
+   * 上一版写的是 `['sFps','sNet'].forEach(隐藏它们的 .stat)` —— 而 sLat（延迟）和
+   * sNet 在**同一个** stat 里，于是把延迟也一起藏了，和当初定下的判据
+   * （"延迟那格留着，它量的是连麦那条路"）正好相反。读代码发现的，不是截图。 */
+  const fpsCell = $('sFps') && $('sFps').closest('.stat');
+  if (fpsCell) fpsCell.style.display = on ? 'none' : '';
+  const net = $('sNet');
+  if (net) net.style.display = on ? 'none' : '';
 }
 
 /**
@@ -404,6 +417,10 @@ function enterVoiceModeIfNeeded(){
      2.5 秒的定时器比"晚进厅时房主推过来的当前状态"晚到，于是本地播放器都跑起来了、
      进度也在走，屏幕上却还压着一张"对方还没选片"。 */
   if (typeof cine !== 'undefined' && cine) return;
+  /* 仅语音的厅里，那两格"屏幕流"读数永远是 —（一条视频轨都没发过来）。
+     放映时收掉它们这件事以前做过，**等候期漏了**：手机上实测到岛上是
+     "— / — / fps"，看着像画面坏了。这里同一条判据复用一次。 */
+  paintCtlForCine(true);
   $('topBar').classList.remove('hide');
   $('ctlBar').classList.remove('hide');
   $('topRight').textContent = '语音已通';
@@ -549,13 +566,49 @@ function startStats(){
 // ---- 控制条 -----------------------------------------------------------
 
 $('btnMic').innerHTML = ICON.mute;
-$('btnMic').onclick = () => {
-  if (!micTrack) return;
-  micOn = !micOn;
-  micTrack.enabled = micOn;
-  $('btnMic').innerHTML = micOn ? ICON.mic : ICON.mute;
-  $('btnMic').classList.toggle('mic-live', micOn);
-};
+/**
+ * 话筒按钮：**点了才申请权限**，拿到轨之后由观众发起一轮 offer 重协商。
+ *
+ * 两条理由：① 不该在人一进来就对着随机域名要话筒（见 startPeer 那段）；
+ * ② 拒绝授权必须留下痕迹 —— 原来 `if (!micTrack) return;` 是"点了没反应"，
+ * 而按钮已经翻成静音图标，人会以为自己按错了、反复按。
+ */
+async function toggleMic(){
+  if (micBusy) return;
+  if (micTrack) {                       // 话筒已经拿到：只是开关，不用重协商
+    micOn = !micOn;
+    micTrack.enabled = micOn;
+    paintMic();
+    return;
+  }
+  if (!pc) { cineNote('还没连上，稍等一下再开麦'); return; }
+  micBusy = true; paintMic();
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      video: false,
+    });
+    micTrack = micStream.getAudioTracks()[0];
+    micOn = true;
+    micTrack.enabled = true;
+    pc.addTrack(micTrack, micStream);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    send({ t: 'offer', sdp: pc.localDescription.sdp });   // 谁改媒体谁发起
+  } catch (e) {
+    micOn = false; micTrack = null; micStream = null;
+    cineNote('没拿到话筒权限 · 还是只能听他说');
+  } finally {
+    micBusy = false; paintMic();
+  }
+}
+function paintMic(){
+  const b = $('btnMic');
+  b.innerHTML = micOn ? ICON.mic : ICON.mute;
+  b.classList.toggle('mic-live', micOn);
+  b.title = micBusy ? '正在接话筒…' : (micOn ? '闭麦' : '开麦连麦');
+}
+$('btnMic').onclick = () => { toggleMic(); };
 let volOn = true;
 $('btnVol').innerHTML = ICON.vol;
 $('btnVol').onclick = () => { volOn = !volOn; video.muted = !volOn; $('btnVol').innerHTML = volOn ? ICON.vol : ICON.mute2; };
@@ -972,7 +1025,16 @@ function toast(msg){
 
 /* 仅调试：?report=1 时把统计 POST 回本地采集器，便于无头浏览器里取证。
    生产链接不带这个参数。 */
+/* 仅调试：?mic=1 —— 连上之后自动走一次"点话筒"那条路。
+   这一版把麦克风改成**点了才申请**（进厅不再弹框），于是"申请 → 加轨 → 观众发起
+   offer → 房主 answer"这条新支路在手机上得靠人点才能验；无头 Edge 带
+   --use-fake-device-for-media-stream 会替我们授权，整条回环就能自动跑完。 */
 const _q = new URLSearchParams(location.search);
+if (_q.get('mic') === '1') {
+  const t = setInterval(() => {
+    if (pc && pc.connectionState === 'connected') { clearInterval(t); toggleMic(); }
+  }, 500);
+}
 if (_q.get('report') === '1') {
   const RELAY = _q.get('relay') || '/report';
   setInterval(async () => {
