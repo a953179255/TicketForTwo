@@ -25,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,6 +67,11 @@ fun VideoLayer(
 ) {
     val context = LocalContext.current
     val renderer = remember { SurfaceViewRenderer(context) }
+    // `AndroidView(factory=…)` 只跑一次，注册给 libwebrtc 的监听器会**一直握着第一次组合的
+    // lambda**。直接用它写外部状态，写的可能是已经被重建掉的旧 state（实测就是
+    // "首帧到了、界面还写着等待对方画面"）。rememberUpdatedState 让回调读到的永远是当前这份。
+    val frameCb by rememberUpdatedState(onFirstFrame)
+    val resolutionCb by rememberUpdatedState(onResolution)
     var ready by remember { mutableStateOf(false) }
     // 帧的真实宽高（px）。首帧之前是 Zero ⇒ 视频区先铺满，尺寸到了再收成正确比例。
     var frameSize by remember { mutableStateOf(IntSize.Zero) }
@@ -101,7 +107,7 @@ fun VideoLayer(
                         override fun onFirstFrameRendered() {
                             Log.i("VideoLayer", "$onLabel first frame rendered")
                             // 回调在渲染线程上，Compose 状态必须回主线程改
-                            renderer.post { onFirstFrame(true) }
+                            renderer.post { frameCb(true) }
                         }
 
                         override fun onFrameResolutionChanged(w: Int, h: Int, rot: Int) {
@@ -109,7 +115,7 @@ fun VideoLayer(
                             frameSize = IntSize(w, h)
                             // 帧尺寸是"对方横没横屏"唯一的证据。上一版这里只打日志就完了，
                             // 于是内容变成横的、观众屏还竖着，画面缩成中间一条。
-                            renderer.post { onResolution(w, h) }
+                            renderer.post { resolutionCb(w, h) }
                         }
                     },
                 )
@@ -229,7 +235,12 @@ fun CallScreen(
             HostStage(backdrop, peerLabel, onOpenWatch, onOpenCinema, screenSharing, onStartShare)
         } else {
             // 首帧没到之前这块区域是纯黑 —— 用户分不清"对方画面全黑"和"卡住了"，所以必须有等待提示。
-            var firstFrame by remember(remoteTrack) { mutableStateOf(false) }
+            // 不能拿 remoteTrack 当 key：轨道一到，state 就被重建成 false，
+            // 而首帧事件可能已经在那之前发过了（配合 VideoLayer 的 rememberUpdatedState 才成立）。
+            var firstFrame by remember { mutableStateOf(false) }
+            LaunchedEffect(remoteTrack) {
+                if (remoteTrack == null) firstFrame = false
+            }
             // 语音模式：连上 2.5 秒还没有视频轨 → 对方开的是"仅语音"。
             // 轨一到就立刻撤掉这个判断（effect 以 remoteTrack 为 key 重启）。
             var voiceMode by remember { mutableStateOf(false) }

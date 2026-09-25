@@ -538,6 +538,23 @@ POST 回来的统计）：进厅时 `pcSeq=1 / vW=0`（厅里确实只有语音�
 ⇒ 画面接上来了，而且**没有新建第二条连接**（`pcSeq` 就是为这一句加的计数器：
 一旦 >1 就是老毛病复发，连麦会被那次重建丢掉）。
 
+**同一轮里最隐蔽的一条：画面到了，屏幕上还写着"等待对方画面…"**
+
+`b-cinema-land.png`（横屏观众端）上房主那一屏明明已经铺在中间，正中却挂着等待文案。
+是两个各自正确的写法叠出来的：
+
+1. `var firstFrame by remember(remoteTrack) { mutableStateOf(false) }` —— 轨道从 null 变成真轨的
+   那一刻，这个 state 被**重建**成 false；
+2. `AndroidView(factory = …)` 只跑一次，注册给 libwebrtc 的 `RendererEvents` 一直握着
+   **第一次组合时的 lambda** ⇒ 首帧回调写进了那份已经没人读的旧 state。
+
+于是"首帧到了"这件事（日志里 `first frame rendered` 确实在）永远传不到界面。
+⇒ 回调改走 `rememberUpdatedState`（永远写当前那份 state），并且 `firstFrame` 不再以
+`remoteTrack` 为 key，只在轨**消失**时显式归零。
+⚠ 这类 bug 只在"中途加轨"这条新路径上才露头 —— 老路径里轨从第一次组合就存在，
+`remember(remoteTrack)` 再也不会变，所以一直没人发现。修完复测：观众节点树里已经没有
+等待文案那一个节点（改之前它是那一屏**唯一**的节点），截图均值 48.3。
+
 **回归**：两条脚本各管一条观众路径，前置都是 `scripts/open_room.py`。
 - App 内观众：`check_share_after_join.py`（再配 `drive_app_viewer.py --keep-sharing`），
   四条判据 —— 房主日志「画面已接上」/ 观众 `first frame` / 观众截图均值 > 20 /
