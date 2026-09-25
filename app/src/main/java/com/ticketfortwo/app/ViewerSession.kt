@@ -374,6 +374,20 @@ object ViewerSession {
     private val _watchAllowed = MutableStateFlow(false)
     val watchAllowed: StateFlow<Boolean> = _watchAllowed.asStateFlow()
 
+    /** 放映厅状态（房主选了哪条片、放到哪、允不允许我控制）。 */
+    private val _cinema = MutableStateFlow<com.ticketfortwo.app.cinema.CinemaSync.State?>(null)
+    val cinema: StateFlow<com.ticketfortwo.app.cinema.CinemaSync.State?> = _cinema.asStateFlow()
+    private val _cinemaAllowed = MutableStateFlow(false)
+    val cinemaAllowed: StateFlow<Boolean> = _cinemaAllowed.asStateFlow()
+
+    /** 把播放请求发回房主。权限位由房主那边说了算，这里只是提前拦一道。 */
+    fun sendCinemaCmd(c: com.ticketfortwo.app.cinema.CinemaSync.Cmd) {
+        if (!_cinemaAllowed.value) return
+        runCatching {
+            send("""{"t":"ccmd","f":"${com.ticketfortwo.app.cinema.CinemaSync.cmdFields(c)}"}""")
+        }
+    }
+
     /** 发一条播放控制指令。act 用字符串而不是对象，是为了和网页端观众共用同一套 f 字段。 */
     fun sendWatchCmd(act: String, arg: Long = 0L) {
         send(
@@ -430,6 +444,17 @@ object ViewerSession {
                     _watch.value = parsed.first
                     _watchAllowed.value = parsed.second
                 }
+            }
+
+            // 放映厅：房主选了片。App 内观众端**不本地播**（这条流往往绑 Referer/Cookie，
+            // 而且这里没有 hls.js），所以这一屏只做两件事：告诉他"房主开始放片了"，
+            // 以及把他的 ±10/暂停 转成 ccmd 发回去 —— 方向盘在房主那个播放器上。
+            "cinema" -> {
+                val f = obj.optString("f")
+                val st = com.ticketfortwo.app.cinema.CinemaSync.parseState(f)
+                _cinema.value = st
+                _cinemaAllowed.value = st != null &&
+                    com.ticketfortwo.app.cinema.CinemaSync.allowsControl(f)
             }
 
             // 观众开麦后会主动发一轮 offer，房主的回信走这里。

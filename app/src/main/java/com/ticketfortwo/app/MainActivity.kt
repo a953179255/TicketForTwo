@@ -216,6 +216,9 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     // 同看：观众侧只需要房主广播回来的播放器状态，加上"他允不允许我控制"这一个布尔。
     val viewerWatch by ViewerSession.watch.collectAsState()
     val viewerWatchAllowed by ViewerSession.watchAllowed.collectAsState()
+    // 放映厅：App 内观众端不本地播，但要知道"他在放什么"并且能按 ±10。
+    val viewerCinema by ViewerSession.cinema.collectAsState()
+    val viewerCinemaAllowed by ViewerSession.cinemaAllowed.collectAsState()
     // 小窗里只留画面，所以这一位要一路传到 CallScreen 去压掉控件。
     val inPip by PipState.inPip.collectAsState()
     val viewerMicPending by ViewerSession.micPending.collectAsState()
@@ -339,6 +342,31 @@ private fun AppRouter(backdrop: LayerBackdrop) {
         // 权限链的终点按**当前**画质设置分叉：回调执行时读的是用户此刻的 quality。
         if (quality.videoEnabled) screenGrant.launch(captureIntent())
         else startAudioOnlyHost()
+    }
+
+    /**
+     * 开放映厅用的权限链。和分享那条分开，是因为厅**不该要求先投屏**：
+     * 厅是"我先开、对方先进来等着"的容器，一上来就弹投屏授权等于把顺序做反了。
+     */
+    val cinemaMicGrant = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {
+        if (it) {
+            startAudioOnlyHost()
+            showCinema = true
+        } else {
+            context.toast("厅里要先通语音，得给麦克风权限")
+        }
+    }
+
+    fun openCinema() {
+        if (CallSession.isActive) { showCinema = true; return }
+        if (!granted(context, Manifest.permission.RECORD_AUDIO)) {
+            cinemaMicGrant.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
+        startAudioOnlyHost()
+        showCinema = true
     }
 
     val hostNotifGrant = rememberLauncherForActivityResult(
@@ -470,7 +498,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
             },
             onJoinViewer = { viewerIntent = true; paste = ""; viewerError = null },
             onSettings = { showSettings = true },
-            onOpenCinema = { showCinema = true },
+            onOpenCinema = { openCinema() },
             quality = quality,
             lastSummary = lastConnected,
         )
@@ -557,6 +585,8 @@ private fun AppRouter(backdrop: LayerBackdrop) {
             Page.Cinema -> CinemaScreen(
                 backdrop = backdrop,
                 initialUrl = cinemaUrl,
+                inviteUrl = (state as? CallSession.State.WaitingViewer)?.inviteUrl,
+                viewerOnline = viewerOnline,
                 onBack = { showCinema = false },
             )
 
@@ -614,6 +644,9 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 watch = viewerWatch,
                 watchAllowed = viewerWatchAllowed,
                 onWatchCmd = { act, arg -> ViewerSession.sendWatchCmd(act, arg) },
+                cinema = viewerCinema,
+                cinemaAllowed = viewerCinemaAllowed,
+                onCinemaCmd = { c -> ViewerSession.sendCinemaCmd(c) },
                 pipMode = inPip,
                 onStop = { ViewerSession.stop() },
             )
@@ -665,7 +698,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 latencyMs = stats?.rttMs,
                 netLabel = stats?.viaLabel ?: "直连",
                 onOpenWatch = { showWatch = true },
-                onOpenCinema = { showCinema = true },
+                onOpenCinema = { openCinema() },
                 onStop = stop,
             )
 

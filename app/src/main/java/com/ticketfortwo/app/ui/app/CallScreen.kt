@@ -1,6 +1,7 @@
 package com.ticketfortwo.app.ui.app
 
 import android.util.Log
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -131,6 +132,10 @@ fun CallScreen(
     /** 观众侧：房主播放器的状态镜像；没开同看时是 null，整条同看 UI 就不画。 */
     watch: WatchState? = null,
     watchAllowed: Boolean = false,
+    /** 放映厅：房主选了片。App 内不本地播，这张卡只做"告诉你他在放什么 + 让你能按"。 */
+    cinema: com.ticketfortwo.app.cinema.CinemaSync.State? = null,
+    cinemaAllowed: Boolean = false,
+    onCinemaCmd: (com.ticketfortwo.app.cinema.CinemaSync.Cmd) -> Unit = {},
     onWatchCmd: (String, Long) -> Unit = { _, _ -> },
     /** 房主侧：打开内置浏览器一起看。 */
     onOpenWatch: () -> Unit = {},
@@ -250,12 +255,27 @@ fun CallScreen(
 
         // 同看条：只有观众侧、且房主真的开了同看时才画；和控件一起收起，
         // 不然全屏看片时等于第三条横幅永久压在对方画面上。
-        if (!isHost && watch != null && chromeShown) {
+        if (!isHost && watch != null && cinema == null && chromeShown) {
             WatchMirrorBar(
                 backdrop = backdrop,
                 state = watch,
                 allowed = watchAllowed,
                 onCmd = onWatchCmd,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = GlassDimens.islandBottom + 84.dp),
+            )
+        }
+
+        // 放映厅条：App 内不本地播（这条流多半绑 Referer/Cookie，这里也没带 hls.js），
+        // 所以这张卡要**说实话**：你在看的还是他的屏幕，但你能按。
+        // 和同看条互斥 —— 两条一起出现就是三层 UI 里的第三层。
+        if (!isHost && cinema != null && chromeShown) {
+            CinemaMirrorBar(
+                backdrop = backdrop,
+                state = cinema,
+                allowed = cinemaAllowed,
+                onCmd = onCinemaCmd,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = GlassDimens.islandBottom + 84.dp),
@@ -287,6 +307,82 @@ fun CallScreen(
  * 翻车的地方 —— 有人以为"退出 App 就停了"，结果相册、聊天窗口全被对方看到了。
  * 至于"为什么不放实时预览"，那是我们内部的设计取舍，不该出现在用户界面上。
  */
+/**
+ * 观众侧的放映厅条。
+ *
+ * **视频区之上只用 scrim，不用玻璃** —— 这个仓库里已经踩过：backdrop/haze 抓不到
+ * SurfaceView 的内容，玻璃盖上去会糊成一块纯黑（见 compose-surfaceview-glass-limit）。
+ *
+ * 卡片上那句"你看到的还是他的屏幕"是故意写的：App 内没有本地播放这条路，
+ * 不写清楚就等于让用户以为放映厅没生效。
+ */
+@Composable
+private fun CinemaMirrorBar(
+    backdrop: LayerBackdrop,
+    state: com.ticketfortwo.app.cinema.CinemaSync.State,
+    allowed: Boolean,
+    onCmd: (com.ticketfortwo.app.cinema.CinemaSync.Cmd) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val cs = com.ticketfortwo.app.cinema.CinemaSync
+    Box(
+        modifier
+            .padding(horizontal = 12.dp)
+            .background(androidx.compose.ui.graphics.Color(0xA0000000), RoundedCornerShape(20.dp))
+            .padding(horizontal = 13.dp, vertical = 10.dp),
+    ) {
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("正在放映", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Ink.Live)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    state.track.title.ifBlank { "对方选的那条" },
+                    fontSize = 12.sp,
+                    color = Ink.TextHi,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    if (allowed) "可控制" else "仅观看",
+                    fontSize = 10.sp,
+                    color = if (allowed) Ink.Live else Ink.TextLow,
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    cs.formatTime(state.posMs) + " / " + cs.formatTime(state.durMs),
+                    fontSize = 11.sp,
+                    color = Ink.TextMid,
+                    modifier = Modifier.weight(1f),
+                )
+                CircleControl(onClick = { onCmd(com.ticketfortwo.app.cinema.CinemaSync.Cmd.Step(-10_000)) }, backdrop = backdrop) {
+                    Text("-10", fontSize = 13.sp, color = Ink.TextHi)
+                }
+                Spacer(Modifier.width(8.dp))
+                CircleControl(
+                    onClick = { onCmd(if (state.playing) com.ticketfortwo.app.cinema.CinemaSync.Cmd.Pause else com.ticketfortwo.app.cinema.CinemaSync.Cmd.Play) },
+                    backdrop = backdrop,
+                ) {
+                    Text(if (state.playing) "❚❚" else "▶", fontSize = 12.sp, color = Ink.TextHi)
+                }
+                Spacer(Modifier.width(8.dp))
+                CircleControl(onClick = { onCmd(com.ticketfortwo.app.cinema.CinemaSync.Cmd.Step(10_000)) }, backdrop = backdrop) {
+                    Text("+10", fontSize = 13.sp, color = Ink.TextHi)
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "这台手机上看到的还是他的屏幕；用浏览器打开链接可以本地播原画",
+                fontSize = 9.5.sp,
+                color = Ink.TextLow,
+                lineHeight = 13.sp,
+            )
+        }
+    }
+}
+
 @Composable
 private fun HostStage(
     backdrop: LayerBackdrop,
@@ -338,3 +434,4 @@ private fun HostStage(
         }
     }
 }
+

@@ -62,10 +62,23 @@ object CinemaProbe {
         return s
     }
 
-    /** 一条候选里最该给房主看的那条。 */
-    fun bestOf(hits: List<MediaSniffer.Hit>): MediaSniffer.Hit? =
-        hits.firstOrNull { MediaSniffer.playable(it.kind) && it.sources and SRC_PAGE != 0 }
-            ?: hits.firstOrNull { MediaSniffer.playable(it.kind) }
+    /**
+     * 一条候选里最该给房主看的那条。
+     *
+     * **只认 http(s)**：本地测试页的 `file:///android_asset/...mp4` 后缀完全合法、
+     * 在房主这台手机上也确实在放，但观众那边根本取不到这个地址 ——
+     * 把它当"可播候选"端出去，房主会以为自己已经开始放映了。
+     */
+    fun bestOf(hits: List<MediaSniffer.Hit>): MediaSniffer.Hit? {
+        fun remote(h: MediaSniffer.Hit) =
+            MediaSniffer.playable(h.kind) && h.url.startsWith("http", ignoreCase = true)
+        return hits.firstOrNull { remote(it) && it.sources and SRC_PAGE != 0 }
+            ?: hits.firstOrNull { remote(it) }
+    }
+
+    /** 有没有"看着能播、其实只有本机能播"的候选 —— 用来给房主一句人话解释。 */
+    fun localOnly(hits: List<MediaSniffer.Hit>): MediaSniffer.Hit? =
+        hits.firstOrNull { MediaSniffer.playable(it.kind) && !it.url.startsWith("http", true) }
 
     data class EmeReport(
         val state: String,

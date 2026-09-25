@@ -99,6 +99,23 @@ class MediaSnifferTest {
     }
 
     @Test
+    fun `本机 file 地址不能当片源递给对方`() {
+        val local = MediaSniffer.Hit(
+            "file:///android_asset/watch/sample.mp4", MediaSniffer.Kind.Progressive,
+            null, null, 1L, sources = SRC_REQUEST or SRC_PAGE,
+        )
+        val remote = MediaSniffer.Hit(
+            "https://cdn/a/index.m3u8", MediaSniffer.Kind.Master, null, null, 2L,
+            sources = SRC_REQUEST,
+        )
+        // 本机那条后缀合法、房主确实在放，但观众取不到 —— 不能选它
+        assertEquals(remote, CinemaProbe.bestOf(listOf(local, remote)))
+        assertNull(CinemaProbe.bestOf(listOf(local)))
+        // 而且要说清楚为什么按不动：localOnly 就是给那句解释用的
+        assertEquals(local, CinemaProbe.localOnly(listOf(local, remote)))
+    }
+
+    @Test
     fun `bestOf 优先选页面亲口报过的那条`() {
         val fromRequest = MediaSniffer.Hit(
             "https://cdn/a/proxy.mp4", MediaSniffer.Kind.Progressive, null, null, 1L,

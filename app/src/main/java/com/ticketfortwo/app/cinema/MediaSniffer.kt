@@ -139,6 +139,12 @@ object MediaSniffer {
         return s
     }
 
+    /** 页面没标题时，至少告诉房主这条来自哪个站点，而不是甩一整串 URL 给他看。 */
+    fun hostLabel(url: String): String {
+        val host = url.substringAfter("://", "").substringBefore("/")
+        return if (host.isBlank()) "对方选的那条" else "$host 的那条"
+    }
+
     /** 去掉 URL 里的签名串再展示，否则一屏全是看不完的 token。 */
     fun shorten(url: String, max: Int = 96): String {
         val cut = url.substringBefore('#')

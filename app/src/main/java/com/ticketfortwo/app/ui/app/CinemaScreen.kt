@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -81,6 +82,9 @@ fun CinemaScreen(
     backdrop: LayerBackdrop,
     /** 「分享 → 双人票」递进来的链接；非空就一进来就打开它，而不是停在本地测试页。 */
     initialUrl: String? = null,
+    /** 厅已开但对方还没进来时，这一条就是邀请链接 —— 厅的入口动作是"发链接"。 */
+    inviteUrl: String? = null,
+    viewerOnline: Boolean = false,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -236,9 +240,9 @@ fun CinemaScreen(
     Column(Modifier.fillMaxSize()) {
         GlassPageBar(backdrop, title = "放映厅", onBack = onBack) {
             Text(
-                "厅已开 · 等对方进来",
+                if (viewerOnline) "对方已在厅里" else "厅已开 · 等对方进来",
                 fontSize = 11.5.sp,
-                color = Ink.Live,
+                color = if (viewerOnline) Ink.Live else Ink.TextLow,
             )
         }
 
@@ -251,7 +255,9 @@ fun CinemaScreen(
                 value = inputUrl,
                 onValueChange = { inputUrl = it },
                 label = "地址",
-                modifier = Modifier.weight(1f),
+                // 权重给到 1f 之外还要留缝：不加 weight 时限宽的行为是"文字压在按钮下面"，
+                // 实测长 URL 会一路顶到「打开」按钮底下，看着像按钮粘在字上。
+                modifier = Modifier.weight(1f).padding(end = 2.dp),
             )
             PrimaryPill(text = "打开", onClick = {
                 pageUrl = normalizeUrl(inputUrl)
@@ -280,14 +286,21 @@ fun CinemaScreen(
                 } else {
                     val h = CinemaProbe.bestOf(hits)
                     if (h == null) {
-                        note = "还没嗅到可播的地址，先让片子播起来"
+                        // 分开说两种"没候选"：一种是真的没嗅到，一种是嗅到了但只有本机能播。
+                        // 后者不解释的话，房主会以为按下去对方就该看到了。
+                        note = if (CinemaProbe.localOnly(hits) != null) {
+                            "嗅到的是本机文件地址（file://），对方播不了 —— 打开一个网页里的播放器再试"
+                        } else {
+                            "还没嗅到可播的地址，先让片子播起来"
+                        }
                     } else {
                         CallSession.setCinemaTrack(
                             CinemaSync.Track(
                                 url = h.url,
                                 kind = h.kind.name.lowercase(),
-                                title = player?.title?.takeIf { it.isNotBlank() }
-                                    ?: MediaSniffer.shorten(h.url, 40),
+                                title = player?.title?.takeIf {
+                                    it.isNotBlank() && !it.startsWith("http", true)
+                                } ?: MediaSniffer.hostLabel(h.url),
                                 durationMs = player?.durMs ?: 0L,
                             ),
                         )
@@ -320,6 +333,13 @@ fun CinemaScreen(
             showSniffer = showPanel,
             probe = probe,
             eme = eme,
+            inviteUrl = inviteUrl,
+            onCopyInvite = {
+                inviteUrl?.let {
+                    context.copy("邀请链接", it)
+                    note = "邀请链接已复制，发给对方就能进厅"
+                }
+            },
             onPick = { h ->
                 context.copy("片源", h.url)
                 note = "已复制：${MediaSniffer.shorten(h.url, 40)}"
@@ -351,9 +371,14 @@ private fun CinemaPanel(
     showSniffer: Boolean,
     probe: MediaSniffer.PageProbe?,
     eme: CinemaProbe.EmeReport?,
+    inviteUrl: String?,
+    onCopyInvite: () -> Unit,
     onPick: (MediaSniffer.Hit) -> Unit,
 ) {
-    val playable = hits.filter { MediaSniffer.playable(it.kind) }
+    // 计数也只数"对方真能播的"：把 file:// 算进"1 条可播地址"是骗房主。
+    val playable = hits.filter {
+        MediaSniffer.playable(it.kind) && it.url.startsWith("http", ignoreCase = true)
+    }
     GlassPanel(
         backdrop = backdrop,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -363,7 +388,16 @@ private fun CinemaPanel(
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .then(if (showSniffer) Modifier.height(214.dp).verticalScroll(rememberScrollState()) else Modifier)
+                    // 用 heightIn 而不是固定 height：固定高度会把卡片自己的内容切掉
+                    // （实测：标题被截在上缘、最后一行 URL 被切一半），
+                    // 内容短时又该收起来，不该撑着一块空玻璃。
+                    .then(
+                        if (showSniffer) {
+                            Modifier.heightIn(max = 236.dp).verticalScroll(rememberScrollState())
+                        } else {
+                            Modifier
+                        },
+                    )
                     .padding(horizontal = 16.dp, vertical = 10.dp),
             ) {
                 if (cinema != null) {
@@ -414,6 +448,24 @@ private fun CinemaPanel(
                         fontWeight = FontWeight.SemiBold,
                         color = Ink.TextHi,
                     )
+                    // 厅先开、对方先进来 —— 所以"把链接发出去"是这一屏的第一动作，
+                    // 不是分享流程的副产品。
+                    if (!inviteUrl.isNullOrBlank()) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                MediaSniffer.shorten(inviteUrl, 44),
+                                fontSize = 10.5.sp,
+                                color = Ink.TextMid,
+                                maxLines = 1,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Box(Modifier.width(8.dp))
+                            GlassTextButton("复制邀请", onClick = onCopyInvite, backdrop = backdrop)
+                        }
+                    }
                     Text(
                         "对方现在看到的是你的屏幕。挑一条按「开始放映」，" +
                             "他就改成自己播那条流 —— 画质原生，屏幕上也不再压两层控件。",
