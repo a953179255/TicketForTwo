@@ -203,6 +203,25 @@ fun CallScreen(
     // 直接把 true 赋给已经是 true 的状态不会触发重组，倒计时就永远不再走。
     var chromeVisible by remember { mutableStateOf(true) }
     var chromeTick by remember { mutableIntStateOf(0) }
+    /* 放映**从有到无**的那一下要说一句。
+     *
+     * 实测（.dev/tx-b-1.png）：房主按「收厅」之后观众端的放映条整个消失、画面还在，
+     * 屏幕上不留任何解释 —— 观众看到的是"我刚有的进度条没了"，很容易读成
+     * "我是不是被踢了 / 是不是网断了"。条本身消失是对的（它跟着状态走），
+     * 缺的是那一句。只在"曾经有过"时提醒，进厅就没片的人不该看到它。 */
+    var hadCinema by remember { mutableStateOf(false) }
+    var cinemaGoneNote by remember { mutableStateOf(false) }
+    LaunchedEffect(cinema) {
+        if (cinema != null) {
+            hadCinema = true
+            cinemaGoneNote = false
+        } else if (hadCinema) {
+            hadCinema = false
+            cinemaGoneNote = true
+            delay(4_500)
+            cinemaGoneNote = false
+        }
+    }
     if (!isHost) {
         LaunchedEffect(chromeTick) {
             if (chromeTick == 0) return@LaunchedEffect
@@ -299,6 +318,21 @@ fun CallScreen(
         }
 
         // 顶部状态条（观众侧随控件一起收起 —— 全屏看画面时不留横幅）
+        if (!isHost && cinemaGoneNote) {
+            Box(
+                Modifier
+                    .align(Alignment.Center)
+                    .padding(bottom = 130.dp)
+                    .background(
+                        androidx.compose.ui.graphics.Color(0xCC000000),
+                        RoundedCornerShape(percent = 50),
+                    )
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
+            ) {
+                Text("他停了放映，现在看的是他的屏幕", fontSize = 13.sp, color = Ink.TextHi)
+            }
+        }
+
         if (isHost || chromeShown) GlassPanel(
             backdrop = backdrop,
             modifier = Modifier
