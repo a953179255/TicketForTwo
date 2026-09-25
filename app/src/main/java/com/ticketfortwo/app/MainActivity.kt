@@ -43,6 +43,13 @@ import androidx.compose.ui.platform.LocalContext
 import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.ticketfortwo.app.ui.app.CallScreen
 import com.ticketfortwo.app.ui.app.resetActivityBrightness
+import android.app.PictureInPictureParams
+import android.app.PictureInPictureUiState
+import android.content.res.Configuration
+import android.os.Build
+import android.util.Rational
+import androidx.annotation.RequiresApi
+import kotlinx.coroutines.flow.MutableStateFlow
 import com.ticketfortwo.app.ui.app.ColorLabScreen
 import com.ticketfortwo.app.ui.app.WatchTogetherScreen
 import com.ticketfortwo.app.ui.app.GlassLabScreen
@@ -81,6 +88,62 @@ class MainActivity : ComponentActivity() {
             TicketForTwoAppRoot { backdrop -> AppRouter(backdrop) }
         }
     }
+
+    // ---- 画中画（只给观众侧）----------------------------------------------
+    //
+    // 触发时机选"用户按 HOME / 切走"（onUserLeaveHint），而不是在控制岛上再加一颗按钮：
+    // 看片中途去回消息，回来希望画面还在，这正是小窗的用途；系统本来就在这个时机
+    // 给应用一次机会，不需要用户先学会一颗新图标。
+    //
+    // 房主侧刻意不做：他这块屏正在被分享，小窗里放实时画面就是上一轮判定过的套娃，
+    // 放 App 界面又挡住"分享跟着你走"这件事 —— 两个选择都是错的，所以不选。
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        val watching = ViewerSession.state.value is ViewerSession.State.Connected
+        if (watching && !PipState.inPip.value && !isInPictureInPictureMode) {
+            val ok = runCatching { enterPictureInPictureMode(pipParams()) }.getOrDefault(false)
+            Log.i("MainActivity", "观看中切走 → 画中画${if (ok) "已开" else "被系统拒"}")
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration,
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        PipState.inPip.value = isInPictureInPictureMode
+    }
+
+    /**
+     * 31+ 才有：能拿到"正在切入"和"被用户甩到一边(stash)"这两个中间态。
+     *
+     * 注意 `PictureInPictureUiState` 上**没有** "在不在小窗里" 这个判断
+     * （javap 查过 android.jar，只有 isTransitioningToPip / isStashed），
+     * 所以那位仍以 Activity 自己的 isInPictureInPictureMode 为准。
+     */
+    @RequiresApi(Build.VERSION_CODES.S)
+    override fun onPictureInPictureUiStateChanged(state: PictureInPictureUiState) {
+        super.onPictureInPictureUiStateChanged(state)
+        PipState.inPip.value = state.isTransitioningToPip || isInPictureInPictureMode
+    }
+
+    private fun pipParams(): PictureInPictureParams {
+        val b = PictureInPictureParams.Builder()
+        // 比例跟**内容**走，不跟屏幕走：对方横屏时还给竖着的比例，小窗里就裁掉一块画面。
+        // 系统只接受 1:2.39 ~ 2.39:1，超了 enterPictureInPictureMode 会直接抛，所以先夹。
+        val (w, h) = ViewerSession.contentSize.value ?: (16 to 9)
+        val r = (w.toFloat() / h.toFloat()).coerceIn(1f / 2.39f, 2.39f)
+        runCatching { b.setAspectRatio(Rational((r * 1000).toInt(), 1000)) }
+        return b.build()
+    }
+}
+
+/**
+ * 画中画状态。放在文件级而不是 Activity 字段上：路由是 Composable，
+ * 读一个普通字段不会重组，小窗进出时界面就停在旧的样子。
+ */
+private object PipState {
+    val inPip = MutableStateFlow(false)
 }
 
 private enum class UiRole { None, Host, Viewer }
@@ -134,6 +197,8 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     // 同看：观众侧只需要房主广播回来的播放器状态，加上"他允不允许我控制"这一个布尔。
     val viewerWatch by ViewerSession.watch.collectAsState()
     val viewerWatchAllowed by ViewerSession.watchAllowed.collectAsState()
+    // 小窗里只留画面，所以这一位要一路传到 CallScreen 去压掉控件。
+    val inPip by PipState.inPip.collectAsState()
     val viewerMicPending by ViewerSession.micPending.collectAsState()
     val viewerMicLive by ViewerSession.micLive.collectAsState()
 
@@ -501,6 +566,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 watch = viewerWatch,
                 watchAllowed = viewerWatchAllowed,
                 onWatchCmd = { act, arg -> ViewerSession.sendWatchCmd(act, arg) },
+                pipMode = inPip,
                 onStop = { ViewerSession.stop() },
             )
 

@@ -901,3 +901,30 @@ SyncWatch 1.25s 硬跳 + 0.12~1.25s 之间用 ±6% 变速微调，couple-cinema 
    所以这张图证明的是**布局与后景层**，不是"真实视频下的观感"。
 2. 真房主 + 真隧道下的观感还没看（这一轮 PC 侧对 trycloudflare 的 TLS 被掐断过，
    浏览器直接 `ERR_CONNECTION_CLOSED`）。隧道恢复后要在真链接上补看一眼。
+
+## 27. 观众端画中画：切走之后继续看
+
+按 HOME / 切去回消息时，观看那一屏自动缩成系统小窗继续播。触发点选
+`onUserLeaveHint()` 而不是在控制岛上再加一颗按钮 —— 这个时机系统本来就会给应用
+一次机会，用户不需要先学会一个新图标；控制岛那四个位置要留给"通话级"动作。
+
+**房主侧刻意不做。** 他那块屏正在被分享：小窗里放实时画面就是 §24 判定过的套娃，
+放 App 界面又挡住"分享跟着你走"这件事，两个选择都是错的。
+
+小窗里只留画面：`PipState.inPip` 一路传到 `CallScreen`，把顶部条、控制岛、同看条
+和手势层全部压掉（`chromeShown = !pipMode && chromeVisible`）。手势层尤其要摘 ——
+小窗的点击该由系统接管（点一下回到 App），我们拦下来就变成"点了没反应"。
+状态放文件级 `object PipState` 而不是 Activity 字段：路由是 Composable，
+读普通字段不会重组。
+
+比例跟**内容**走不跟屏幕走：`ViewerSession.contentSize`（首帧尺寸）→ `Rational`，
+并夹进系统允许的 1:2.39 ~ 2.39:1，超了 `enterPictureInPictureMode` 会直接抛。
+
+实测（t2test 分享 / t2view 观看）：按 HOME 后
+`PipTransitionState(mState=entered-pip)`、`PictureInPictureParams(aspectRatio=9/20 ...)`
+—— 9:20 正是那一路视频的 810x1800，说明比例取到了内容而不是屏幕；
+截图里小窗是圆角竖窗，画面在动，我们自己的两条玻璃横幅没有出现在窗内。
+回到前台后 `mLastReportedPictureInPictureMode=false`，控件恢复。
+
+一个已知缺口：小窗上没放动作按钮（`hasSetActions=false`），退出观看要先点回 App 再按停止。
+`RemoteAction` 要 PendingIntent + 图标，且在不同 ROM 上排布差别大，这轮没做。

@@ -114,6 +114,10 @@ object ViewerSession {
     private val _contentLandscape = MutableStateFlow<Boolean?>(null)
     val contentLandscape: StateFlow<Boolean?> = _contentLandscape.asStateFlow()
 
+    /** 最近一帧的真实尺寸。画中画要用它定比例，不能用屏幕比例瞎猜。 */
+    private val _contentSize = MutableStateFlow<Pair<Int, Int>?>(null)
+    val contentSize: StateFlow<Pair<Int, Int>?> = _contentSize.asStateFlow()
+
     /** 观众选的方向模式，默认跟随对方。 */
     private val _orientationMode = MutableStateFlow(OrientationMode.Follow)
     val orientationMode: StateFlow<OrientationMode> = _orientationMode.asStateFlow()
@@ -125,6 +129,7 @@ object ViewerSession {
      */
     fun onContentResolution(w: Int, h: Int) {
         if (w <= 0 || h <= 0) return
+        _contentSize.value = w to h
         val land = w > h
         if (_contentLandscape.value != land) {
             Log.i(TAG, "对方画面方向：${if (land) "横" else "竖"}（$w x $h）")

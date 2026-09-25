@@ -134,6 +134,8 @@ fun CallScreen(
     onWatchCmd: (String, Long) -> Unit = { _, _ -> },
     /** 房主侧：打开内置浏览器一起看。 */
     onOpenWatch: () -> Unit = {},
+    /** 观众侧正在画中画：玻璃控件与手势层全部让路，小窗里只留画面。 */
+    pipMode: Boolean = false,
     onStop: () -> Unit,
 ) {
     // 播放器的惯例：控件几秒后自己收起，点一下再出来。
@@ -159,6 +161,10 @@ fun CallScreen(
             }
         }
     }
+    // 画中画里只留画面：小窗拢共几百像素宽，两条玻璃横幅压上去就把画面糊成一团，
+    // 而且小窗上的点击该由系统接管（点一下回到 App），不该再被手势层吃掉。
+    val chromeShown = !pipMode && chromeVisible
+
     // 这里**不能**给 Box 铺不透明底色：SurfaceView 的合成面在窗口之下，靠"挖洞"显示，
     // 而 Compose 里父节点的不透明 background 会把那块洞重新填平 ——
     // 实测现象就是"日志说 first frame rendered、分辨率 810x1800，屏幕上一片纯黑"。
@@ -198,7 +204,8 @@ fun CallScreen(
                 }
             }
             // 手势层铺在视频之上、控件之下：它自己是全透明的，只吃指针事件。
-            ViewerGestureLayer(
+            // 画中画时不挂：那颗小窗的点击归系统，我们不该拦。
+            if (!pipMode) ViewerGestureLayer(
                 chromeVisible = chromeVisible,
                 // 真"切换"而不是只唤出：控件已经在了还点一下，播放器惯例是立刻收回去，
                 // 而不是"再等 3 秒才消失"——那样用户会觉得点了没反应。
@@ -208,7 +215,7 @@ fun CallScreen(
         }
 
         // 顶部状态条（观众侧随控件一起收起 —— 全屏看画面时不留横幅）
-        if (isHost || chromeVisible) GlassPanel(
+        if (isHost || chromeShown) GlassPanel(
             backdrop = backdrop,
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -242,7 +249,7 @@ fun CallScreen(
 
         // 同看条：只有观众侧、且房主真的开了同看时才画；和控件一起收起，
         // 不然全屏看片时等于第三条横幅永久压在对方画面上。
-        if (!isHost && watch != null && chromeVisible) {
+        if (!isHost && watch != null && chromeShown) {
             WatchMirrorBar(
                 backdrop = backdrop,
                 state = watch,
@@ -254,7 +261,7 @@ fun CallScreen(
             )
         }
 
-        if (isHost || chromeVisible) ControlIsland(
+        if (isHost || chromeShown) ControlIsland(
             backdrop = backdrop,
             micOn = micOn,
             onToggleMic = onToggleMic,
