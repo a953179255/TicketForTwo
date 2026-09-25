@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
@@ -347,22 +348,14 @@ fun CinemaScreen(
                 note = "正在打开，嗅探中…"
             }, backdrop = backdrop)
         }
+        /* 这一排原来是不滚动的五颗胶囊：屏宽不够时**最后一颗「开始放映」整个被切到屏外**
+           （uiautomator 里根本找不到它，实测点不到 —— 主操作按钮看不见，等于这一屏没有主操作）。
+           现在按重要度排序 + 允许横滑：主操作永远在最左边看得见的位置，调试用的两排到最后。 */
         Row(
-            Modifier.fillMaxWidth().padding(start = GlassDimens.screenH, bottom = 4.dp),
+            Modifier.fillMaxWidth().padding(start = GlassDimens.screenH, bottom = 4.dp)
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            GlassTextButton("本地测试页", onClick = {
-                inputUrl = CINEMA_TEST_LOCAL; pageUrl = CINEMA_TEST_LOCAL
-            }, backdrop)
-            GlassTextButton("HLS 测试流", onClick = {
-                inputUrl = CINEMA_TEST_HLS; pageUrl = CINEMA_TEST_HLS
-            }, backdrop)
-            GlassTextButton(if (showPanel) "收起嗅探" else "展开嗅探", onClick = {
-                showPanel = !showPanel
-            }, backdrop)
-            GlassTextButton("换一条流", onClick = {
-                inputUrl = CINEMA_TEST_HLS_2; pageUrl = CINEMA_TEST_HLS_2
-            }, backdrop)
             // 放映/收厅：房主确认才切 —— 嗅探有认错的时候（广告分片、预告片），
             // 自动切等于把误判直接端给对方。
             GlassTextButton(if (cinema == null) "开始放映" else "收厅", onClick = {
@@ -371,21 +364,44 @@ fun CinemaScreen(
                     note = "已收厅，对方那边退回等候屏"
                 } else {
                     val h = CinemaProbe.bestOf(hits)
-                    if (h == null) {
-                        // 分开说两种"没候选"：一种是真的没嗅到，一种是嗅到了但只有本机能播。
-                        // 后者不解释的话，房主会以为按下去对方就该看到了。
-                        note = if (CinemaProbe.localOnly(hits) != null) {
-                            "嗅到的是本机文件地址（file://），对方播不了 —— 打开一个网页里的播放器再试"
-                        } else {
-                            // 五轮实测里"没嗅到"占了三站，而它们的共同点不是"站点不行"，
-                            // 是**这一页还没开始放**：B 站、Vimeo 这类都是按下播放才去取流，
-                            // 没取流就没有任何请求可嗅。不写清那一步，房主会以为这条片子不能一起看。
-                            "还没嗅到地址 —— 先在这页把视频点成播放（多数站点是按了播放才去取流），再按开始放映"
-                        }
-                    } else {
+                    if (h != null) {
                         screen(h)
+                    } else {
+                        val pv = player
+                        // 分开说三种"没候选"，每种都给出下一步：
+                        // ① 嗅到的只是本机文件地址；② 页面有播放器但没在放；③ 真的什么都没有。
+                        // ② 是最常见的一种（11 站样本里"没嗅到"的四站中两站如此：B 站、Vimeo
+                        // 都是按下播放才去取流，没有请求就没有可嗅的地址）—— 那就替他点上。
+                        note = when {
+                            CinemaProbe.localOnly(hits) != null ->
+                                "嗅到的是本机文件地址（file://），对方播不了 —— 打开一个网页里的播放器再试"
+                            pv != null && !pv.playing -> {
+                                webView.post {
+                                    webView.evaluateJavascript(
+                                        WatchSync.jsFor(WatchCmd.Play, pv.posMs, pv.durMs),
+                                        null,
+                                    )
+                                }
+                                "这页还没播 —— 先替你点上播放，等它开始取流再按一次「开始放映」"
+                            }
+                            else ->
+                                "还没嗅到地址 —— 先在这页把视频点成播放（多数站点是按了播放才去取流），" +
+                                    "再按开始放映"
+                        }
                     }
                 }
+            }, backdrop)
+            GlassTextButton(if (showPanel) "收起嗅探" else "展开嗅探", onClick = {
+                showPanel = !showPanel
+            }, backdrop)
+            GlassTextButton("换一条流", onClick = {
+                inputUrl = CINEMA_TEST_HLS_2; pageUrl = CINEMA_TEST_HLS_2
+            }, backdrop)
+            GlassTextButton("本地测试页", onClick = {
+                inputUrl = CINEMA_TEST_LOCAL; pageUrl = CINEMA_TEST_LOCAL
+            }, backdrop)
+            GlassTextButton("HLS 测试流", onClick = {
+                inputUrl = CINEMA_TEST_HLS; pageUrl = CINEMA_TEST_HLS
             }, backdrop)
         }
 
