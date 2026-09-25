@@ -795,3 +795,53 @@ bug，正是 §16 的教训。跨网结论仍然只能来自真机/异网。
 
 **没验的：** 回声与音质 —— 观众外放 + 开麦时房主的声音会不会绕回观众自己的麦克风，
 脚本判不了，需要真人听。
+
+## 23. 一起看（同看）：播放器必须握在自己手里
+
+用户诉求：房主开浏览器和对方一起看片，对方想快进只能靠嘴喊。
+
+**能不能控制房主自己开的外部浏览器？不能。** 两条路都堵死：
+注入按键要 `INJECT_EVENTS`（签名级权限，上架应用拿不到，`InputManager.injectInputEvent`
+上写着 `@RequiresPermission`）；`MediaSessionManager.getActiveSessions` 要通知监听权限，
+而且只给 play/pause 这类通用键，给不了"跳到 12:34"。
+参考过的三家开源同看项目（Synctv / SyncWatch / couple-cinema）**没有一家做这件事** ——
+它们全都让每台设备各播一份再对时（对时阈值：Synctv 自动 1.2s、手动 0.2s，
+SyncWatch 1.25s 硬跳 + 0.12~1.25s 之间用 ±6% 变速微调，couple-cinema 1.8s）。
+那套架构需要一台服务器和一个能拿到直链的播放器，和"我分享我这块屏"正好相反。
+
+**所以反过来做**：房主在 App 里打开内置 WebView 播放，播放器在我们手里，
+进度和指令都走已经建好的那条设备间 WebSocket。观众看到的画面本来就是这块屏，
+控制它天经地义。实现要点：
+- 只用 `evaluateJavascript` 问/命令，**不用 `addJavascriptInterface`**（后者把 Kotlin 对象
+  挂到 window 上，页面里任意脚本都能调，是 WebView CVE 最密集的那类接口）。
+- 选主 `<video>` 按渲染面积取最大，不是 `querySelector('video')` 取第一个（多视频页里第一个常是广告）。
+- 权限闸门放在**收消息那一侧**（`CallSession`），不给 UI 留"忘了判"的机会。
+- 观众侧不做本地乐观更新：按下之后等房主下一次广播带回真相，两边永远只有一个进度。
+- 连点保护 250ms；`step` 幅度砍到 ±120s。
+
+实测（t2test 房主 / t2view 观众，同机）：观众连按两次 -10 之后，房主页上那个大字时钟
+从 0:52 变到 **0:41** —— 播放不会自己倒退，这就是控制真的生效的铁证。
+顺带把 §17 结掉：控件收起 vs 展开，同一块内容区亮度 **95.9 → 95.9**，控件不压暗画面。
+
+两个坑：
+1. 验证页最初挂的是 googleapis 的示例片，这台机器上直接不通（`curl` 返回 000），
+   于是 `duration=0`，看起来像"注入没生效"，其实是根本没数据。换成随包的 55KB 测试卡
+   （ffmpeg 生成，60 秒彩条），零网络依赖。
+2. `GlassTextButton` 的 "-10 / +10" 是画出来的，进不了 uiautomator 的无障碍树，
+   `find()` 会报"没有 +10"而屏幕上明明画着 —— 脚本里退回坐标兜底，并且**把退回打印出来**。
+
+## 24. 分享端最小化后的悬浮预览窗：判定为不做
+
+用户提过"能不能让预览窗不被采集到，可以就做，不可以就算了"。答案是**不可以**：
+- AOSP `SurfaceControl.SECURE` 的注释写得很直白：截图与非安全显示里
+  "render black content instead of the surface content" —— 是**黑框**，不是透明穿透；
+  `Display.FLAG_SECURE` 同样表述为 "blank region"。第三方分析（Ostorlab）的措辞是
+  "窗口出现在帧里的任何地方都只是一块黑色矩形"。
+- API 35 新增的 `View.setContentSensitivity(CONTENT_SENSITIVITY_SENSITIVE)` 是公开 API，
+  但 javadoc 自己说 "equivalent to applying FLAG_SECURE"，实现（`ViewRootImpl
+  .applySensitiveContentAppProtection`）是在投屏会话期间给整个窗口挂 secure —— 一样黑框。
+- 真正"从截图/录制里跳过这一层"的 `Transaction.setSkipScreenshot` 是 `@hide`，
+  android-34..37 的 api-versions.xml 里查不到。
+
+所以悬浮预览要么套娃、要么在对方画面上留一块黑，两个都比不做更糟，**放弃**。
+最小化时的存在感由前台服务通知承担（已带"1 人正在观看"和停止按钮）。

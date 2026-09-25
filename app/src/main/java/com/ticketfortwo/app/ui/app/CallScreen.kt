@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.ticketfortwo.app.rtc.RtcEngine
+import com.ticketfortwo.app.watch.WatchState
 import com.ticketfortwo.app.ui.glass.GlassPanel
 import com.ticketfortwo.app.ui.theme.GlassDimens
 import com.ticketfortwo.app.ui.theme.Ink
@@ -127,6 +128,12 @@ fun CallScreen(
     onCycleOrientation: () -> Unit = {},
     /** 观众侧右半屏滑动调音量（0..1）。房主侧手势层不挂，这个回调不会被调用。 */
     onViewerVolume: (Float) -> Unit = {},
+    /** 观众侧：房主播放器的状态镜像；没开同看时是 null，整条同看 UI 就不画。 */
+    watch: WatchState? = null,
+    watchAllowed: Boolean = false,
+    onWatchCmd: (String, Long) -> Unit = { _, _ -> },
+    /** 房主侧：打开内置浏览器一起看。 */
+    onOpenWatch: () -> Unit = {},
     onStop: () -> Unit,
 ) {
     // 播放器的惯例：控件几秒后自己收起，点一下再出来。
@@ -160,7 +167,7 @@ fun CallScreen(
         // 房主这屏没有 SurfaceView，玻璃就能正常采样环境底；
         // 观众那屏视频压在最下面，SurfaceView 的内容抓不到（backdrop issue #98），只能退化成 scrim。
         if (isHost) {
-            HostStage(backdrop, peerLabel)
+            HostStage(backdrop, peerLabel, onOpenWatch)
         } else {
             // 首帧没到之前这块区域是纯黑 —— 用户分不清"对方画面全黑"和"卡住了"，所以必须有等待提示。
             var firstFrame by remember(remoteTrack) { mutableStateOf(false) }
@@ -193,7 +200,9 @@ fun CallScreen(
             // 手势层铺在视频之上、控件之下：它自己是全透明的，只吃指针事件。
             ViewerGestureLayer(
                 chromeVisible = chromeVisible,
-                onToggleChrome = { chromeTick++ },
+                // 真"切换"而不是只唤出：控件已经在了还点一下，播放器惯例是立刻收回去，
+                // 而不是"再等 3 秒才消失"——那样用户会觉得点了没反应。
+                onToggleChrome = { if (chromeVisible) chromeVisible = false else chromeTick++ },
                 onVolume = onViewerVolume,
             )
         }
@@ -231,6 +240,20 @@ fun CallScreen(
             },
         )
 
+        // 同看条：只有观众侧、且房主真的开了同看时才画；和控件一起收起，
+        // 不然全屏看片时等于第三条横幅永久压在对方画面上。
+        if (!isHost && watch != null && chromeVisible) {
+            WatchMirrorBar(
+                backdrop = backdrop,
+                state = watch,
+                allowed = watchAllowed,
+                onCmd = onWatchCmd,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = GlassDimens.islandBottom + 84.dp),
+            )
+        }
+
         if (isHost || chromeVisible) ControlIsland(
             backdrop = backdrop,
             micOn = micOn,
@@ -257,7 +280,7 @@ fun CallScreen(
  * 至于"为什么不放实时预览"，那是我们内部的设计取舍，不该出现在用户界面上。
  */
 @Composable
-private fun HostStage(backdrop: LayerBackdrop, peerLabel: String) {
+private fun HostStage(backdrop: LayerBackdrop, peerLabel: String, onOpenWatch: () -> Unit) {
     Column(
         Modifier.fillMaxSize().padding(horizontal = GlassDimens.screenH),
         verticalArrangement = Arrangement.Center,
@@ -278,6 +301,16 @@ private fun HostStage(backdrop: LayerBackdrop, peerLabel: String) {
                 )
                 Spacer(Modifier.height(GlassDimens.sp1))
                 Text(peerLabel, fontSize = 11.5.sp, color = Ink.TextLow)
+                // 一起看：播放器在我们手里，对方才可能真的动得到进度。
+                // 放在这张卡里而不是控制岛上 —— 控制岛要留给"通话级"的三个动作，
+                // 而这一颗是"接下来要干什么"，和卡片说的是同一件事。
+                PrimaryPill(
+                    text = "一起看片",
+                    onClick = onOpenWatch,
+                    backdrop = backdrop,
+                    filled = false,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
         }
     }

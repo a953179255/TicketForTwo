@@ -44,6 +44,7 @@ import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.ticketfortwo.app.ui.app.CallScreen
 import com.ticketfortwo.app.ui.app.resetActivityBrightness
 import com.ticketfortwo.app.ui.app.ColorLabScreen
+import com.ticketfortwo.app.ui.app.WatchTogetherScreen
 import com.ticketfortwo.app.ui.app.GlassLabScreen
 import com.ticketfortwo.app.ui.app.ConsentGuideScreen
 import com.ticketfortwo.app.rtc.Verdict
@@ -97,6 +98,7 @@ private sealed interface Page {
     object Settings : Page
     object ColorLab : Page
     object GlassLab : Page
+    object Watch : Page
     object Consent : Page
     data class ViewerJoin(val error: String?) : Page
     data class ViewerPreparing(val note: String) : Page
@@ -129,6 +131,9 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     val viewerLandscape by ViewerSession.contentLandscape.collectAsState()
     val viewerOrient by ViewerSession.orientationMode.collectAsState()
     val viewerOnline by SignalHub.viewerConnected.collectAsState()
+    // 同看：观众侧只需要房主广播回来的播放器状态，加上"他允不允许我控制"这一个布尔。
+    val viewerWatch by ViewerSession.watch.collectAsState()
+    val viewerWatchAllowed by ViewerSession.watchAllowed.collectAsState()
     val viewerMicPending by ViewerSession.micPending.collectAsState()
     val viewerMicLive by ViewerSession.micLive.collectAsState()
 
@@ -148,6 +153,8 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     var showColorLab by remember { mutableStateOf(false) }
     var showGlassLab by remember { mutableStateOf(false) }
     var viewerIntent by remember { mutableStateOf(false) }
+    /** 房主打开内置浏览器"一起看"。分享期间的一个覆盖层，不是独立会话。 */
+    var showWatch by remember { mutableStateOf(false) }
     var paste by remember { mutableStateOf("") }
     var viewerError by remember { mutableStateOf<String?>(null) }
 
@@ -347,6 +354,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     BackHandler(enabled = showConsent) { showConsent = false }
     BackHandler(enabled = showSettings) { showSettings = false }
     BackHandler(enabled = showGlassLab) { showGlassLab = false; showSettings = true }
+    BackHandler(enabled = showWatch) { showWatch = false }
     BackHandler(enabled = showColorLab) { showColorLab = false; showSettings = true }
 
     // 首页在两个分支里都要画（角色未定 / 兜底）。写成一处，避免以后改了其一忘了其二。
@@ -372,6 +380,9 @@ private fun AppRouter(backdrop: LayerBackdrop) {
 
         // 分享设置：纯 UI 意图，和授权指引一样排在最前面。
         showSettings -> Page.Settings
+
+        // 一起看：分享期间的覆盖层，盖在会话屏之上（它成立的前提就是"我还在分享"）
+        showWatch -> Page.Watch
         showConsent -> Page.Consent
 
         // ── 观众：App 内收看（与房主的 CallSession 互斥）──
@@ -436,6 +447,12 @@ private fun AppRouter(backdrop: LayerBackdrop) {
             Page.ColorLab -> ColorLabScreen(backdrop = backdrop, onBack = { showColorLab = false })
             Page.GlassLab -> GlassLabScreen(backdrop = backdrop, onBack = { showGlassLab = false })
 
+            Page.Watch -> WatchTogetherScreen(
+                backdrop = backdrop,
+                viewerOnline = viewerOnline,
+                onClose = { showWatch = false },
+            )
+
             Page.Settings -> QualitySettingsScreen(
                 backdrop = backdrop,
                 quality = quality,
@@ -481,6 +498,9 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                     context.prefs().setOrientationMode(next.name)
                 },
                 onViewerVolume = { ViewerSession.setVolume(it) },
+                watch = viewerWatch,
+                watchAllowed = viewerWatchAllowed,
+                onWatchCmd = { act, arg -> ViewerSession.sendWatchCmd(act, arg) },
                 onStop = { ViewerSession.stop() },
             )
 
@@ -530,6 +550,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 onToggleMic = { CallSession.setMicMuted(!micMuted) },
                 latencyMs = stats?.rttMs,
                 netLabel = stats?.viaLabel ?: "直连",
+                onOpenWatch = { showWatch = true },
                 onStop = stop,
             )
 

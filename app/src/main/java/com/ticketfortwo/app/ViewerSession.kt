@@ -11,6 +11,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import com.ticketfortwo.app.watch.WatchState
+import com.ticketfortwo.app.watch.WatchSync
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -274,6 +276,29 @@ object ViewerSession {
         audioTrack?.setEnabled(!muted)
     }
 
+    // ---- 同看 --------------------------------------------------------------
+    //
+    // 观众这一侧**不播**任何内容，画面本来就是房主那块屏。所以这里只留一份状态镜像
+    // 用于显示进度，外加一条把指令发回房主的路。
+    // 控制指令不做本地乐观更新：房主执行完会在下一次广播里带回新进度，
+    // 这样两边永远只有一个真相，不会出现"我这边看着跳了、他那边其实没动"。
+
+    private val _watch = MutableStateFlow<WatchState?>(null)
+    val watch: StateFlow<WatchState?> = _watch.asStateFlow()
+
+    private val _watchAllowed = MutableStateFlow(false)
+    val watchAllowed: StateFlow<Boolean> = _watchAllowed.asStateFlow()
+
+    /** 发一条播放控制指令。act 用字符串而不是对象，是为了和网页端观众共用同一套 f 字段。 */
+    fun sendWatchCmd(act: String, arg: Long = 0L) {
+        send(
+            JSONObject().apply {
+                put("t", "wcmd")
+                put("f", WatchSync.cmdFields(act, arg))
+            }.toString()
+        )
+    }
+
     // ---- 消息 ------------------------------------------------------------
 
     private suspend fun onMessage(context: Context, text: String) {
@@ -310,6 +335,17 @@ object ViewerSession {
             }
 
             "bye" -> end("房主结束了分享")
+
+            // 同看：房主那边播放器的状态镜像。房主每秒广播一次，这里只覆盖不判断。
+            "watch" -> {
+                val parsed = WatchSync.parseState(obj.optString("f").ifEmpty { null })
+                if (parsed == null) {
+                    _watch.value = null
+                } else {
+                    _watch.value = parsed.first
+                    _watchAllowed.value = parsed.second
+                }
+            }
 
             // 观众开麦后会主动发一轮 offer，房主的回信走这里。
             // 这是新支路：老版房主不认识观众发来的 offer，也就不会有这条 answer，

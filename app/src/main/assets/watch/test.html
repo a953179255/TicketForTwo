@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>同看验证片</title>
+<style>
+  html,body{margin:0;background:#0b0b0d;color:#eee;font:14px/1.5 system-ui,sans-serif}
+  video{width:100%;display:block;background:#000}
+  #clock{font:600 42px/1.2 ui-monospace,Menlo,monospace;text-align:center;padding:10px 0 2px}
+  #hint{padding:0 14px 14px;color:#9a9a9f;font-size:12px}
+  b{color:#1ed760}
+</style>
+</head>
+<body>
+<!--
+  这块页面是"一起看"的验收夹具，不是给用户看的：
+  它只保证一件事 —— 页面上有一个货真价实的 HTML5 <video>，
+  于是"探针读得到进度""观众的 +10 真的让 currentTime 跳了"两件事
+  可以用截图直接判真假，而不是靠猜某个第三方站点的 DOM 结构。
+  右上角的大字时钟由 rAF 刷新：观众按 +10 之后，房主屏上这个数字必须立刻跳 10 秒。
+-->
+<video id="v" controls autoplay playsinline src="sample.mp4"></video>
+<div id="clock">0:00</div>
+<div id="hint">
+  验证页：让对面点 <b>+10</b>，上面的数字应立刻跳 10 秒；点 <b>暂停</b> 应停住。
+  视频是随包的 60 秒测试卡（sample.mp4），**不依赖网络** ——
+  上一版这里挂的是 googleapis 的示例片，在这台机器上直接被墙，
+  于是 duration=0，看起来像"注入没生效"，其实是根本没数据。
+</div>
+<script>
+  var v = document.getElementById('v'), c = document.getElementById('clock');
+  function fmt(t) {
+    t = Math.max(0, Math.floor(t || 0));
+    var s = t % 60, m = Math.floor(t / 60) % 60, h = Math.floor(t / 3600);
+    return h > 0 ? h + ':' + ('0' + m).slice(-2) + ':' + ('0' + s).slice(-2) : m + ':' + ('0' + s).slice(-2);
+  }
+  (function tick() { c.textContent = fmt(v.currentTime); requestAnimationFrame(tick); })();
+</script>
+</body>
+</html>

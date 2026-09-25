@@ -16,6 +16,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import com.ticketfortwo.app.watch.WatchCmd
+import com.ticketfortwo.app.watch.WatchState
+import com.ticketfortwo.app.watch.WatchSync
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -103,6 +106,45 @@ object CallSession {
 
     private val _log = MutableStateFlow<List<String>>(emptyList())
     val log: StateFlow<List<String>> = _log.asStateFlow()
+
+    // ---- 同看（一起看片）---------------------------------------------------
+    //
+    // 播放器在房主自己的 WebView 里（见 WatchTogetherScreen）。会话这边只做两件事：
+    // 把播放器状态广播给观众、把观众发来的指令交给那一屏。
+    // 之所以不在这里直接持有 WebView：会话比 Activity 活得久，View 跟着会话活
+    // 就变成"泄漏的窗口"，所以用一条注册进来的回调，那一屏卸载时必须摘掉。
+    private val _watch = MutableStateFlow<WatchState?>(null)
+    val watch: StateFlow<WatchState?> = _watch.asStateFlow()
+
+    /** 方向盘交不交给对方。默认给 —— 这个功能存在的意义就是让对方能快进。 */
+    private val _viewerMayControl = MutableStateFlow(true)
+    val viewerMayControl: StateFlow<Boolean> = _viewerMayControl.asStateFlow()
+
+    @Volatile
+    var onWatchCommand: ((WatchCmd) -> Unit)? = null
+
+    /** 房主侧每轮询到一次播放器状态就调它：更新本地 + 广播给观众。 */
+    fun publishWatchState(s: WatchState) {
+        _watch.value = s
+        broadcastWatch()
+    }
+
+    fun setViewerMayControl(on: Boolean) {
+        _viewerMayControl.value = on
+        broadcastWatch()
+        note(if (on) "已允许对方控制播放" else "已收回播放控制")
+    }
+
+    private fun broadcastWatch() {
+        val s = _watch.value ?: return
+        // 没人看就别白发：这条链路是隧道里的 WebSocket，每次发送都有实打实的开销。
+        if (!SignalHub.viewerConnected.value) return
+        val json = JSONObject().apply {
+            put("t", "watch")
+            put("f", WatchSync.stateFields(s, _viewerMayControl.value))
+        }
+        SignalHub.sendToViewer(json.toString())
+    }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var statsJob: Job? = null
@@ -256,6 +298,22 @@ object CallSession {
                 teardownPeer()
                 val url = (_state.value as? State.WaitingViewer)?.inviteUrl
                 _state.value = if (url != null) State.WaitingViewer(url) else State.Idle
+            }
+
+            // 同看：对方想快进/暂停。权限判定放在**收消息这一侧**，
+            // 不给 UI 留"忘了判"的机会 —— 收回开关后就算 UI 那屏还在，指令也进不去。
+            "wcmd" -> {
+                val cmd = WatchSync.accept(
+                    _viewerMayControl.value,
+                    WatchSync.parseCmd(obj.optString("f")),
+                ) ?: return
+                val cb = onWatchCommand
+                if (cb == null) {
+                    note("收到播放指令，但同看页面已经关了")
+                } else {
+                    note("对方在控制播放：${cmd.label()}")
+                    cb(cmd)
+                }
             }
         }
     }
