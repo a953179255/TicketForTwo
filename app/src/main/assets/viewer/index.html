@@ -23,6 +23,19 @@ body{color:var(--text-hi);overscroll-behavior:none;
    fixed 元素直接对齐视口，浏览器外壳收起/展开时会自动跟着变。 */
 #stage{position:fixed;inset:0;background:#000}
 video{width:100%;height:100%;object-fit:contain;background:#000;display:block}
+/* 环境底（ambient）：电脑/平板上打开链接，一块竖屏画面居中，左右剩下大片死黑 ——
+   "打开默认就是全屏播放，效果很不好"说的就是这一刻。把**同一条流**再画一层、
+   放大铺满 + 模糊 + 压暗垫在后面，黑边变成画面自身的余晖，居中的那块再收个圆角，
+   就是主流播放器处理窄内容通用的那套。
+   手机上刻意不开：整屏 blur 是 GPU 活，观众这边同时在解码一路 WebRTC，
+   为审美吃掉帧率不划算，而且窄屏本来就没剩下多少黑边。 */
+#vbg{position:absolute;inset:-8%;width:116%;height:116%;object-fit:cover;
+  filter:blur(42px) saturate(1.4) brightness(.5);background:#000;
+  opacity:0;transition:opacity .45s ease;pointer-events:none}
+#stage.ambient{display:flex;align-items:center;justify-content:center;background:#08080a}
+#stage.ambient #vbg{opacity:1}
+#stage.ambient #v{position:relative;width:auto;height:auto;max-width:96%;max-height:92%;
+  border-radius:16px;box-shadow:0 18px 60px rgba(0,0,0,.6)}
 /* 浮层：视频区之上只能用 scrim —— SurfaceView/原生视频内容抓不到，玻璃盖不上去 */
 .overlay{position:absolute;left:12px;right:12px;z-index:5}
 .top{top:12px;display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:var(--pill);
@@ -84,6 +97,8 @@ button.primary{background:var(--accent);color:#fff;border:0;border-radius:var(--
 </head>
 <body>
 <div id="stage">
+  <!-- 同一条流的后景层：muted 是必须的，否则两份音频会叠出回声 -->
+  <video id="vbg" autoplay playsinline muted></video>
   <video id="v" autoplay playsinline></video>
 
   <div class="overlay top hide" id="topBar">
@@ -238,6 +253,10 @@ async function startPeer(offerSdp){
       s.addTrack(ev.track);
     }
     video.srcObject = s;
+    // 后景层共用**同一条** MediaStream：不是第二路订阅，不额外耗带宽，
+    // 解码也还是那一次，只是多画一遍。muted 的那句话在 HTML 里。
+    const bg = $('vbg');
+    if (bg && bg.srcObject !== s) { bg.srcObject = s; bg.play().catch(() => {}); }
     if (ev.track.kind === 'video') {
       gotVideo = true;
       if (voiceTimer) { clearTimeout(voiceTimer); voiceTimer = null; }
@@ -608,6 +627,42 @@ if (window.visualViewport) {
 }
 // 转屏时 visualViewport 的回调有时比布局稳定得晚，补一次
 addEventListener('orientationchange', () => setTimeout(fitStage, 150));
+
+/* 环境底只在宽屏开（理由见 CSS 里那段注释）。用 matchMedia 而不是自己量 innerWidth，
+   分屏、缩放窗口、转屏都会由浏览器直接回调，不用我猜时机。 */
+const wideQ = window.matchMedia ? window.matchMedia('(min-width: 700px)') : null;
+function applyAmbient(){
+  const on = !!(wideQ && wideQ.matches);
+  $('stage').classList.toggle('ambient', on);
+  // 关掉时把后景暂停：手机转成竖屏后它已经看不见了，没必要继续占合成开销
+  const bg = $('vbg');
+  if (bg) { if (on) { bg.play().catch(() => {}); } else { bg.pause(); } }
+}
+applyAmbient();
+if (wideQ && wideQ.addEventListener) wideQ.addEventListener('change', applyAmbient);
+
+/* 演示钩子：?demo=canvas 时挂一块**画出来的**竖屏画面，用来在没有房主的情况下
+   检查观看端的呈现层（环境底有没有生效、居中的比例对不对、窄屏是不是真的关掉）。
+   正常邀请链接不带这个参数，所以它不参与真实使用；但没有它，"打开就是全屏很丑"
+   这类问题只能靠连上真房主才能复现，而隧道恰恰是最不稳定的一环。 */
+if (new URLSearchParams(location.search).get('demo') === 'canvas') {
+  const c = document.createElement('canvas'); c.width = 480; c.height = 900;
+  const x = c.getContext('2d'); let t = 0;
+  (function draw(){
+    t += 1; x.fillStyle = '#101014'; x.fillRect(0, 0, 480, 900);
+    for (let i = 0; i < 8; i++) {
+      x.fillStyle = 'hsl(' + ((i * 40 + t) % 360) + ' 70% 55%)';
+      x.fillRect(24, 120 + i * 92, 432, 64);
+    }
+    x.fillStyle = '#fff'; x.font = 'bold 54px sans-serif'; x.fillText('PHONE', 130, 90);
+    requestAnimationFrame(draw);
+  })();
+  const ds = c.captureStream(25);
+  video.srcObject = ds; $('vbg').srcObject = ds;
+  video.play().catch(() => {}); $('vbg').play().catch(() => {});
+  hidePanel();
+  $('topBar').classList.remove('hide'); $('ctlBar').classList.remove('hide');
+}
 
 /** 收场面板底部那行小字：把两套视口尺寸摊出来。
     观众用的是各种各样的手机浏览器，出问题只能靠截图反推 —— 让截图自带诊断。 */
