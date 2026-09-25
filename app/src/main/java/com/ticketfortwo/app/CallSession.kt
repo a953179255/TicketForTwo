@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.util.Log
 import com.ticketfortwo.app.capture.ScreenShareController
+import com.ticketfortwo.app.cinema.CinemaSync
 import com.ticketfortwo.app.rtc.Peer
 import com.ticketfortwo.app.rtc.RtcEngine
 import com.ticketfortwo.app.signaling.SignalHub
@@ -152,6 +153,93 @@ object CallSession {
             put("f", WatchSync.stateFields(s, _viewerMayControl.value))
         }
         SignalHub.sendToViewer(json.toString())
+    }
+
+    // ---- 放映厅（S 档：观众本地播同一条片源）--------------------------------
+    //
+    // 与上面 `watch` 那套的区别：watch 是"观众看房主的屏幕 + 遥控房主的播放器"，
+    // cinema 是"观众自己播同一条流，两边只对时间轴"。前者画质受房主屏幕限制、
+    // 后者是原生画质。两条并存，因为 DRM 站点只剩 watch/B 档能走。
+    //
+    // 权威在房主：房主周期性报 (位置, 那一刻的墙钟, 播放中否, 倍速, 版本)，
+    // 观众据此投影出"我现在该在第几毫秒"，小偏差用倍速追、大偏差才 seek。
+
+    private val _cinema = MutableStateFlow<CinemaSync.State?>(null)
+    val cinema: StateFlow<CinemaSync.State?> = _cinema.asStateFlow()
+
+    private var cinemaVersion = 0L
+    private val cinemaEcho = CinemaSync.EchoGuard()
+
+    /** 观众的播放请求落到放映厅那一屏（它持有 WebView）。同 [onWatchCommand] 一样必须成对摘除。 */
+    @Volatile
+    var onCinemaCommand: ((CinemaSync.Cmd) -> Unit)? = null
+
+    /** 房主选定片源（或收厅）。传 null 表示回到"厅里还没片"的状态。 */
+    fun setCinemaTrack(track: CinemaSync.Track?) {
+        if (track == null) {
+            _cinema.value = null
+            broadcastCinema()
+            note("已收厅，回到整屏分享")
+            return
+        }
+        cinemaVersion++
+        _cinema.value = CinemaSync.State(
+            track = track,
+            posMs = 0L,
+            durMs = track.durationMs,
+            playing = false,
+            version = cinemaVersion,
+        )
+        broadcastCinema()
+        note("片源已递给对方：${CinemaSync.sanitize(track.title)}")
+    }
+
+    /** 放映厅那一屏每轮询到一次播放器状态就调它。 */
+    fun publishCinemaProgress(posMs: Long, durMs: Long, playing: Boolean) {
+        val cur = _cinema.value ?: return
+        _cinema.value = cur.copy(
+            posMs = posMs,
+            durMs = durMs,
+            playing = playing,
+            hostWallMs = System.currentTimeMillis(),
+        )
+        broadcastCinema()
+    }
+
+    private fun broadcastCinema() {
+        if (!SignalHub.viewerConnected.value) return
+        val st = _cinema.value
+        val json = JSONObject().apply {
+            put("t", "cinema")
+            // 收厅要能传达：没有状态时发一条空 f，观众端据此退回"厅里还没片"
+            put("f", st?.let { CinemaSync.fields(it, _viewerMayControl.value) } ?: "")
+        }
+        SignalHub.sendToViewer(json.toString())
+    }
+
+    /** 收到观众的放映请求。权限判定放在收消息这一侧，不给 UI 留"忘了判"的机会。 */
+    private fun onCinemaCommandFromViewer(f: String) {
+        val st = _cinema.value
+        val cmd = CinemaSync.accept(_viewerMayControl.value, CinemaSync.parseCmd(f)) ?: return
+        if (st == null) {
+            note("收到播放请求，但厅里还没选片")
+            return
+        }
+        // 步进要在房主这边换算成绝对位置：观众报的是意图，权威值只有房主有
+        val real: CinemaSync.Cmd = when (cmd) {
+            is CinemaSync.Cmd.Step ->
+                CinemaSync.Cmd.Seek(CinemaSync.stepTarget(st.posMs, st.durMs, cmd.deltaMs))
+            else -> cmd
+        }
+        val now = System.currentTimeMillis()
+        if (cinemaEcho.inEcho(now)) {
+            note("（回声）刚动过，先不重复处理：${real.label()}")
+        } else {
+            cinemaEcho.markApplied(now)
+            note("对方在控制放映：${real.label()}")
+        }
+        val cb = onCinemaCommand
+        if (cb == null) note("收到播放请求，但放映厅页面已经关了") else cb(real)
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -361,6 +449,9 @@ object CallSession {
                     cb(cmd)
                 }
             }
+
+            // 放映厅（S 档）：观众那边按了暂停/±10 秒
+            "ccmd" -> onCinemaCommandFromViewer(obj.optString("f"))
         }
     }
 

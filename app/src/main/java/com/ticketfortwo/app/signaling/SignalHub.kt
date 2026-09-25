@@ -107,6 +107,8 @@ object SignalHub {
      * 会按声明顺序先跑到这里、拿到一个还没初始化的值。真正的内容在 [start] 里填。
      */
     private var pageHtml: String = ""
+    /** hls.js 是二进制资源，启动时读一次进内存，别每个请求都去开 assets。 */
+    private var hlsJs: ByteArray = ByteArray(0)
 
     private val lock = Any()
     private var viewer: Client? = null
@@ -123,6 +125,9 @@ object SignalHub {
         if (running) return true
         return try {
             pageHtml = readPage(context)
+            hlsJs = runCatching {
+                context.assets.open("viewer/hls.min.js").use { it.readBytes() }
+            }.getOrDefault(ByteArray(0))
             accessKey = randomKey()
             val s = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
             server = s
@@ -318,6 +323,19 @@ object SignalHub {
                         return
                     }
                     writeHttp(output, 200, "OK", "text/html; charset=utf-8", pageHtml.toByteArray(Charsets.UTF_8))
+                }
+
+                // 观众页要用的第三方库（hls.js，放 m3u8 用）。
+                // 这条**不查访问口令**：它是公开库、不含任何会话信息，
+                // 而浏览器发 `<script src="/hls.min.js">` 时也不会替我们带上 ?k=。
+                path == "/hls.min.js" -> runCatching {
+                    val bytes = hlsJs
+                    require(bytes.isNotEmpty())
+                    writeHttp(
+                        output, 200, "OK", "application/javascript; charset=utf-8", bytes,
+                    )
+                }.getOrElse {
+                    writeHttp(output, 500, "Server Error", "text/plain; charset=utf-8", "no lib".toByteArray())
                 }
 
                 // 隧道健康检查：cloudflared 自己不会探，但我们可以用它做「门牌是否可用」的自检。

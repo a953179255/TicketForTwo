@@ -29,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -40,9 +41,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.kyant.backdrop.backdrops.LayerBackdrop
+import com.ticketfortwo.app.CallSession
 import com.ticketfortwo.app.cinema.CinemaProbe
+import com.ticketfortwo.app.cinema.CinemaSync
 import com.ticketfortwo.app.cinema.MediaSniffer
 import com.ticketfortwo.app.cinema.SnifferState
+import com.ticketfortwo.app.watch.WatchCmd
+import com.ticketfortwo.app.watch.WatchSync
 import com.ticketfortwo.app.ui.glass.CompactGlassField
 import com.ticketfortwo.app.ui.glass.GlassPageBar
 import com.ticketfortwo.app.ui.glass.GlassPanel
@@ -86,6 +91,10 @@ fun CinemaScreen(
     var showPanel by remember { mutableStateOf(true) }
     var note by remember { mutableStateOf("把这一页当成浏览器用；下面会列出嗅到的片源") }
     var fullScreenView by remember { mutableStateOf<View?>(null) }
+    /** 放映状态（会话里那份的本地镜像，只为画 UI）。 */
+    val cinema by CallSession.cinema.collectAsState()
+    /** 房主这一侧播放器的位置/时长/标题 —— 直接复用 watch 那套探针，形状一样。 */
+    var player by remember { mutableStateOf<com.ticketfortwo.app.watch.WatchState?>(null) }
 
     val sniffer = remember { SnifferState() }
 
@@ -191,7 +200,25 @@ fun CinemaScreen(
                     )
                 }
             }
+            // 位置/时长/标题：复用 watch 的探针（它已经在算"页面上最大那个 <video>"），
+            // 不再另写一份，免得两套探测逻辑以后各改各的。
+            webView.evaluateJavascript(WatchSync.probeJs()) { raw ->
+                val w = WatchSync.parseProbe(raw, pageUrl) ?: return@evaluateJavascript
+                player = w
+                CallSession.publishCinemaProgress(w.posMs, w.durMs, w.playing)
+            }
         }
+    }
+
+    // 观众的放映请求落到这个 WebView 上（它才是播放器）。
+    // 注册/摘除成对：这一屏卸载后还挂着回调，指令就会打到已销毁的 WebView 上。
+    DisposableEffect(webView) {
+        CallSession.onCinemaCommand = { cmd ->
+            val p = player?.posMs ?: 0L
+            val d = player?.durMs ?: 0L
+            webView.post { webView.evaluateJavascript(WatchSync.jsFor(cmd.toWatchCmd(), p, d), null) }
+        }
+        onDispose { CallSession.onCinemaCommand = null }
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -231,6 +258,30 @@ fun CinemaScreen(
             }, backdrop)
             GlassTextButton(if (showPanel) "收起嗅探" else "展开嗅探", onClick = {
                 showPanel = !showPanel
+            }, backdrop)
+            // 放映/收厅：房主确认才切 —— 嗅探有认错的时候（广告分片、预告片），
+            // 自动切等于把误判直接端给对方。
+            GlassTextButton(if (cinema == null) "开始放映" else "收厅", onClick = {
+                if (cinema != null) {
+                    CallSession.setCinemaTrack(null)
+                    note = "已收厅，对方那边退回等候屏"
+                } else {
+                    val h = CinemaProbe.bestOf(hits)
+                    if (h == null) {
+                        note = "还没嗅到可播的地址，先让片子播起来"
+                    } else {
+                        CallSession.setCinemaTrack(
+                            CinemaSync.Track(
+                                url = h.url,
+                                kind = h.kind.name.lowercase(),
+                                title = player?.title?.takeIf { it.isNotBlank() }
+                                    ?: MediaSniffer.shorten(h.url, 40),
+                                durationMs = player?.durMs ?: 0L,
+                            ),
+                        )
+                        note = "已把这条递给对方：${h.kind}"
+                    }
+                }
             }, backdrop)
         }
 
@@ -353,7 +404,17 @@ private fun SnifferPanel(
     )
 }
 
-private fun Context.copy(label: String, text: String) {
-    val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+/**
+ * 放映指令最终要落到房主这个 WebView 上，而"怎么往页面里注脚本"只有 watch 那一套（已测）。
+ * 这里做一层映射，不再抄第二份 jsFor —— 两处各写一遍"怎么跳 10 秒"，以后一定只改得动一处。
+ */
+private fun CinemaSync.Cmd.toWatchCmd(): WatchCmd = when (this) {
+    CinemaSync.Cmd.Play -> WatchCmd.Play
+    CinemaSync.Cmd.Pause -> WatchCmd.Pause
+    is CinemaSync.Cmd.Seek -> WatchCmd.Seek(ms)
+    is CinemaSync.Cmd.Step -> WatchCmd.Step(deltaMs)
+}
+
+private fun Context.copy(label: String, text: String) {    val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
     cm.setPrimaryClip(ClipData.newPlainText(label, text))
 }

@@ -665,6 +665,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 latencyMs = stats?.rttMs,
                 netLabel = stats?.viaLabel ?: "直连",
                 onOpenWatch = { showWatch = true },
+                onOpenCinema = { showCinema = true },
                 onStop = stop,
             )
 

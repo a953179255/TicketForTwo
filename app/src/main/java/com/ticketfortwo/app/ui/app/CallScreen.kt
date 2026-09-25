@@ -134,6 +134,7 @@ fun CallScreen(
     onWatchCmd: (String, Long) -> Unit = { _, _ -> },
     /** 房主侧：打开内置浏览器一起看。 */
     onOpenWatch: () -> Unit = {},
+    onOpenCinema: () -> Unit = {},
     /** 观众侧正在画中画：玻璃控件与手势层全部让路，小窗里只留画面。 */
     pipMode: Boolean = false,
     onStop: () -> Unit,
@@ -173,7 +174,7 @@ fun CallScreen(
         // 房主这屏没有 SurfaceView，玻璃就能正常采样环境底；
         // 观众那屏视频压在最下面，SurfaceView 的内容抓不到（backdrop issue #98），只能退化成 scrim。
         if (isHost) {
-            HostStage(backdrop, peerLabel, onOpenWatch)
+            HostStage(backdrop, peerLabel, onOpenWatch, onOpenCinema)
         } else {
             // 首帧没到之前这块区域是纯黑 —— 用户分不清"对方画面全黑"和"卡住了"，所以必须有等待提示。
             var firstFrame by remember(remoteTrack) { mutableStateOf(false) }
@@ -287,7 +288,12 @@ fun CallScreen(
  * 至于"为什么不放实时预览"，那是我们内部的设计取舍，不该出现在用户界面上。
  */
 @Composable
-private fun HostStage(backdrop: LayerBackdrop, peerLabel: String, onOpenWatch: () -> Unit) {
+private fun HostStage(
+    backdrop: LayerBackdrop,
+    peerLabel: String,
+    onOpenWatch: () -> Unit,
+    onOpenCinema: () -> Unit,
+) {
     Column(
         Modifier.fillMaxSize().padding(horizontal = GlassDimens.screenH),
         verticalArrangement = Arrangement.Center,
@@ -314,6 +320,16 @@ private fun HostStage(backdrop: LayerBackdrop, peerLabel: String, onOpenWatch: (
                 PrimaryPill(
                     text = "一起看片",
                     onClick = onOpenWatch,
+                    backdrop = backdrop,
+                    filled = false,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                // 放映厅（S 档）：对方本地播同一条片源，画质原生、也没有两层 UI。
+                // 会话进行中必须能进 —— 用户就是"先连上人、再决定看什么"，
+                // 入口只放在首页等于逼人退回首页，那会打断正在放的画面。
+                PrimaryPill(
+                    text = "放映厅",
+                    onClick = onOpenCinema,
                     backdrop = backdrop,
                     filled = false,
                     modifier = Modifier.fillMaxWidth(),

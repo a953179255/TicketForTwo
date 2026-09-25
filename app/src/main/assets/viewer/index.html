@@ -38,6 +38,11 @@ video{width:100%;height:100%;object-fit:contain;background:#000;display:block}
   border-radius:16px;box-shadow:0 18px 60px rgba(0,0,0,.6)}
 /* 浮层：视频区之上只能用 scrim —— SurfaceView/原生视频内容抓不到，玻璃盖不上去 */
 .overlay{position:absolute;left:12px;right:12px;z-index:5}
+/* 本地播放层：盖住屏幕流，但**不销毁**它 —— 撤层时要能立刻退回来看屏幕 */
+#lv{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;z-index:3}
+#lvBadge{position:absolute;right:12px;top:14px;z-index:6;font-size:11px;padding:6px 11px;
+  border-radius:var(--pill);background:var(--scrim);backdrop-filter:blur(10px);color:var(--text-mid)}
+#lvBadge b{color:var(--live);font-weight:640}
 .top{top:12px;display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:var(--pill);
   background:var(--scrim);font-size:12.5px;backdrop-filter:blur(10px)}
 .top .live{display:inline-flex;align-items:center;gap:6px;color:var(--live)}
@@ -100,6 +105,10 @@ button.primary{background:var(--accent);color:#fff;border:0;border-radius:var(--
   <!-- 同一条流的后景层：muted 是必须的，否则两份音频会叠出回声 -->
   <video id="vbg" autoplay playsinline muted></video>
   <video id="v" autoplay playsinline></video>
+  <!-- 本地播放层（放映厅 S 档）：观众直接播房主递来的片源，画质是原生的。
+       它盖在屏幕流上面；放不出来就撤掉这层，退回看对方的屏幕，不留黑屏。 -->
+  <video id="lv" class="hide" autoplay playsinline></video>
+  <div id="lvBadge" class="hide">本地播放 · <b id="lvRes">—</b></div>
 
   <div class="overlay top hide" id="topBar">
     <span class="live"><i></i>直连</span>
@@ -131,6 +140,22 @@ button.primary{background:var(--accent);color:#fff;border:0;border-radius:var(--
       <span class="wtime" id="wTime">0:00 / 0:00</span>
     </div>
     <div class="line2 hide" id="wMissing"><span class="wtime">对方还没打开播放器</span></div>
+  </div>
+
+  <!-- 放映厅的播放条：只在 S 档（观众本地播同一条片源）时出现。
+       和 #watchBar 互斥 —— 屏幕上永远只有一条这样的横条，这就是"一层 UI"。 -->
+  <div class="overlay watch hide" id="cineBar">
+    <div class="line1">
+      <span id="cTitle">一起看</span>
+      <span class="chip" id="cPerm">仅观看</span>
+    </div>
+    <div class="line2">
+      <button class="wbtn" id="cBack" title="后退 10 秒">-10</button>
+      <button class="wbtn" id="cPlay" title="暂停 / 继续">▶</button>
+      <button class="wbtn" id="cFwd" title="前进 10 秒">+10</button>
+      <span class="wtime" id="cTime">0:00 / 0:00</span>
+      <span class="wtime" id="cDrift" style="opacity:.6"></span>
+    </div>
   </div>
 
   <div class="center" id="panel">
@@ -242,6 +267,7 @@ function onMessage(text){
   else if (m.t === 'cand') addRemoteCandidate(m);
   else if (m.t === 'bye') { closedByUs = true; reportEnded('房主结束了分享'); }
   else if (m.t === 'watch') onWatch(m.f);
+  else if (m.t === 'cinema') onCinema(m.f);
 }
 
 // ---- 建立直连 ---------------------------------------------------------
@@ -532,6 +558,134 @@ function fmtClock(ms){
   const p = n => (n < 10 ? '0' + n : '' + n);
   return h > 0 ? `${h}:${p(m)}:${p(s)}` : `${m}:${p(s)}`;
 }
+
+/* ── 放映厅 S 档：观众本地播同一条片源 ──────────────────────────────
+   房主只递"哪条流 + 第几毫秒"，画面由观众自己取 —— 画质是原生的，
+   也不再有两层 UI。取不到（跨域/签名过期/要会员）就撤掉这一层，
+   退回看屏幕流，绝不留一个黑屏给观众。 */
+let cine = null, cineHls = null, cineApplyUntil = 0, cineTimer = null;
+const lv = document.getElementById('lv'), lvBadge = document.getElementById('lvBadge'),
+      cineBar = document.getElementById('cineBar');
+
+function fmtMs(ms) {
+  ms = Math.max(0, ms | 0);
+  const s = Math.floor(ms / 1000), h = Math.floor(s / 3600),
+        m = Math.floor((s % 3600) / 60), x = s % 60;
+  return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0');
+}
+function runCute(fn) { try { fn(); } catch (e) {} }
+
+function cineNote(msg) {
+  const d = document.createElement('div');
+  d.className = 'hint'; d.textContent = msg; d.style.top = 'auto'; d.style.bottom = '96px';
+  document.getElementById('stage').appendChild(d);
+  setTimeout(() => d.remove(), 4200);
+}
+
+function onCinema(f) {
+  if (!f) { cineDown('对方收了厅'); return; }
+  const p = String(f).split('|');
+  if (p.length < 10) return;
+  const st = {
+    ver: +p[0], url: p[1], kind: p[2], title: p[3], pos: +p[4], dur: +p[5],
+    playing: p[6] === '1', rate: +p[7] || 1, hostWall: +p[8], allow: p[9] === '1',
+  };
+  if (!/^https?:\/\//i.test(st.url)) { cineDown('这条地址不能直接播'); return; }
+  if (cine && st.ver < cine.ver) return;   // 乱序到达的旧状态：丢掉，别把进度倒回去
+  const switched = !cine || cine.url !== st.url;
+  cine = st;
+  cineBar.classList.remove('hide');
+  document.getElementById('watchBar').classList.add('hide');  // 一次只留一条横条
+  if (switched) loadLocal(st); else syncLocal();
+  paintCine();
+}
+
+function loadLocal(st) {
+  stopLocalPlayer();
+  lv.classList.remove('hide'); lvBadge.classList.remove('hide');
+  lvBadge.innerHTML = '本地播放 · <b>连接中…</b>';
+  const isHls = /\.m3u8([?#]|$)/i.test(st.url) || st.kind === 'master';
+  try {
+    if (isHls) {
+      if (window.Hls && Hls.isSupported()) {
+        cineHls = new Hls({ enableWorker: true, lowLatencyMode: false });
+        cineHls.loadSource(st.url);
+        cineHls.attachMedia(lv);
+        cineHls.on(Hls.Events.ERROR, (e, d) => {
+          if (d && d.fatal) cineDown('这条流在观众这边取不到：' + (d.details || d.type));
+        });
+      } else if (lv.canPlayType('application/vnd.apple.mpegurl')) {
+        lv.src = st.url;                     // Safari 原生能放 m3u8
+      } else { cineDown('这个浏览器放不了 m3u8'); return; }
+    } else {
+      lv.src = st.url;
+    }
+  } catch (t) { cineDown('起播失败'); return; }
+  lv.play().catch(() => {});
+  if (!cineTimer) cineTimer = setInterval(syncLocal, 1000);
+}
+
+function stopLocalPlayer() {
+  if (cineHls) { runCute(() => cineHls.destroy()); cineHls = null; }
+  runCute(() => { lv.pause(); lv.removeAttribute('src'); lv.load(); });
+  lv.classList.add('hide'); lvBadge.classList.add('hide');
+}
+
+function cineDown(reason) {
+  stopLocalPlayer();
+  if (cineTimer) { clearInterval(cineTimer); cineTimer = null; }
+  cine = null;
+  cineBar.classList.add('hide');
+  if (reason) cineNote(reason + ' —— 退回看对方屏幕');
+}
+
+/** 每秒一次：把房主那条轴投影到本地，小偏差倍速追，大偏差才 seek。 */
+function syncLocal() {
+  if (!cine || lv.readyState < 2) return;
+  const now = Date.now(), age = Math.max(0, now - cine.hostWall);
+  const want = cine.playing ? cine.pos + age * (cine.rate || 1) : cine.pos;
+  const drift = want - lv.currentTime * 1000;
+  if (now < cineApplyUntil) { paintCine(drift); return; }  // 刚发过指令，先别抢方向盘
+  if (Math.abs(drift) > 1200) {
+    try { lv.currentTime = Math.max(0, want / 1000); } catch (e) {}
+  } else if (Math.abs(drift) > 120 && cine.playing) {
+    lv.playbackRate = Math.min(1.06, Math.max(0.94, 1 + drift / 1000 * 0.07));
+  } else {
+    lv.playbackRate = 1;
+  }
+  if (cine.playing && lv.paused) lv.play().catch(() => {});
+  if (!cine.playing && !lv.paused) lv.pause();
+  paintCine(drift);
+}
+
+function paintCine(drift) {
+  if (!cine) return;
+  document.getElementById('cTitle').textContent = cine.title || '一起看';
+  const perm = document.getElementById('cPerm');
+  perm.textContent = cine.allow ? '可控制' : '仅观看';
+  perm.className = 'chip' + (cine.allow ? ' g' : '');
+  document.getElementById('cPlay').textContent = cine.playing ? '❚❚' : '▶';
+  document.getElementById('cTime').textContent =
+    fmtMs(lv.currentTime * 1000) + ' / ' + fmtMs(cine.dur || (lv.duration || 0) * 1000);
+  document.getElementById('cDrift').textContent =
+    typeof drift === 'number' ? 'Δ' + Math.round(drift) + 'ms' : '';
+  lvBadge.innerHTML = '本地播放 · <b>' +
+    (lv.videoWidth ? lv.videoWidth + '×' + lv.videoHeight : '…') + '</b>';
+}
+
+function sendCine(act) {
+  if (!cine || !cine.allow) { cineNote('房主还没把方向盘交出来'); return; }
+  cineApplyUntil = Date.now() + 800;   // 回声窗口：这 800ms 里不自动纠正
+  send({ t: 'ccmd', f: act });
+}
+document.getElementById('cBack').onclick = () => sendCine('step|-10000');
+document.getElementById('cFwd').onclick = () => sendCine('step|10000');
+document.getElementById('cPlay').onclick = () => sendCine(cine && cine.playing ? 'pause' : 'play');
+lv.addEventListener('loadedmetadata', () => {
+  // 首帧出来才敢说"原生画质"：这一行是 S 档成没成的直接证据
+  if (lv.videoWidth) console.log('CINEMA_LOCAL', lv.videoWidth + 'x' + lv.videoHeight, lv.duration);
+});
+lv.addEventListener('error', () => { if (cine) cineDown('这条地址在观众这边取不到'); });
 
 function onWatch(f){
   const p = String(f == null ? '' : f).split('|');
