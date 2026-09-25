@@ -141,8 +141,24 @@ object MediaSniffer {
 
     /** 页面没标题时，至少告诉房主这条来自哪个站点，而不是甩一整串 URL 给他看。 */
     fun hostLabel(url: String): String {
-        val host = url.substringAfter("://", "").substringBefore("/")
-        return if (host.isBlank()) "对方选的那条" else "$host 的那条"
+        val afterScheme = url.substringAfter("://", url)
+        val host = afterScheme.substringBefore("/").removePrefix("www.")
+        /* 只报站点名不够用：房主在**同一个站点**里换一条流，观众看到的标题一个字都没变，
+           只有时长跳了一下 —— 读不出"他换片了"（实测两条 mux 测试流都是
+           "test-streams.mux.dev 的那条"）。把路径最后一段带上做区分。 */
+        // 先切出**路径**再取最后一段：`substringAfterLast('/')` 在没有斜杠时会原样返回整串，
+        // 于是 "example.com" 会被当成文件名、再被 substringBeforeLast('.') 削成 "example"，
+        // 标题就成了 "example.com · example"（单测抓到的就是这个）。
+        val tail = afterScheme.substringAfter('/', "")
+            .substringBefore('?').substringBefore('#')
+            .substringAfterLast('/').substringBeforeLast('.')
+            .take(18)
+        return when {
+            host.isBlank() && tail.isBlank() -> "对方选的那条"
+            tail.isBlank() || tail == host -> "$host 的那条"
+            host.isBlank() -> tail
+            else -> "$host · $tail"
+        }
     }
 
     /** 去掉 URL 里的签名串再展示，否则一屏全是看不完的 token。 */

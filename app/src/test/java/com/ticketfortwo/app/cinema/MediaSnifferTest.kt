@@ -170,4 +170,24 @@ class MediaSnifferTest {
                 .contains("NotSupportedError"),
         )
     }
+
+    @Test
+    fun `同站换片时标题要能看出区别`() {
+        val a = MediaSniffer.hostLabel("https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8")
+        val b = MediaSniffer.hostLabel("https://test-streams.mux.dev/pts_shift/master.m3u8")
+        org.junit.Assert.assertNotEquals("两条不同流的标题不能撞", a, b)
+        org.junit.Assert.assertTrue(a, a.contains("x36xhzz"))
+        org.junit.Assert.assertTrue(b, b.contains("master"))
+    }
+
+    @Test
+    fun `没有路径时只报站点_查询串与扩展名不进标题`() {
+        org.junit.Assert.assertEquals(
+            "example.com 的那条", MediaSniffer.hostLabel("https://example.com")
+        )
+        org.junit.Assert.assertEquals(
+            "cdn.example.com · seg1",
+            MediaSniffer.hostLabel("https://cdn.example.com/v/seg1.m3u8?token=abc#x")
+        )
+    }
 }
