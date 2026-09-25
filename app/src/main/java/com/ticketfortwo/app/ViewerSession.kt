@@ -149,6 +149,19 @@ object ViewerSession {
     private var peer: Peer? = null
     private var audioSource: AudioSource? = null
     private var audioTrack: AudioTrack? = null
+    private var remoteAudioTrack: AudioTrack? = null
+
+    /**
+     * 观众侧听到的音量。走 libwebrtc 的 `AudioTrack.setVolume`（本机 jar 里确认有这个方法），
+     * 只改这一条流，不去动系统音量 —— 动系统音量会把用户正在听的音乐也一起改掉。
+     */
+    private val _volume = MutableStateFlow(1f)
+    val volume: StateFlow<Float> = _volume.asStateFlow()
+
+    fun setVolume(v: Float) {
+        _volume.value = v.coerceIn(0f, 1f)
+        runCatching { remoteAudioTrack?.setVolume(_volume.value.toDouble()) }
+    }
 
     /**
      * 信令通道现在通不通。ICE 失败时要拿它分诊：
@@ -228,6 +241,8 @@ object ViewerSession {
         peer = null
         runCatching { audioTrack?.dispose() }
         audioTrack = null
+        remoteAudioTrack = null
+        _volume.value = 1f
         _micLive.value = false
         runCatching { audioSource?.dispose() }
         audioSource = null
@@ -371,6 +386,9 @@ object ViewerSession {
 
                 override fun onRemoteAudio(track: AudioTrack?) {
                     track?.setEnabled(true)
+                    remoteAudioTrack = track
+                    // 音量条可能先被拉过（手势比轨道到达早），轨道到手时补一次
+                    runCatching { track?.setVolume(_volume.value.toDouble()) }
                     note("收到房主的声音")
                 }
 

@@ -11,7 +11,13 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import com.ticketfortwo.app.signaling.SignalHub
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -27,6 +33,33 @@ import kotlinx.coroutines.withTimeoutOrNull
 class ShareService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var viewerJob: Job? = null
+
+    /** 建通知时要按"当前有没有人在看"写文案，所以得记住服务类型。 */
+    private var fgsType: Int = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+
+    /**
+     * 盯着观众在线状态刷新通知。
+     *
+     * 为什么放通知里而不是只放界面里：用户分享时多半已经把 App 最小化了，
+     * 通知是那一刻唯一看得见的地方。之前房主侧的 peerLabel 是写死的「已直连」，
+     * 于是"到底有没有人进来"这个问题在 App 里根本无从回答。
+     */
+    private fun watchViewer() {
+        viewerJob?.cancel()
+        viewerJob = uiScope.launch {
+            SignalHub.viewerConnected.collect { repost() }
+        }
+    }
+
+    private fun repost() {
+        runCatching {
+            getSystemService(NotificationManager::class.java)
+                .notify(NOTIF_ID, buildNotification(fgsType))
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -45,6 +78,7 @@ class ShareService : Service() {
             EXTRA_FGS_TYPE,
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION,
         ) ?: ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+        fgsType = type
         val notification = buildNotification(type)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
@@ -61,6 +95,7 @@ class ShareService : Service() {
         // service of type FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION（实测踩过）。
         // 所以上层必须 awaitReady() 之后才能开始采集。
         _foregroundReady.value = true
+        watchViewer()
         return START_STICKY
     }
 
@@ -80,7 +115,8 @@ class ShareService : Service() {
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(getString(R.string.notif_sharing_title))
             .setContentText(
-                getString(if (voiceOnly) R.string.notif_voice_text else R.string.notif_sharing_text)
+                if (SignalHub.viewerConnected.value) "1 人正在观看"
+                else getString(if (voiceOnly) R.string.notif_voice_text else R.string.notif_sharing_text)
             )
             .setOngoing(true)
             .setContentIntent(open)
@@ -103,6 +139,8 @@ class ShareService : Service() {
     }
 
     override fun onDestroy() {
+        viewerJob?.cancel()
+        uiScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
         _foregroundReady.value = false
         if (!CallSession.isActive) CallSession.stop(applicationContext)
         super.onDestroy()

@@ -42,10 +42,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.ticketfortwo.app.ui.app.CallScreen
+import com.ticketfortwo.app.ui.app.resetActivityBrightness
 import com.ticketfortwo.app.ui.app.ColorLabScreen
 import com.ticketfortwo.app.ui.app.GlassLabScreen
 import com.ticketfortwo.app.ui.app.ConsentGuideScreen
 import com.ticketfortwo.app.rtc.Verdict
+import com.ticketfortwo.app.signaling.SignalHub
 import com.ticketfortwo.app.ui.app.EndedScreen
 import com.ticketfortwo.app.ui.app.FailedScreen
 import com.ticketfortwo.app.ui.app.HomeScreen
@@ -126,6 +128,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     val viewerMicMuted by ViewerSession.micMuted.collectAsState()
     val viewerLandscape by ViewerSession.contentLandscape.collectAsState()
     val viewerOrient by ViewerSession.orientationMode.collectAsState()
+    val viewerOnline by SignalHub.viewerConnected.collectAsState()
     val viewerMicPending by ViewerSession.micPending.collectAsState()
     val viewerMicLive by ViewerSession.micLive.collectAsState()
 
@@ -319,6 +322,12 @@ private fun AppRouter(backdrop: LayerBackdrop) {
         }
     }
 
+    // 观众侧手势可以把本窗口亮度压低（见 ViewerGestureLayer）。
+    // 退出观看时必须交还给系统，否则用户回到桌面会发现"手机亮度被这个 App 改坏了"。
+    LaunchedEffect(watching) {
+        if (!watching) resetActivityBrightness(activity)
+    }
+
     // ── 路由 ──────────────────────────────────────────────────────────────
     val role = when {
         sessionRole == CallSession.Role.Host -> UiRole.Host
@@ -471,6 +480,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                     val next = ViewerSession.cycleOrientationMode()
                     context.prefs().setOrientationMode(next.name)
                 },
+                onViewerVolume = { ViewerSession.setVolume(it) },
                 onStop = { ViewerSession.stop() },
             )
 
@@ -513,9 +523,9 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 // 这条轨只服务观众侧。
                 remoteTrack = remoteVideo,
                 isHost = p.host,
-                // 房间码属于"链接里塞 SDP"那个时代的产物：那时靠它防两个人撞车。
-                // 现在链接里只有一个随机凭证，展示房间码没有意义，直接说明状态即可。
-                peerLabel = "已直连",
+                // 以前这里是写死的「已直连」—— 没人看的时候也说"已直连"，
+                // 等于把用户问的"到底有没有人在观看"用一个假答案糊过去了。
+                peerLabel = if (viewerOnline) "1 人正在观看 · 已直连" else "还没有人加入",
                 micOn = !micMuted,
                 onToggleMic = { CallSession.setMicMuted(!micMuted) },
                 latencyMs = stats?.rttMs,

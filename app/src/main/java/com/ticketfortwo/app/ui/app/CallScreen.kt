@@ -18,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -124,8 +125,33 @@ fun CallScreen(
     /** 非空才画那颗方向按钮（房主侧没有"跟随对方"这回事）。 */
     orientationLabel: String? = null,
     onCycleOrientation: () -> Unit = {},
+    /** 观众侧右半屏滑动调音量（0..1）。房主侧手势层不挂，这个回调不会被调用。 */
+    onViewerVolume: (Float) -> Unit = {},
     onStop: () -> Unit,
 ) {
+    // 播放器的惯例：控件几秒后自己收起，点一下再出来。
+    // 之所以只给观众侧做：房主那屏中间是提示卡不是视频，收掉控件就等于没有内容可看。
+    // chromeTick 而不是直接改 chromeVisible —— 手势层唤出时要让计时重新开始，
+    // 直接把 true 赋给已经是 true 的状态不会触发重组，倒计时就永远不再走。
+    var chromeVisible by remember { mutableStateOf(true) }
+    var chromeTick by remember { mutableIntStateOf(0) }
+    if (!isHost) {
+        LaunchedEffect(chromeTick) {
+            if (chromeTick == 0) return@LaunchedEffect
+            chromeVisible = true
+            delay(3_000)
+            chromeVisible = false
+        }
+        // 首帧到达 = 用户最想看"对方那屏长什么样"的时刻，此时控件必须在；
+        // 停留 4 秒后收起，让画面独占屏幕。
+        LaunchedEffect(remoteTrack) {
+            if (remoteTrack != null) {
+                chromeVisible = true
+                delay(4_000)
+                chromeVisible = false
+            }
+        }
+    }
     // 这里**不能**给 Box 铺不透明底色：SurfaceView 的合成面在窗口之下，靠"挖洞"显示，
     // 而 Compose 里父节点的不透明 background 会把那块洞重新填平 ——
     // 实测现象就是"日志说 first frame rendered、分辨率 810x1800，屏幕上一片纯黑"。
@@ -164,10 +190,16 @@ fun CallScreen(
                     Text("等待对方画面…", fontSize = 13.sp, color = Ink.TextMid)
                 }
             }
+            // 手势层铺在视频之上、控件之下：它自己是全透明的，只吃指针事件。
+            ViewerGestureLayer(
+                chromeVisible = chromeVisible,
+                onToggleChrome = { chromeTick++ },
+                onVolume = onViewerVolume,
+            )
         }
 
-        // 顶部状态条
-        GlassPanel(
+        // 顶部状态条（观众侧随控件一起收起 —— 全屏看画面时不留横幅）
+        if (isHost || chromeVisible) GlassPanel(
             backdrop = backdrop,
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -199,7 +231,7 @@ fun CallScreen(
             },
         )
 
-        ControlIsland(
+        if (isHost || chromeVisible) ControlIsland(
             backdrop = backdrop,
             micOn = micOn,
             onToggleMic = onToggleMic,
