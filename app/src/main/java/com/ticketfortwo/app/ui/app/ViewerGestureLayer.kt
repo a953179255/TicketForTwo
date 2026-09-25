@@ -1,6 +1,7 @@
 package com.ticketfortwo.app.ui.app
 
 import android.app.Activity
+import android.provider.Settings
 import android.util.Log
 import android.view.WindowManager
 import androidx.compose.animation.AnimatedVisibility
@@ -166,19 +167,32 @@ fun ViewerGestureLayer(
     }
 }
 
-/** 退出观看时把亮度交还系统。 */
+/**
+ * 退出观看时把亮度交还系统。
+ *
+ * 这里分两步写，不是洁癖，是实测逼出来的：
+ * 直接把 `screenBrightness` 改回 `BRIGHTNESS_OVERRIDE_NONE` 之后，
+ * 值确实传到了 WindowManager（按 HOME 触发焦点变化时会立刻回到 manual），
+ * 但**当前这个窗口还聚焦着**，系统不会因此重算一次亮度 ——
+ * 用户看到的就是"退出观看了，屏幕还停在 10%"。
+ * 而写一个**真实数值**是会触发重算的（拖动过程中每一帧都在生效，就是这个证据）。
+ * 所以：先写系统当前档位（触发重算，屏幕先回到正确亮度，视觉上无跳变），
+ * 再把覆盖清掉（这一步不触发重算，但显示已经停在正确的档位上了）。
+ */
 fun resetActivityBrightness(activity: Activity?) {
     val a = activity ?: return
     runCatching {
-        val p = a.window.attributes
-        p.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
-        a.window.attributes = p
-        // 必须再要一次 relayout。`Window.getAttributes()` 返回的就是 WindowManager
-        // 手里那个对象，改完再 set 回去是"同一个实例的自我赋值"，系统这边不会因此重算
-        // 亮度 —— 实测：日志打了"已交还系统"，dumpsys 里 mBrightnessState 还停在 0.02，
-        // 直到按 HOME 让窗口失去焦点，DisplayPowerController 才改回 manual。
-        // 用户不会按 HOME，所以这里主动催一次。
+        // 0..255 是 Settings.System 的刻度；取不到就按 40% 兜底，反正下一步就清覆盖
+        val raw = runCatching {
+            Settings.System.getInt(a.contentResolver, Settings.System.SCREEN_BRIGHTNESS, 102)
+        }.getOrDefault(102)
+        val step1 = a.window.attributes
+        step1.screenBrightness = (raw / 255f).coerceIn(0.05f, 1f)
+        a.window.attributes = step1
+        val step2 = a.window.attributes
+        step2.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        a.window.attributes = step2
         a.window.decorView.requestLayout()
-        Log.i("ViewerGesture", "窗口亮度已交还系统")
+        Log.i("ViewerGesture", "窗口亮度已交还系统（两步写：$raw → 清覆盖）")
     }
 }

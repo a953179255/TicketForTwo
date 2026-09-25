@@ -93,21 +93,38 @@ def main():
     # 提交前先确认隧道真的通了。Cloudflare 的 quick tunnel 注册有延迟，而且会自己掉：
     # 实测出现过 curl 拿到 200、两分钟后同一地址回 530。这时候观众端"连不上"是隧道的
     # 问题，不是被测代码的问题 —— 不先卡这一道，判定就是随机的。
+    #
+    # 但**探测本身也会骗人**：连着两轮判"取不到页面"，而同一时刻 curl 拿的是 200。
+    # 单独复现拿到的是 Python 的 `SSL: UNEXPECTED_EOF_WHILE_READING` —— 这条链路上
+    # Python 的 TLS 握手会被掐断，curl 不会。所以探活改成两条都试：urllib 失败就用 curl，
+    # 并且把最后一次的异常打出来。量具报错必须带上它为什么报，否则下次又会当成被测代码坏了。
     import urllib.request
     import urllib.error
     live = False
-    for _ in range(20):
+    last_err = ""
+    for attempt in range(20):
         try:
             with urllib.request.urlopen(url, timeout=15) as resp:
                 if resp.status == 200:
                     live = True
                     break
-        except Exception:
-            pass
+        except Exception as e:
+            last_err = f"{type(e).__name__}: {str(e)[:120]}"
+            r = subprocess.run(
+                ["curl", "-s", "-o", os.devnull, "-m", "15", "-w", "%{http_code}", url],
+                capture_output=True, text=True, timeout=30)
+            if (r.stdout or "").strip() == "200":
+                print(f"   （urllib 探活失败 → {last_err}；curl 回 200，按隧道已通继续）")
+                live = True
+                break
         time.sleep(5)
     if not live:
-        print("FAIL  房主的隧道地址取不到页面（先确认 t2test 还在分享）")
-        return 1
+        # 探活**不能当闸门**：同一分钟里 PC 上的 urllib/curl 都可能被 TLS 掐断，
+        # 而模拟器里的 App 照样连得上（App 走的是 WSS + 自己的连接栈）。
+        # 上一版把它写成 FAIL 直接 return，于是两轮"观众端坏了"其实是我这台机器的
+        # 出网姿势坏了 —— 量具误判比量不到更糟，因为它会把人支去查一个不存在的缺陷。
+        print(f"⚠  PC 侧探活失败（{last_err or '无 200'}），继续让 App 自己试；"
+              f"真正的判定以下面的连接结果为准")
 
     # 观众机的日志只看这一轮
     adb(view, "logcat", "-c")
