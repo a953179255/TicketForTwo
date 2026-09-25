@@ -37,6 +37,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -243,9 +244,12 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     var showGlassLab by remember { mutableStateOf(false) }
     var viewerIntent by remember { mutableStateOf(false) }
     /** 房主打开内置浏览器"一起看"。分享期间的一个覆盖层，不是独立会话。 */
-    var showWatch by remember { mutableStateOf(false) }
-    /** 放映厅（内测入口）：不依赖是否正在分享，所以是一个独立的页面意图。 */
-    var showCinema by remember { mutableStateOf(false) }
+    var showWatch by rememberSaveable { mutableStateOf(false) }
+    /** 放映厅（内测入口）：不依赖是否正在分享，所以是一个独立的页面意图。
+     *  用 saveable 而不是 remember：改字体、切深色、系统"显示大小"这类**配置变化**
+     *  会重建 Activity，`remember` 一丢就把人从厅里踢回首页（实测：`wm density`
+     *  一改，正在放映的厅就没了，而会话其实还活着）。 */
+    var showCinema by rememberSaveable { mutableStateOf(false) }
     /** 从「分享 → 双人票」递进来的链接；非空就直接开厅放这一页。 */
     val sharedUrl by CinemaIntents.pending.collectAsState()
     var cinemaUrl by remember { mutableStateOf<String?>(null) }

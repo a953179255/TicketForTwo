@@ -92,7 +92,16 @@ fun HomeScreen(
             contentAlignment = Alignment.Center,
         ) {
             val orbSize = minOf(160.dp, maxHeight * 0.44f)
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            // 圆里装得下三行内容的经验下限（图标 34 + 标题 + 说明 + 间距）；
+            // 低于它就说明那行改画到圆下面，别让文字溢出圆外压住下一个圆。
+            val subOutside = orbSize < 128.dp
+            /* 矮屏上这两颗圆 + 两行说明就是装不进 weight(1f) 给的那点高度（实测 594dp 高的
+               机器上第二颗圆被底部信息卡压掉半截）。让**这一块自己可滚**：
+               高屏内容放得下 → 看不出任何变化；矮屏 → 能滚着看完，而不是叠在一起。 */
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
                 GlassOrbEntry(
                     onClick = onStart,
                     backdrop = backdrop,
@@ -111,8 +120,11 @@ fun HomeScreen(
                 // 就是在这儿误导的：分享端必须装 App）。
                 // 现在观看有两条路（App 内看 / 浏览器看），所以不再点名浏览器，只说结果。
                 sub = "发条链接，朋友就能看",
+                subOutside = subOutside,
                 )
-                Spacer(Modifier.height(16.dp))
+                // 说明挪到圆外之后，两颗圆之间要多留一点：原来固定 16dp，
+                // 而那行小字自己就有 ~19dp 高，会贴着下一个圆的上沿。
+                Spacer(Modifier.height(if (subOutside) 30.dp else 16.dp))
                 GlassOrbEntry(
                     onClick = onJoinViewer,
                     backdrop = backdrop,
@@ -128,6 +140,7 @@ fun HomeScreen(
                     },
                     label = "进入观看",
                     sub = "粘上链接就能看",
+                    subOutside = subOutside,
                 )
             }
         }
@@ -193,6 +206,16 @@ fun GlassOrbEntry(
     icon: @Composable () -> Unit,
     label: String,
     sub: String,
+    /**
+     * 小字说明放圆内还是圆外。
+     *
+     * 圆会按可用高度收缩（矮屏上两个 160dp 的圆会把底部设置卡挤出屏幕），
+     * 但里面的图标 + 标题 + 说明是**固定字号**的 —— 圆缩到 120dp 以下就装不下了，
+     * 说明那行会从圆的下沿溢出去，压在下一个圆上（274dp 宽 / 594dp 高的机器上
+     * 实测：圆 83dp、文字一直排到圆外 88px）。装不下就把它挪到圆下面，
+     * 圆内只留图标和标题。
+     */
+    subOutside: Boolean = false,
     // 以下默认值 = 用户在玻璃参数实验室实机调定的配方（2026-09-23）。
     // 实验室里再调出新的，改这里的默认值即可（或把参数发过来）。
     diameter: Dp = 160.dp,
@@ -225,7 +248,7 @@ fun GlassOrbEntry(
                 .background(Color.White.copy(alpha = brightAlpha), CircleShape)
         )
         Column(
-            modifier = Modifier.padding(top = 6.dp),   // 内容视觉重心微下移（实测偏上）
+            modifier = Modifier.padding(top = if (subOutside) 0.dp else 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -237,8 +260,16 @@ fun GlassOrbEntry(
                 letterSpacing = 1.4.sp,
                 color = OrbInk,
             )
-            Text(sub, fontSize = 10.sp, color = OrbInk.copy(alpha = 0.60f))
+            if (!subOutside) Text(sub, fontSize = 10.sp, color = OrbInk.copy(alpha = 0.60f))
         }
+    }
+    if (subOutside) {
+        Text(
+            sub,
+            fontSize = 10.sp,
+            color = Ink.TextLow,
+            modifier = Modifier.padding(top = 5.dp),
+        )
     }
 }
 
@@ -330,13 +361,19 @@ internal fun InfoRow(k: String, v: String) {
 }
 
 @Composable
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 internal fun StepRow(no: String, text: String, chip: String) {
-    Row(
+    /* 用 FlowRow 而不是 Row：窄屏上实测过，`Text(weight(1f)) + 不伸缩的 chip`
+       会把 chip 的固有宽度先占掉，只剩两三个字的宽度给正文 ——
+       274dp 宽的机器上"点一下开始播放"被排成"点一下 / 开始播 / 放"三行。
+       流式布局下放不下就整块换到下一行，宽屏仍然是一行。 */
+    androidx.compose.foundation.layout.FlowRow(
         Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2),
+        verticalArrangement = Arrangement.spacedBy(GlassDimens.sp1),
     ) {
-        Text(text, fontSize = 12.5.sp, color = Ink.TextHi, modifier = Modifier.weight(1f))
+        Text(no, fontSize = 12.5.sp, color = Ink.TextLow)
+        Text(text, fontSize = 12.5.sp, color = Ink.TextHi)
         StatusChip(chip)
     }
 }
