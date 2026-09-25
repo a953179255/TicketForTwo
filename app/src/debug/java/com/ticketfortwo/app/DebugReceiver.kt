@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import com.ticketfortwo.app.cinema.CinemaDebug
 import com.ticketfortwo.app.cinema.CinemaSync
 
 /**
@@ -50,6 +51,12 @@ class DebugReceiver : BroadcastReceiver() {
                 Log.i("DebugReceiver", "按指示收厅")
                 CallSession.setCinemaTrack(null)
             }
+
+            /** 递出 App 自己嗅到的最佳候选 —— 测真实站点命中率用的就是这一条。 */
+            ACTION_SCREEN_BEST -> {
+                val url = CinemaDebug.screenBest?.invoke()
+                Log.i("DebugReceiver", "递出嗅到的片源：" + (url ?: "没有可播候选（共 ${CinemaDebug.candidateCount?.invoke()} 条）"))
+            }
         }
     }
 
@@ -57,5 +64,6 @@ class DebugReceiver : BroadcastReceiver() {
         const val ACTION_DROP_WS = "com.ticketfortwo.app.DEBUG_DROP_WS"
         const val ACTION_SCREEN = "com.ticketfortwo.app.DEBUG_SCREEN"
         const val ACTION_UNSCREEN = "com.ticketfortwo.app.DEBUG_UNSCREEN"
+        const val ACTION_SCREEN_BEST = "com.ticketfortwo.app.DEBUG_SCREEN_BEST"
     }
 }

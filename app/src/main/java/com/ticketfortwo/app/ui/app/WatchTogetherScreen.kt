@@ -250,7 +250,9 @@ private fun WatchTransportBar(
     GlassPanel(
         backdrop = backdrop,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-        radius = GlassDimens.radiusIsland,
+        // 两行高的卡用卡片圆角：radiusIsland 是 9999dp 胶囊，圆角会被钳到短边一半，
+        // 两端变成半圆、把第一行文字吃进弧里（放映厅那张卡同一处缺陷，截图实测过）
+        radius = GlassDimens.radiusCard,
         surfaceAlpha = 0.72f,
         content = {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {

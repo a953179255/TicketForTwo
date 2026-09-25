@@ -243,7 +243,16 @@ def main():
         failed = bool(rt.node("根据什么这么判断") or rt.node("按这个顺序试") or rt.node("重试"))
         print(f"   房主停止后观众屏：结束={bool(ended)} 误报失败={bool(failed)}")
 
-    bad = (not connected) or (not answered) or send_fail or (not got_video)
+    # 厅先开那条路**根本不投屏**（只起信令 + 语音），于是"没收到视频轨""屏幕纯黑"
+    # 在那个模式下是正确结果，不是缺陷。判据必须跟着房主的模式走 ——
+    # 上一版拿分享模式的判据去判仅语音的厅，报了个假 FAIL（差点让我去查一条不存在的链路 bug）。
+    host_log = adb(host, "logcat", "-d", "-s", "CallSession:V").stdout
+    audio_only = "仅语音模式：不发送视频" in host_log
+    if audio_only:
+        print("   房主是仅语音的厅（没投屏）：视频轨 / 亮度这两条判据不适用，跳过")
+
+    bad = (not connected) or (not answered) or send_fail or \
+        (not got_video and not audio_only)
     print("\n" + ("FAIL  观众端链路没跑通，见上面哪条是假的" if bad else "PASS  App 内观看整条链路跑通"))
     return 1 if bad else 0
 

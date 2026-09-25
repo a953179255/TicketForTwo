@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.ticketfortwo.app.CallSession
+import com.ticketfortwo.app.cinema.CinemaDebug
 import com.ticketfortwo.app.cinema.CinemaProbe
 import com.ticketfortwo.app.cinema.CinemaSync
 import com.ticketfortwo.app.cinema.MediaSniffer
@@ -67,6 +68,15 @@ const val CINEMA_TEST_LOCAL = WATCH_TEST_URL
 
 /** 第二条内置测试流：URL 不同，专门用来测"放映中途换片"。 */
 const val CINEMA_TEST_HLS_2 = "https://test-streams.mux.dev/pts_shift/master.m3u8"
+
+/**
+ * 等多久就算"对方没给回执"。
+ *
+ * 观众侧自己有个 8 秒看门狗（没首帧就退回屏幕流并回一条 fail），所以正常路径上
+ * 回执最迟 8 秒 + 一个来回就到；这里取 12 秒，是给"对方页面是旧版、根本不会发回执"
+ * 留的余量 —— 那种情况下房主看到的应该是"没等到回执"，而不是无限期挂着"等对方出画面"。
+ */
+private const val ACK_WAIT_MS = 12_000L
 
 /**
  * 放映厅 · 房主侧第一版：**厅先开，人先进来，片子后选**。
@@ -97,11 +107,21 @@ fun CinemaScreen(
     var probe by remember { mutableStateOf<MediaSniffer.PageProbe?>(null) }
     var eme by remember { mutableStateOf<CinemaProbe.EmeReport?>(null) }
     var seenRequests by remember { mutableStateOf(0) }
-    var showPanel by remember { mutableStateOf(true) }
-    var note by remember { mutableStateOf("把这一页当成浏览器用；下面会列出嗅到的片源") }
+    /**
+     * 量具（嗅探候选 / 页面读数 / EME）默认**收着**。
+     *
+     * 这张卡是房主全程盯着的那一块，而放映时他真正要看的只有三件事：
+     * 对方在不在放、放到哪、方向盘给不给。把 P0 的读数常驻在上面，
+     * 等于让量具抢了界面的位置（实测：放映中的卡有六成行数是嗅探日志）。
+     * 需要挑候选、查为什么嗅不到时，点「展开嗅探」即可 —— 它没有消失，只是不再常驻。
+     */
+    var showPanel by remember { mutableStateOf(false) }
+    var note by remember { mutableStateOf("把这一页当成浏览器用；嗅到的地址在「展开嗅探」里面") }
     var fullScreenView by remember { mutableStateOf<View?>(null) }
     /** 放映状态（会话里那份的本地镜像，只为画 UI）。 */
     val cinema by CallSession.cinema.collectAsState()
+    /** 对方那边到底播出来了没有 —— 没有这条回执时，"正在放映"三个字是半真半假的。 */
+    val playback by CallSession.viewerPlayback.collectAsState()
     /** 房主这一侧播放器的位置/时长/标题 —— 直接复用 watch 那套探针，形状一样。 */
     var player by remember { mutableStateOf<com.ticketfortwo.app.watch.WatchState?>(null) }
     /** 方向盘给不给对方。会话里那份是真值，这里只是本地即时反馈（点下去先亮起来）。 */
@@ -144,6 +164,15 @@ fun CinemaScreen(
                         if (snap != null && snap.kind != MediaSniffer.Kind.Segment) {
                             Log.i("Cinema", "SNIFF kind=${snap.kind} url=${snap.url}")
                         }
+                        /* 嗅到新候选就立刻刷界面。
+                         *
+                         * 原来 `hits` 只在每 2 秒那次页面探针里更新，而**探针不是每次都成功**：
+                         * 直接在 WebView 里打开一条 .m3u8 时用的是 Chromium 自带播放器，
+                         * 影子 DOM 里的 `<video>` 不一定问得到 → 探针返回空 → 列表不刷新。
+                         * 结果就是"日志明明嗅到了、屏幕上却写着厅里还没选片"，
+                         * 命中率测量脚本因此整轮报"没递出"（实测就是这么翻的）。
+                         * 回调在 WebView 的工作线程上，所以得 post 回主线程再改状态。 */
+                        view?.post { hits = sniffer.snapshot() }
                     }
                     return null
                 }
@@ -168,13 +197,28 @@ fun CinemaScreen(
     }
 
     // 厅已经开着的时候又来了一条分享（singleTop + onNewIntent）：换片，不重开 Activity。
+    //
+    // 三种情况必须分开：冷启动首帧（这一屏本来就是为这条链接开的，别再刷一遍）、
+    // 换一条新链接（正常换页）、**同一条链接第二次递进来**。
+    // 最后一种原来什么都不做，于是"我明明分享了，屏幕却没反应"——
+    // 而人重复分享，多半是因为第一次没成（页面报错、被挡、想重看），
+    // 所以正确的响应是重新加载这一页，并让人看见我们在动。
+    var handledShare by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(initialUrl) {
         val u = initialUrl?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
-        if (u != pageUrl) {
-            inputUrl = u
-            pageUrl = normalizeUrl(u)
-            note = "收到递进来的链接，换片中…"
+        val norm = normalizeUrl(u)
+        when {
+            handledShare == u -> {
+                webView.loadUrl(pageUrl)
+                note = "又是这一条，重新加载这一页"
+            }
+            norm != pageUrl -> {
+                inputUrl = u
+                pageUrl = norm
+                note = "收到递进来的链接，换片中…"
+            }
         }
+        handledShare = u
     }
 
     // EME 探测：先发起（结果写到 window 上），再轮询读 —— 不赌 WebView 会不会 await Promise
@@ -261,6 +305,21 @@ fun CinemaScreen(
         else "已把这条递给对方：${h.kind.name.lowercase()}"
     }
 
+    /* debug 钩子：把"递出 App 自己嗅到的那条地址"暴露给 adb 广播。
+       测真实站点命中率时必须走这条，而不是我手写一个 URL 递出去 ——
+       那样测的是传输通道，测不到嗅探与选路。 */
+    DisposableEffect(Unit) {
+        CinemaDebug.screenBest = {
+            val h = CinemaProbe.bestOf(hits)
+            if (h == null) null else { screen(h); h.url }
+        }
+        CinemaDebug.candidateCount = { hits.count { MediaSniffer.playable(it.kind) } }
+        onDispose {
+            CinemaDebug.screenBest = null
+            CinemaDebug.candidateCount = null
+        }
+    }
+
     Column(Modifier.fillMaxSize()) {
         GlassPageBar(backdrop, title = "放映厅", onBack = onBack) {
             Text(
@@ -336,7 +395,12 @@ fun CinemaScreen(
             AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
         }
 
-        if (showPanel || cinema != null) CinemaPanel(
+        /* 这张卡**一直在**：它是厅的控制面（邀请、放映状态、方向盘开关），
+           「收起嗅探」收的只是量具那几行，不是整张卡。
+           原来写成 `if (showPanel || cinema != null)`，于是"默认收着量具 + 还没选片"
+           这两个条件一叠加，整张卡直接消失，屏幕上只剩一块黑 —— 量具默认收起之后
+           第一时间就踩到了（截图实测）。 */
+        CinemaPanel(
             backdrop = backdrop,
             cinema = cinema,
             player = player,
@@ -351,6 +415,8 @@ fun CinemaScreen(
             probe = probe,
             eme = eme,
             inviteUrl = inviteUrl,
+            viewerOnline = viewerOnline,
+            playback = playback,
             onCopyInvite = {
                 inviteUrl?.let {
                     context.copy("邀请链接", it)
@@ -386,6 +452,10 @@ private fun CinemaPanel(
     probe: MediaSniffer.PageProbe?,
     eme: CinemaProbe.EmeReport?,
     inviteUrl: String?,
+    /** 厅里有没有人。没人的时候不该写"等对方回执"。 */
+    viewerOnline: Boolean,
+    /** 对方那边这条到底播没播起来；null = 还没回执。 */
+    playback: CinemaSync.PlaybackAck?,
     onCopyInvite: () -> Unit,
     onPick: (MediaSniffer.Hit) -> Unit,
 ) {
@@ -393,10 +463,41 @@ private fun CinemaPanel(
     val playable = hits.filter {
         MediaSniffer.playable(it.kind) && it.url.startsWith("http", ignoreCase = true)
     }
+    /** 现在到底有没有在分享画面 —— 厅先开那条路是不投屏的，措辞要跟着这个走。 */
+    val localVideo by CallSession.localVideo.collectAsState()
+    val screenShared = localVideo != null
+    /* 换片之后重新开始等回执。跟着 version 走而不是跟 cinema 走：
+       进度每秒都在更新 cinema，那样这个定时器会被无限续期，永远不超时。 */
+    var ackWaited by remember { mutableStateOf(false) }
+    LaunchedEffect(cinema?.version) {
+        ackWaited = false
+        if (cinema == null) return@LaunchedEffect
+        delay(ACK_WAIT_MS)
+        ackWaited = true
+    }
+    /* "正在放映"后面那句副标题，只能由对方的回执决定。
+     *
+     * 原来这里写死"对方本地播 · 原生画质"：对方那片黑着，房主这边照样一脸笃定。
+     * 措辞放在 CinemaSync.describeAck 里（能被单测打），这里只管配颜色。 */
+    val ackLine = CinemaSync.describeAck(playback, viewerOnline, ackWaited)
+    val ackColor = when (ackLine.tone) {
+        CinemaSync.AckTone.Live -> Ink.Live
+        CinemaSync.AckTone.Bad -> Ink.Error
+        CinemaSync.AckTone.Warn -> Ink.Warn
+        CinemaSync.AckTone.Waiting -> Ink.TextMid
+        CinemaSync.AckTone.Neutral -> Ink.TextLow
+    }
     GlassPanel(
         backdrop = backdrop,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-        radius = GlassDimens.radiusIsland,
+        /* 这张卡是多行的，不能用 radiusIsland —— 那个 token 是 9999dp 的**胶囊**，
+           Compose 会把圆角钳到短边一半，于是卡的两端变成两个半圆，
+           第一行标题正好落在半圆里，看着就像"字被玻璃边缘切掉"（截图实测过）。
+           胶囊留给单行条（顶栏、控制条），多行卡用卡片圆角。
+           折射也关掉：底下压着的是 WebView 的 SurfaceView，玻璃抓不到画面，
+           折射环只会把一圈黑色扭着糊到文字上（同 CallScreen / 观众镜像条的结论）。 */
+        radius = GlassDimens.radiusCard,
+        refract = false,
         surfaceAlpha = 0.78f,
         content = {
             Column(
@@ -424,9 +525,22 @@ private fun CinemaPanel(
                             color = Ink.Live,
                         )
                         Text(
-                            "  对方本地播 · 原生画质",
+                            "  ${ackLine.head}",
                             fontSize = 11.sp,
-                            color = Ink.TextMid,
+                            color = ackColor,
+                            // 标题行必须锁一行：App 观众那句长话原来在这里换行，
+                            // 第二行正好压在"正在放映"下面，两个字叠在一起（截图实测）。
+                            maxLines = 1,
+                        )
+                    }
+                    // 长话另起一行；没有长话就不占位（不留一行空白）
+                    ackLine.detail?.let {
+                        Text(
+                            it,
+                            fontSize = 10.5.sp,
+                            color = ackColor,
+                            lineHeight = 14.sp,
+                            maxLines = 2,
                         )
                     }
                     Text(
@@ -481,8 +595,16 @@ private fun CinemaPanel(
                         }
                     }
                     Text(
-                        "对方现在看到的是你的屏幕。挑一条按「开始放映」，" +
-                            "他就改成自己播那条流 —— 画质原生，屏幕上也不再压两层控件。",
+                        /* 这句话原来写死"对方现在看到的是你的屏幕" —— 可厅先开这条路
+                           **根本不投屏**（只起信令 + 语音），观众看到的是一块等候屏。
+                           措辞跟着事实走：有没有在分享画面，是问出来的不是假设的。 */
+                        if (screenShared)
+                            "对方现在看到的是你的屏幕。按「开始放映」，他就改成自己播这条流 " +
+                                "—— 画质原生，也不再压两层控件。要手挑候选就点「展开嗅探」。"
+                        else
+                            "厅里现在只有语音：对方看到的是一块等候屏。按「开始放映」，" +
+                                "他那边就本地播这条流 —— 画质原生，你的屏幕也不用分享出去。" +
+                                "要手挑候选就点「展开嗅探」。",
                         fontSize = 11.sp,
                         color = Ink.TextMid,
                         lineHeight = 16.sp,
@@ -551,6 +673,7 @@ private fun CinemaSync.Cmd.toWatchCmd(): WatchCmd = when (this) {
     is CinemaSync.Cmd.Step -> WatchCmd.Step(deltaMs)
 }
 
-private fun Context.copy(label: String, text: String) {    val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+private fun Context.copy(label: String, text: String) {
+    val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
     cm.setPrimaryClip(ClipData.newPlainText(label, text))
 }

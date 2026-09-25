@@ -139,4 +139,92 @@ class CinemaSyncTest {
         assertEquals("1:02:03", CinemaSync.formatTime(3_723_000L))
         assertEquals("0:00", CinemaSync.formatTime(-5L))
     }
+
+    // ---- 播放回执：S 档命中率的原始数据 --------------------------------
+
+    @Test
+    fun `回执往返，detail 里再出现分隔符也不会丢`() {
+        val ok = CinemaSync.parseAck("7|ok|ok|1920x1080")
+        assertNotNull(ok)
+        assertEquals(7L, ok!!.version)
+        assertTrue(ok.ok)
+        assertEquals("1920x1080", ok.detail)
+
+        // hls.js 的 details 里就带竖线（networkError|manifestError），不能被切成两截
+        val fail = CinemaSync.parseAck("3|fail|stream|这条流取不到：networkError|manifestError")
+        assertNotNull(fail)
+        assertFalse(fail!!.ok)
+        assertEquals("stream", fail.code)
+        assertEquals("这条流取不到：networkError|manifestError", fail.detail)
+    }
+
+    @Test
+    fun `格式不对的回执当没收到，不能把信令流带崩`() {
+        assertNull(CinemaSync.parseAck(""))
+        assertNull(CinemaSync.parseAck(null))
+        assertNull(CinemaSync.parseAck("ok|1920x1080"))          // 少了版本号
+        assertNull(CinemaSync.parseAck("7|maybe|ok|1280x720"))   // 头一个词不是 ok/fail
+        // code 缺省时落到 other，而不是数组越界
+        assertEquals("other", CinemaSync.parseAck("7|fail")!!.code)
+    }
+
+    @Test
+    fun `旧片源的回执不采信，未知版本一律采信`() {
+        val a = CinemaSync.parseAck("7|ok|ok|")!!
+        assertTrue(CinemaSync.isFreshAck(a, 7L))
+        assertFalse(CinemaSync.isFreshAck(a, 8L))     // 房主已经换片了
+        assertTrue(CinemaSync.isFreshAck(a, null))    // 收厅之后不作判断
+        val unknown = CinemaSync.parseAck("-1|fail|timeout|x")!!
+        assertTrue(CinemaSync.isFreshAck(unknown, 42L))
+    }
+
+    @Test
+    fun `五种状态各有说法，长话不挤进标题行`() {
+        val ok = CinemaSync.parseAck("7|ok|ok|1920x1080")!!
+        val bad = CinemaSync.parseAck("7|fail|timeout|这条流 8 秒没出画面")!!
+        val app = CinemaSync.parseAck("7|fail|appviewer|App 内不放原画，厅里只有语音，App 里还没有画面")!!
+
+        val off = CinemaSync.describeAck(null, viewerOnline = false, timedOut = false)
+        assertEquals("对方还没进厅", off.head)
+        assertNull(off.detail)
+        assertEquals(CinemaSync.AckTone.Neutral, off.tone)
+
+        val waiting = CinemaSync.describeAck(null, viewerOnline = true, timedOut = false)
+        assertEquals("等对方那边出画面…", waiting.head)
+        assertEquals(CinemaSync.AckTone.Waiting, waiting.tone)
+
+        val live = CinemaSync.describeAck(ok, viewerOnline = true, timedOut = true)
+        assertEquals(CinemaSync.AckTone.Live, live.tone)
+        assertTrue(live.head.contains("1920x1080"))
+
+        val fail = CinemaSync.describeAck(bad, viewerOnline = true, timedOut = true)
+        assertEquals(CinemaSync.AckTone.Bad, fail.tone)
+        assertEquals("对方放不出这条", fail.head)
+        assertEquals("这条流 8 秒没出画面", fail.detail)
+
+        // App 里的观众不是故障，也不能被算成"已播起来"
+        val inApp = CinemaSync.describeAck(app, viewerOnline = true, timedOut = true)
+        assertEquals(CinemaSync.AckTone.Neutral, inApp.tone)
+        assertFalse(inApp.head.contains("已播起来"))
+        assertEquals("对方在 App 里", inApp.head)
+        assertTrue(inApp.detail!!.contains("厅里只有语音"))
+
+        // 等不到回执：既不是绿也不是红，是给房主指一条退路
+        val stale = CinemaSync.describeAck(null, viewerOnline = true, timedOut = true)
+        assertEquals(CinemaSync.AckTone.Warn, stale.tone)
+        assertTrue(stale.detail!!.contains("收厅"))
+
+        /* 标题行长度是**几何约束**，不是文风问题：
+           上一版把长话拼进标题行，App 那句在卡里换了行，第二行正好压在"正在放映"下面，
+           两个字叠在一起（截图实测）。所有分支的 head 都得短到不会换行。
+           宽度按"中日韩算两格、其余算一格"估 —— 按字符数不行，
+           "1920x1080" 九个字符只占六个汉字的位置。 */
+        fun width(s: String) = s.sumOf { if (it.code >= 0x2E80) 2 else 1 }
+        listOf(off, waiting, live, fail, inApp, stale).forEach {
+            val w = width(it.head)
+            assertTrue("标题行太宽（$w 格）：${it.head}", w <= 30)
+        }
+        // 反面样本：拼成一句时那句 App 的话确实是超宽的，这就是当初换行压字的原因
+        assertTrue(width("对方在 App 里 · App 内不放原画，厅里只有语音，App 里还没有画面") > 30)
+    }
 }

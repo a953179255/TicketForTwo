@@ -337,6 +337,14 @@ object ViewerSession {
         _remoteVideo.value = null
         _contentLandscape.value = null
         _micMuted.value = true
+        /* 同看/放映厅那两条状态也得清。
+         * 原来漏了：退出观看后 `_cinema` 还留着上一条，回到首页再进来时
+         * 底部那条"放映中"横条是残留的，而且进度还在按旧版本号显示。 */
+        _watch.value = null
+        _watchAllowed.value = false
+        _cinema.value = null
+        _cinemaAllowed.value = false
+        cinemaAckedVersion = -1L
         _state.value = State.Idle
     }
 
@@ -379,6 +387,12 @@ object ViewerSession {
     val cinema: StateFlow<com.ticketfortwo.app.cinema.CinemaSync.State?> = _cinema.asStateFlow()
     private val _cinemaAllowed = MutableStateFlow(false)
     val cinemaAllowed: StateFlow<Boolean> = _cinemaAllowed.asStateFlow()
+
+    /** 已经替哪一版片源回过执了。进度广播每秒一条，靠这个去重才不会变成刷屏。 */
+    private var cinemaAckedVersion = -1L
+
+    /** 上一次报给房主的"他正在看什么"。这句话变了也要重报，否则房主拿着过期结论。 */
+    private var cinemaAckedSeeing = ""
 
     /** 把播放请求发回房主。权限位由房主那边说了算，这里只是提前拦一道。 */
     fun sendCinemaCmd(c: com.ticketfortwo.app.cinema.CinemaSync.Cmd) {
@@ -455,6 +469,26 @@ object ViewerSession {
                 _cinema.value = st
                 _cinemaAllowed.value = st != null &&
                     com.ticketfortwo.app.cinema.CinemaSync.allowsControl(f)
+                /* 主动告诉房主"这条在 App 里不走本地播放"。
+                 *
+                 * 不报的话，房主那边 12 秒后显示"没等到对方的回执" —— 那是把他
+                 * 引到错的方向上（问题不在网络，在观众用的是 App 而不是浏览器）。
+                 * 按版本去重：进度广播每 2 秒一条，不去重就是每秒发一条回执。
+                 * 但"在看什么"变了要重报（房主中途开始投屏时，上一句就过期了）。 */
+                val seeing = if (_remoteVideo.value != null) "看的是屏幕分享"
+                else "厅里只有语音，App 里还没有画面"
+                if (st == null) {
+                    cinemaAckedVersion = -1L
+                } else if (st.version != cinemaAckedVersion || seeing != cinemaAckedSeeing) {
+                    cinemaAckedVersion = st.version
+                    cinemaAckedSeeing = seeing
+                    runCatching {
+                        send(
+                            """{"t":"cineack","f":"${st.version}|fail|appviewer|""" +
+                                "App 内不放原画，$seeing\"}",
+                        )
+                    }
+                }
             }
 
             // 观众开麦后会主动发一轮 offer，房主的回信走这里。

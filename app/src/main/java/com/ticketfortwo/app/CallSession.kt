@@ -170,6 +170,18 @@ object CallSession {
     private var cinemaVersion = 0L
     private val cinemaEcho = CinemaSync.EchoGuard()
 
+    /**
+     * 最近一条"观众那边到底播出来了没有"的回执；null = 还没收到。
+     *
+     * 补这个口的理由很直接：房主按下开始放映之后，界面上就写着"正在放映"，
+     * 可观众那边如果取不到流是一片黑，房主完全看不出来 —— 这是最容易骗人的一种状态。
+     * 第二个理由是统计口径：S 档命中率不是"嗅到了地址"而是"对方真的播出来了"，
+     * 这个数决定 A 档（手机做 Range 中继）到底要不要做。测量脚本读 logcat 里的
+     * `CINEMA_ACK` 行，不读界面。
+     */
+    private val _viewerPlayback = MutableStateFlow<CinemaSync.PlaybackAck?>(null)
+    val viewerPlayback: StateFlow<CinemaSync.PlaybackAck?> = _viewerPlayback.asStateFlow()
+
     /** 观众的播放请求落到放映厅那一屏（它持有 WebView）。同 [onWatchCommand] 一样必须成对摘除。 */
     @Volatile
     var onCinemaCommand: ((CinemaSync.Cmd) -> Unit)? = null
@@ -178,11 +190,14 @@ object CallSession {
     fun setCinemaTrack(track: CinemaSync.Track?) {
         if (track == null) {
             _cinema.value = null
+            _viewerPlayback.value = null
             broadcastCinema()
             note("已收厅，回到整屏分享")
             return
         }
         cinemaVersion++
+        // 换了一条片，上一条的回执就不该继续显示在卡片上（否则"对方放不了"会跟着人走）
+        _viewerPlayback.value = null
         // 换片和首次递出去要在日志里分得开，否则回看时看不出中途换过片
         val wasScreening = _cinema.value != null
         _cinema.value = CinemaSync.State(
@@ -194,6 +209,8 @@ object CallSession {
         )
         broadcastCinema()
         val what = CinemaSync.sanitize(track.title)
+        // 版本 → 片源的对应关系只有这一刻知道，统计脚本要靠它把回执归到正确的站点上
+        Log.i(TAG, "CINEMA_SCREEN $cinemaVersion|${track.url}")
         note(if (wasScreening) "换片了：$what" else "片源已递给对方：$what")
     }
 
@@ -245,6 +262,32 @@ object CallSession {
         if (cb == null) note("收到播放请求，但放映厅页面已经关了") else cb(real)
     }
 
+    /**
+     * 收到观众侧的播放回执。
+     *
+     * 一条失败回执要让房主看见，还要告诉他下一步该干什么：S 档放不出来时，
+     * 退路是「收厅改共享屏幕」，不是让他以为自己网络坏了。
+     */
+    private fun onCinemaAckFromViewer(f: String) {
+        val ack = CinemaSync.parseAck(f) ?: return
+        val st = _cinema.value
+        if (!CinemaSync.isFreshAck(ack, st?.version)) {
+            note("收到一条旧片源的回执（v${ack.version}），已忽略")
+            return
+        }
+        _viewerPlayback.value = ack
+        // 这行是给统计脚本读的，措辞可以改，前缀和字段顺序不能改
+        Log.i(TAG, "CINEMA_ACK ${ack.version}|${if (ack.ok) "ok" else "fail"}|${ack.code}|${ack.detail}")
+        note(
+            when {
+                ack.ok -> "对方已经播起来了（${ack.detail.ifBlank { "首帧已到" }}）"
+                // App 里的观众不是"放不出来"，是这条路他没走 —— 别把他说成故障
+                ack.code == "appviewer" -> "对方在用 App 看：走的是屏幕分享，不是本地播放"
+                else -> "对方放不出这条：${ack.detail.ifBlank { ack.code }}。可以收厅改共享屏幕"
+            },
+        )
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var statsJob: Job? = null
     /** 观众信令断了之后的"最多等你这么久"兜底。 */
@@ -277,6 +320,8 @@ object CallSession {
         scope.launch {
             SignalHub.viewerConnected.collect { on ->
                 if (on) {
+                    // 新进来的观众什么都没报过，上一条回执再像是别人的结论
+                    _viewerPlayback.value = null
                     broadcastCinema()
                     broadcastWatch()
                 }
@@ -359,9 +404,21 @@ object CallSession {
             // 把完整链接打进日志：脚本化验收要从 logcat 直接取它 ——
             // 让人手动点复制再粘贴，在无人值守的验收里根本做不到。
             note("邀请链接已就绪：$url")
+            _inviteUrl.value = url
             _state.value = State.WaitingViewer(url)
         }
     }
+
+    /**
+     * 门牌链接单独存一份，**不跟着 [state] 走**。
+     *
+     * 原来它只挂在 `State.WaitingViewer` 上，于是观众一进来（状态变 Connecting）
+     * 房主就再也复制不到邀请链接了 —— 而"上一个观众走了、想再发给别人"
+     * 恰恰是最需要它的时刻；`backToWaiting()` 也因此拿不到链接，只能退回 Idle。
+     * 放映厅那张卡的"复制邀请"就是被这个坑到的（实测：观众在厅里时那一行整个消失）。
+     */
+    private val _inviteUrl = MutableStateFlow<String?>(null)
+    val inviteUrl: StateFlow<String?> = _inviteUrl.asStateFlow()
 
     private fun failAndStop(context: Context, reason: String) {
         note(reason)
@@ -369,10 +426,9 @@ object CallSession {
         _state.value = State.Failed(reason)
     }
 
-    /** 回到"等人加入"那一步，邀请链接本身不变（和原来逐字一致，只是三处共用）。 */
+    /** 回到"等人加入"那一步，邀请链接本身不变。 */
     private fun backToWaiting() {
-        val url = (_state.value as? State.WaitingViewer)?.inviteUrl
-        _state.value = if (url != null) State.WaitingViewer(url) else State.Idle
+        _state.value = _inviteUrl.value?.let { State.WaitingViewer(it) } ?: State.Idle
     }
 
     // ---- 观众消息处理（全部来自 SignalHub）------------------------------
@@ -470,6 +526,9 @@ object CallSession {
 
             // 放映厅（S 档）：观众那边按了暂停/±10 秒
             "ccmd" -> onCinemaCommandFromViewer(obj.optString("f"))
+
+            // 放映厅（S 档）：观众那边到底播出来了没有
+            "cineack" -> onCinemaAckFromViewer(obj.optString("f"))
         }
     }
 
@@ -554,6 +613,11 @@ object CallSession {
         _role.value = null
         _micMuted.value = false
         _state.value = State.Idle
+        // 隧道随进程停了，这条链接也就失效了 —— 留着会让界面继续显示一个打不开的门牌
+        _inviteUrl.value = null
+        _cinema.value = null
+        _viewerPlayback.value = null
+        _watch.value = null
         sessionContext = null
 
         TunnelManager.stop()

@@ -372,6 +372,32 @@ function paintCtlForCine(on){
   });
 }
 
+/**
+ * 把"这条我这边放不放得出来"回给房主。
+ *
+ * 两个理由：① 房主需要知道 —— 他选了条对方放不出来的地址，屏幕上却一直显示
+ * "正在放映"，那是骗人；② 这也是统计 S 档命中率的唯一诚实口径：
+ * 命中率不是"嗅到了地址"，而是"对方真的播出来了"。
+ *
+ * `code` 是给统计用的机器可读原因（badurl / unsupported / fetch / stream / start /
+ * timeout / ok），`detail` 是给人看的那句。只发中文的话，回来看日志就得靠字符串
+ * 匹配才能分类，而措辞是一定会改的。
+ *
+ * 带上版本号：回执在路上时房主可能已经换片了，不标版本就会把上一条的失败
+ * 显示在新的一条上面 —— 那比不报更误导人。ver 拿不到就发 -1（房主按"未知版本一律采信"处理）。
+ */
+let cineAckedVer = -1;
+function cineAck(ok, code, detail, ver){
+  const v = ver == null ? -1 : ver;
+  /* 一条片源只回一次执。实测：一条 404 的 m3u8 会连着抛两次 fatal
+     （hls.js 重试一轮），不去重房主那边就是刷屏 —— 而统计按条数算命中率的话，
+     同一个失败会被数成两个。 */
+  if (v >= 0 && v === cineAckedVer) return;
+  cineAckedVer = v;
+  send({ t: 'cineack',
+    f: v + '|' + (ok ? 'ok' : 'fail') + '|' + (code || 'other') + '|' + (detail || '') });
+}
+
 function enterVoiceModeIfNeeded(){
   if (!pc || pc.connectionState !== 'connected' || gotVideo) return;
   /* 已经在放片了就不该再弹等候卡 —— 实测过这个时序：仅语音的厅里 `gotVideo` 永远是 false，
@@ -628,14 +654,14 @@ function cineNote(msg) {
 }
 
 function onCinema(f) {
-  if (!f) { cineDown('对方收了厅'); return; }
+  if (!f) { cineDown('对方收了厅', false, 'closed'); return; }
   const p = String(f).split('|');
   if (p.length < 10) return;
   const st = {
     ver: +p[0], url: p[1], kind: p[2], title: p[3], pos: +p[4], dur: +p[5],
     playing: p[6] === '1', rate: +p[7] || 1, hostWall: +p[8], allow: p[9] === '1',
   };
-  if (!/^https?:\/\//i.test(st.url)) { cineDown('这条地址不能直接播'); return; }
+  if (!/^https?:\/\//i.test(st.url)) { cineDown('这条地址不能直接播', true, 'badurl', st.ver); return; }
   if (cine && st.ver < cine.ver) return;   // 乱序到达的旧状态：丢掉，别把进度倒回去
   const switched = !cine || cine.url !== st.url;
   cine = st;
@@ -664,15 +690,23 @@ function loadLocal(st) {
         cineHls.loadSource(st.url);
         cineHls.attachMedia(lv);
         cineHls.on(Hls.Events.ERROR, (e, d) => {
-          if (d && d.fatal) cineDown('这条流在观众这边取不到：' + (d.details || d.type));
+          if (!d || !d.fatal) return;
+          /* 把 HTTP 状态一起报回去：403/404 是防盗链或地址过期，0/-1 是
+             "请求发出去了但浏览器不给读"（CORS：CDN 没发 Access-Control-Allow-Origin）。
+             这两种在房主那边都只写作"放不出"，下一步却完全不同 ——
+             实测过一条 Apple 示例流：一次 manifestLoadError、一次 768x432 正常播，
+             不带状态码就永远分不清是站点在挑边缘节点还是我们自己的链路在抖。 */
+          const code = d.response && d.response.code;
+          cineDown('这条流在观众这边取不到：' + (d.details || d.type) +
+            (code != null ? '(' + code + ')' : ''), true, 'stream');
         });
       } else if (lv.canPlayType('application/vnd.apple.mpegurl')) {
         lv.src = st.url;                     // Safari 原生能放 m3u8
-      } else { cineDown('这个浏览器放不了 m3u8'); return; }
+      } else { cineDown('这个浏览器放不了 m3u8', true, 'unsupported'); return; }
     } else {
       lv.src = st.url;
     }
-  } catch (t) { cineDown('起播失败'); return; }
+  } catch (t) { cineDown('起播失败：' + t, true, 'start'); return; }
   lv.play().catch(() => { askCinePlay(); });
   // 等候屏那张卡得收掉，不然它盖在刚接上的片源上面
   hidePanel();
@@ -684,7 +718,7 @@ function loadLocal(st) {
      否则观众对着一块黑以为是自己网卡。 */
   if (cineWatch) clearTimeout(cineWatch);
   cineWatch = setTimeout(() => {
-    if (cine && !cineReady) cineDown('这条流 8 秒没出画面');
+    if (cine && !cineReady) cineDown('这条流 8 秒没出画面', true, 'timeout');
   }, 8000);
 }
 
@@ -696,14 +730,15 @@ function stopLocalPlayer() {
   lv.classList.add('hide'); lvBadge.classList.add('hide');
 }
 
-function cineDown(reason) {
+function cineDown(reason, failed, code, ver) {
+  const v = ver != null ? ver : (cine ? cine.ver : -1);
   stopLocalPlayer();
   paintCtlForCine(false);
   if (cineTimer) { clearInterval(cineTimer); cineTimer = null; }
   cine = null;
   cineBar.classList.add('hide');
-  /* 退回屏幕流时把顶栏那句还回去：不然"在一起看"会一直挂着，
-     而此刻对方其实已经没收厅就是在放片，只是这条流你这边放不了。 */
+  /* 收厅不是失败，别把它报成"对方放不出来" —— 那样房主会以为自己的选路有问题。 */
+  if (failed !== false) cineAck(false, code, reason || 'unknown', v);
   $('topRight').textContent = gotVideo ? '画面已到' : '语音已通';
   if (reason) cineNote(reason + ' —— 退回看对方屏幕');
 }
@@ -759,10 +794,11 @@ lv.addEventListener('loadedmetadata', () => {
   // 首帧出来才敢说"原生画质"：这一行是 S 档成没成的直接证据
   if (!lv.videoWidth) return;
   cineReady = true;
+  cineAck(true, 'ok', lv.videoWidth + 'x' + lv.videoHeight, cine ? cine.ver : -1);
   console.log('CINEMA_LOCAL', lv.videoWidth + 'x' + lv.videoHeight, lv.duration);
   paintCine();
 });
-lv.addEventListener('error', () => { if (cine) cineDown('这条地址在观众这边取不到'); });
+lv.addEventListener('error', () => { if (cine) cineDown('这条地址在观众这边取不到', true, 'fetch'); });
 
 function onWatch(f){
   const p = String(f == null ? '' : f).split('|');

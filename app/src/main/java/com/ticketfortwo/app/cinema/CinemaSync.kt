@@ -210,6 +210,96 @@ object CinemaSync {
         fun appliedCount(): Int = applied
     }
 
+    /**
+     * 观众对"这条我这边放不放得出来"的回执。
+     *
+     * 为什么单独建一个类型而不是把字符串原样存下来：命中率要能算。
+     * `ok` 只有一条来源（首帧真的出来了），其余全按失败分类计数 ——
+     * 嗅到地址不等于对方能看到，这个差别就是 S 档和 A 档的分界线。
+     *
+     * 为什么带 [version]：回执是异步的，房主可能在等回执的时候换了片。
+     * 不带版本号就会把"上一条的失败"显示在新的一条上面，那比不报更糟。
+     */
+    data class PlaybackAck(
+        val version: Long,
+        val ok: Boolean,
+        val code: String,      // ok / badurl / unsupported / fetch / stream / start / timeout / other
+        val detail: String,    // 给人看的那句，可能为空
+    )
+
+    /**
+     * `2|ok|ok|1920x1080`、`5|fail|timeout|这条流 8 秒没出画面`。
+     *
+     * 首字段不是数字、或者头一个词不是 ok/fail，一律返回 null 当没收到 ——
+     * 回执是锦上添花的通道，不能因为它格式不对就把信令流带崩。
+     */
+    fun parseAck(f: String?): PlaybackAck? {
+        if (f.isNullOrBlank()) return null
+        val parts = f.split('|')
+        val ver = parts.getOrNull(0)?.trim()?.toLongOrNull() ?: return null
+        val head = parts.getOrNull(1)?.trim()?.lowercase() ?: return null
+        if (head != "ok" && head != "fail") return null
+        return PlaybackAck(
+            version = ver,
+            ok = head == "ok",
+            code = parts.getOrNull(2)?.trim()?.ifEmpty { "other" } ?: "other",
+            detail = parts.drop(3).joinToString("|"),
+        )
+    }
+
+    /**
+     * 这条回执是不是还能采信：未知版本（-1）一律采信，其余必须和当前放映的那条对得上。
+     */
+    fun isFreshAck(ack: PlaybackAck, currentVersion: Long?): Boolean =
+        ack.version < 0 || currentVersion == null || ack.version == currentVersion
+
+    /** 卡片上那行话的语气（颜色由 UI 决定，这里只管措辞和轻重）。 */
+    enum class AckTone { Neutral, Waiting, Live, Warn, Bad }
+
+    /**
+     * 卡片上的回执那一行：[head] 永远只占一行，长话放 [detail] 另起一行。
+     *
+     * 为什么拆开：合成一句时，App 观众那句"App 内不放原画，厅里只有语音…"会
+     * 在标题行里换行，把"正在放映"挤到第二行的位置上（截图实测到的重叠）。
+     * 标题行的长度必须由我们控制，长内容一律下沉到第二行。
+     */
+    data class AckLine(val head: String, val detail: String?, val tone: AckTone)
+
+    /**
+     * 把"对方到底看得怎么样"翻成房主界面上的一行话。
+     *
+     * 单独成一个函数是为了能被单测打到：这行字是整个放映厅里最容易骗人的一行 ——
+     * 五种情况（没人、在等、播起来了、用 App 看、放不出来）必须各有各的说法，
+     * 少一种就会出现"对方一片黑、房主一脸笃定"。
+     */
+    fun describeAck(
+        ack: PlaybackAck?,
+        viewerOnline: Boolean,
+        timedOut: Boolean,
+    ): AckLine = when {
+        !viewerOnline -> AckLine("对方还没进厅", null, AckTone.Neutral)
+        ack == null && timedOut ->
+            AckLine("没等到对方的回执", "可以收厅改共享屏幕", AckTone.Warn)
+        ack == null -> AckLine("等对方那边出画面…", null, AckTone.Waiting)
+        // 只报对方**真的**播到了多少像素，不写"原生画质"：
+        // hls.js 起播会从最低档往上爬，实测出现过"对方已播起来 · 原生画质 224x100"
+        // 这种自相矛盾的一行 —— 数字才是证据，形容词不是。
+        ack.ok -> AckLine("对方已播起来 · ${ack.detail.ifBlank { "首帧已到" }}", null, AckTone.Live)
+        // App 内的观众不是"放不出来"，是这条路他没走 —— 别报成故障。
+        // 他到底在看什么由他自己报（有没有画面进来只有他知道）：厅先开那条路
+        // 根本不投屏，这时写死"走的是屏幕分享"就是第二句假话。
+        ack.code == "appviewer" -> AckLine(
+            "对方在 App 里",
+            ack.detail.ifBlank { "看的是屏幕分享" },
+            AckTone.Neutral,
+        )
+        else -> AckLine(
+            "对方放不出这条",
+            ack.detail.ifBlank { ack.code },
+            AckTone.Bad,
+        )
+    }
+
     fun formatTime(ms: Long): String {
         if (ms <= 0) return "0:00"
         val s = ms / 1000

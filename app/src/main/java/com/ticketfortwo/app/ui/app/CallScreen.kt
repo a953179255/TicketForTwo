@@ -203,7 +203,18 @@ fun CallScreen(
             )
             when {
                 voiceMode -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("语音对话中（对方未分享画面）", fontSize = 13.sp, color = Ink.TextMid)
+                    Text(
+                        /* 厅先开 + 观众用 App：他这边一块黑，底部条却写着"正在放映"，
+                           两句都对、合起来却读不出"该干什么"。放映中时直接把下一步说出来。 */
+                        if (cinema != null)
+                            "他在放片，但 App 里播不了这条流\n用浏览器打开那条链接就能看原画"
+                        else
+                            "语音对话中（对方未分享画面）",
+                        fontSize = 13.sp,
+                        color = Ink.TextMid,
+                        lineHeight = 20.sp,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
                 }
                 !firstFrame -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("等待对方画面…", fontSize = 13.sp, color = Ink.TextMid)
@@ -275,6 +286,7 @@ fun CallScreen(
                 backdrop = backdrop,
                 state = cinema,
                 allowed = cinemaAllowed,
+                hasVideo = remoteTrack != null,
                 onCmd = onCinemaCmd,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -321,6 +333,8 @@ private fun CinemaMirrorBar(
     backdrop: LayerBackdrop,
     state: com.ticketfortwo.app.cinema.CinemaSync.State,
     allowed: Boolean,
+    /** 现在到底有没有画面进来（厅先开那条路是不投屏的，那时这句得换）。 */
+    hasVideo: Boolean,
     onCmd: (com.ticketfortwo.app.cinema.CinemaSync.Cmd) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -374,7 +388,13 @@ private fun CinemaMirrorBar(
             }
             Spacer(Modifier.height(6.dp))
             Text(
-                "这台手机上看到的还是他的屏幕；用浏览器打开链接可以本地播原画",
+                /* 原来这句写死"看到的还是他的屏幕"。可厅先开那条路**根本不投屏**，
+                   观众这边一块黑 + 一条语音，看到的是什么屏幕都没有。
+                   措辞跟着有没有画面走，别拿假设当事实。 */
+                if (hasVideo)
+                    "这台手机上看到的还是他的屏幕；用浏览器打开链接可以本地播原画"
+                else
+                    "厅里现在只有语音，他还没把屏幕分享出来；用浏览器打开链接可以本地播原画",
                 fontSize = 9.5.sp,
                 color = Ink.TextLow,
                 lineHeight = 13.sp,

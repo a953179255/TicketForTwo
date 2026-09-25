@@ -69,8 +69,16 @@ def main():
         print(s)
 
     w(f"房主 {host} / 观众 {view}")
+    # 前置检查必须读**活信号**。上一版在这里吃了 stale：房主重启会话把观众甩掉了，
+    # 可旧 logcat 缓冲里那句 `ice=CONNECTED` 还在 → 闸门放行 → 清完缓冲后三条读数
+    # 全是空的，报成一个查无此症的 FAIL（"日志缓冲当证据"这个坑在这条链路上第五次咬人）。
+    host_ui = adb(host, "shell", "uiautomator dump /sdcard/p.xml", "&&", "cat", "/sdcard/p.xml").stdout
+    if "人正在观看" not in host_ui:
+        w("FAIL  房主界面上没有「N 人正在观看」—— 观众此刻并不在（"
+          "先跑 drive_m0.py + drive_app_viewer.py --keep-sharing）")
+        return 1
     if "ice=CONNECTED" not in log(view, "ViewerSession"):
-        w("FAIL  观众现在没在观看（先跑 drive_m0.py + drive_app_viewer.py --keep-sharing）")
+        w("FAIL  观众侧日志里没有 ice=CONNECTED（先跑 drive_m0.py + drive_app_viewer.py --keep-sharing）")
         return 1
     adb(view, "shell", "logcat", "-c")
     adb(host, "shell", "logcat", "-c")

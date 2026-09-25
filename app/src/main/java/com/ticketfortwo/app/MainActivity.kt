@@ -213,6 +213,8 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     val viewerLandscape by ViewerSession.contentLandscape.collectAsState()
     val viewerOrient by ViewerSession.orientationMode.collectAsState()
     val viewerOnline by SignalHub.viewerConnected.collectAsState()
+    /** 门牌链接取会话里那份，不取 state 那份：观众一进来 state 就变了，链接不该跟着消失。 */
+    val sessionInvite by CallSession.inviteUrl.collectAsState()
     // 同看：观众侧只需要房主广播回来的播放器状态，加上"他允不允许我控制"这一个布尔。
     val viewerWatch by ViewerSession.watch.collectAsState()
     val viewerWatchAllowed by ViewerSession.watchAllowed.collectAsState()
@@ -585,7 +587,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
             Page.Cinema -> CinemaScreen(
                 backdrop = backdrop,
                 initialUrl = cinemaUrl,
-                inviteUrl = (state as? CallSession.State.WaitingViewer)?.inviteUrl,
+                inviteUrl = sessionInvite,
                 viewerOnline = viewerOnline,
                 onBack = { showCinema = false },
             )
