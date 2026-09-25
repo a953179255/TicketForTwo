@@ -621,6 +621,116 @@ POST 回来的统计）：进厅时 `pcSeq=1 / vW=0`（厅里确实只有语音�
 
 ---
 
+## 6.101 声音档、横屏分栏、以及"回声消除到底开没开"（2026-09-26 第三轮）
+
+用户这轮提了四件事，其中两件在动手前必须先量清楚，否则做出来的是假功能。
+
+**1）声音三档，默认只有视频声**（`VoiceMode`）
+
+| 档 | 画面 | 房主麦克风 | 房主听不听得到观众 |
+|---|---|---|---|
+| 只有视频声（默认） | 传 | **对方本地播原声时自动关**；屏幕分享时开着 | 不听（下行静音） |
+| 视频声 + 连麦 | 传 | 一直开 | 听 |
+| 只连麦 | 不传 | 开 | 听 |
+
+必须先说清的一条事实：**"把手机里正在放的声音原样传过去"这套 SDK 做不到**。
+本机 AAR 的 `JavaAudioDeviceModule` 只有读样本的回调（`setSamplesReadyCallback` /
+`setAudioBufferCallback` / `setPlaybackSamplesReadyCallback`），**没有往采集里写样本的入口**
+（javap 过，没有 `createAudioRecordInputChannel` 之类），`AudioSource` 也没有自定义处理器。
+所以"手机声"在整屏分享时只能靠外放灌麦克风 —— 那一档**绝对不能关麦**，关了观众就是全哑。
+反过来在放映厅里观众拿的是原生音轨，房主再传一遍外放就是迟到半拍的第二份声音，
+那正是用户听到的"回声"，所以收到 ok 回执之后要自动关。两条判断都做成纯函数
+（`hostMicNeeded` / `hostHearsViewer`）钉在 `VoiceModeTest` 里。
+
+房主侧"听不到观众"用的是 `setSpeakerMute`：它只清零 libwebrtc 自己那条下行 AudioTrack，
+房主外放的影片声不受影响。中途改档不需要重新协商，所以 m-line 保持 sendrecv。
+
+**2）回声消除：以前那句"默认就会启用 AEC/NS/AGC"是猜的，测完发现默认是"谁都不开"**
+
+三条实测出处（都在 `io.github.webrtc-sdk:android:150.7871.01` 里）：
+
+· 约束键名：`libjingle_peerconnection_so.so` 里能找到的音频处理约束只有
+  `echoCancellationMode` / `noiseSuppressionMode` / `autoGainControlMode`
+  （取值串 `unspecified` / `disabled` / `platform` / `software`）和老的 `goog*` 一族；
+  **裸的 `echoCancellation` 不在**（它是 `echoCancellationMode` 的前缀，链接器只合并公共
+  后缀，真被引用就一定会单独出现）。所以写 `echoCancellation=true` 这种"网上都这么写"
+  的键，在这版上是一个字都不生效。
+· `WebRtcAudioRecord.shouldUsePlatformEffect(...)` 反编译出来是
+  `requested && isSupported && mode != SOFTWARE` ⇒ 只有**明确点名 software** 才让软件 AEC 上位。
+  空约束 = `unspecified` ⇒ 设备没有硬件 AEC 时（模拟器、一部分机型）**两条路都没开**。
+  真机报 `hwAec=true`、模拟器报 `false`，正好是这条分界线。
+· 同一份 .so 里的校验语句：`Platform echo cancellation cannot be combined with software
+  noise suppression`、`Software fallback is disabled by platform mode.`
+  ⇒ AEC 与 NS 必须同一档；一旦要了 platform 而设备起不来，软件兜底是被关掉的。
+
+于是规则改成**按设备二选一**（`RtcEngine.audioSourceConstraints()`）：有硬件 AEC 就交给它
+（不加约束，保持 unspecified + ADM 的硬件请求），没有就显式要 `software` 的 AEC3 + NS。
+AGC 一律不点名 —— 房主外放里是影片声，自动增益会把整段影片按"说话"来泵音量。
+"支持了"这三个字用 `getPlatformAudioProcessingState()` 打进 logcat 自证：
+
+```
+RtcEngine: libwebrtc initialized; hwAec=false hwNs=false
+RtcEngine: 音频源约束：无硬件 AEC → 显式启用软件 AEC3 + NS
+RtcEngine: 平台音频处理[host] INDEPENDENT AEC{available=false requested=false active=null} ...
+CallSession: 声音档[建轨] VideoOnly 对方本地播=false 手动静音=false 覆盖=false → 麦克风=true 房主听对方=false
+```
+
+用户明确说"只需要支持，暂时不用测试"，所以**耳朵那关仍然没验**（任务 #10 留着）。
+
+**3）"App 一打开就是横屏"有两条来路，都堵上了**
+
+· 观众侧那颗「方向：跟随/竖屏/横屏」的选择被写进 SharedPreferences，跨会话、跨重启都活着；
+  而 `ViewerSession` 是进程级单例，那场观看没散之前回到首页、甚至重开 App 都停在横屏，
+  偏偏**能改它的按钮只在观看界面里**。实测证据：`t2view` 的 `t2.xml` 里躺着
+  `viewer_orientation=Landscape`（我自己截图时点的）。改成只管这一场，散场回"跟随"，
+  启动时顺手把这个已经没人读的键清掉。
+· 交还方向不能只写 `SCREEN_ORIENTATION_UNSPECIFIED`：关掉自动旋转的手机上系统不再问传感器，
+  用的是"最后一次生效的方向"，于是为看横屏片做的那一转会一直留着。现在显式要回
+  `Settings.System.user_rotation` 那一档（自动旋转开着时才用 UNSPECIFIED）。
+
+**4）横屏放映厅改成左右分栏**
+
+2400×1080 上纵向只有约 390dp，竖屏那套"顶栏 + 地址行 + 胶囊行 + 底部卡"摞下来，
+留给画面的权重只剩一两百 dp —— 一块横屏手机放不了一个横屏视频，本末倒置。
+现在画面在左（吃掉屏宽减去 320dp），地址/动作/状态卡在右栏。
+状态卡用 `weight(1f, fill = false)`：给满权重实测是一块下面全空的黑玻璃，
+完全不给又会在展开嗅探时把最后一行顶出屏幕外没得滚。
+三颗测试胶囊（换一条流/本地测试页/HLS 测试流）搬进「展开嗅探」—— 它们是量具，
+不该和「开始放映」抢同一行；依赖它们的 `drive_cinema_*.py` 改成先点面板。
+
+**5）这一轮真抓到的一个缺陷：「分享 → 双人票」只开屏、不开厅**
+
+`CinemaScreen` 的注释写着"非空就直接开厅放这一页"，代码里却只置了 `showCinema = true`：
+没有信令、没有邀请链接、卡片上"复制邀请"那一行根本不出现，而顶栏还写着"厅已开 · 等对方进来"。
+实测 `.dev/title-01-host.png`：从分享入口进来嗅到了 2 条可播地址，可观众那边连门都没有。
+改成走 `openCinema()`（`enterCinema`），并且先进这一屏再要权限，别把用户递进来的链接吞掉。
+
+顺带一条同源的：`LaunchedEffect(initialUrl)` 只以 URL 为 key，**同一条链接第二次递进来
+什么都不会发生** —— 而人重复分享，多半正是因为第一次没成。加了 `cinemaSeq` 一起当 key，
+`handledShare == u -> 重新加载这一页` 那句原本就写好的分支这才第一次真的跑到。
+
+**6）量具这一轮坏了三次，其中一次让我"修"了一个不存在的缺陷**
+
+· `check_cinema_title.py` 第一版取 CDP 的第一个 page target，而 Edge 会插一个
+  `edge://sync-confirmation-dialog/` 的同步推广页排在前面 —— 量的一直是那个弹窗，
+  `ws/cine` 全空，于是我"实测"到"晚进厅的观众拿不到放映状态"，还为此加了一次广播。
+  那个缺陷**不存在**：`init` 里 `viewerConnected` 一跳真就推 current（22ab325 修的就是它），
+  而 `SignalHub.detach` 会把这一位落回 false，连信令重连都覆盖到。
+  判据改成"认 URL 不认位置"之后，没带我那两处的代码一次就 PASS。重复广播已撤回（167b9e9）。
+· `Cdp.eval` 回的是 `{"value": ...}` 而不是裸字符串，按裸字符串解会永远得到空 dict ——
+  和上一条合起来把"读不到"伪装成了"产品坏了"。
+· 放映厅卡片那行标题改从 logcat 取：按"含 ` · ` 且不含 http"在 uiautomator 里挑节点，
+  会挑中顶栏的"厅已开 · 等对方进来"（第一版就是这么把标题读错的）。
+  另外 `audit_app_layout.py` 的 SQUISHED 加了绝对下限，否则"只有视频声"这种
+  故意做小（10.5sp）的辅助行会被报成被裁，而截图上它清清楚楚是一整行。
+
+**验收**：`scripts/check_cinema_title.py` PASS —— 房主卡片与观众放映条逐字相同
+（`test-streams.mux.dev · 193039199_mp4_h264`），换一条流之后两边同时变成
+`test-streams.mux.dev · master`；横屏放映厅 `audit_app_layout.py` 零越界零压字
+（未选片 / 放映中 / 展开嗅探三态各量一次）；71 条单测全绿。
+没验的：App 内观众端那条镜像条（t2view 被另一个 agent 占着，它绑的是同一个
+`cinema.track.title` 字段）、真机横屏、以及回声的人耳效果。
+
 ## 7. P0 实测结果（2026-09-25，模拟器 t2test + 真实站点）
 
 跑法：`scripts/drive_cinema_probe.py emulator-5556 <url>` —— 用**真实分享意图**
