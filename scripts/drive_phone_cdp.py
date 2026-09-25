@@ -113,6 +113,31 @@ class Cdp:
             pass
 
 
+# 几何审计：可见元素两两重叠、越出视界的都算问题。
+# 手机上实测抓到过一颗徽章压在顶栏右半边 118x28 个像素上（两行字叠在一起）——
+# 这类缺陷结构判据看不出来，只有把矩形量出来才会现形。
+AUDIT_JS = r"""(() => {
+  const R = s => { const e = document.querySelector(s); if (!e) return null;
+    const b = e.getBoundingClientRect();
+    return { s, x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height),
+      hide: e.classList.contains('hide'), out: e.classList.contains('chrome-out') }; };
+  const all = '#topBar,#cineBar,#ctlBar,#watchBar,#lvBadge,#hud,#panel'.split(',')
+    .map(x => x.trim()).map(R).filter(Boolean);
+  const vis = all.filter(e => !e.hide && !e.out);
+  const overlap = [];
+  for (let i = 0; i < vis.length; i++) for (let j = i + 1; j < vis.length; j++) {
+    const a = vis[i], b = vis[j];
+    const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+    const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+    if (ox > 2 && oy > 2) overlap.push(a.s + '×' + b.s + ' ' + ox + 'x' + oy);
+  }
+  const off = vis.filter(e => e.x < 0 || e.y < 0 || e.x + e.w > innerWidth + 1 || e.y + e.h > innerHeight + 1)
+    .map(e => e.s);
+  return JSON.stringify({ vp: [innerWidth, innerHeight],
+    els: vis.map(e => e.s + ' ' + e.x + ',' + e.y + ' ' + e.w + 'x' + e.h),
+    hidden: all.filter(e => e.hide || e.out).map(e => e.s), overlap, offscreen: off });
+})()"""
+
 RECT_JS = """(sel) => {
   const out = [];
   for (const s of sel.split(',')) {
@@ -132,7 +157,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--serial", default="emulator-5558")
     ap.add_argument("--url-needle", default=None)
-    ap.add_argument("cmd", choices=["pages", "url", "title", "rect", "click", "eval"])
+    ap.add_argument("cmd", choices=["pages", "url", "title", "rect", "click", "eval", "audit"])
     ap.add_argument("arg", nargs="?", default="#lv")
     a = ap.parse_args()
 
@@ -164,6 +189,8 @@ def main():
             x, y = json.loads(pos)
             cdp.click_at(x, y)
             print(f"已点击 {a.arg} @ ({x:.0f},{y:.0f})")
+        elif a.cmd == "audit":
+            print(cdp.eval(AUDIT_JS)["value"])
         else:
             print(cdp.eval(a.arg, await_promise=True))
     finally:
