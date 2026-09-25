@@ -42,6 +42,15 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- 递链接入口：在任何浏览器里点「分享 → 双人票」，链接直接落进放映厅。
+                 这条是 R1 的正解 —— 不去改造浏览器，也不要求用户换找片习惯，
+                 只是把"复制→切 App→粘贴"这三步换成一次系统分享。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
         </activity>
 
         <!-- Android 14+：必须声明 mediaProjection 类型，且要在拿到授权之后、

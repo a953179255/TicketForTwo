@@ -41,7 +41,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import com.kyant.backdrop.backdrops.LayerBackdrop
+import com.ticketfortwo.app.cinema.CinemaIntents
+import com.ticketfortwo.app.cinema.extractSharedUrl
 import com.ticketfortwo.app.ui.app.CallScreen
+import com.ticketfortwo.app.ui.app.CinemaScreen
 import com.ticketfortwo.app.ui.app.resetActivityBrightness
 import android.app.PictureInPictureParams
 import android.app.PictureInPictureUiState
@@ -97,6 +100,19 @@ class MainActivity : ComponentActivity() {
     //
     // 房主侧刻意不做：他这块屏正在被分享，小窗里放实时画面就是上一轮判定过的套娃，
     // 放 App 界面又挡住"分享跟着你走"这件事 —— 两个选择都是错的，所以不选。
+    /**
+     * 从别的 App「分享 → 双人票」递进来的链接。
+     *
+     * `launchMode=singleTop` 下第二次分享只会走 [onNewIntent]，不会重走 onCreate，
+     * 所以这里必须 `setIntent` —— 否则 Compose 侧读 `activity.intent` 永远读到第一次那条，
+     * 表现为"第二次分享没反应，但链接确实发出去了"。
+     */
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        CinemaIntents.push(extractSharedUrl(intent))
+    }
+
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         val watching = ViewerSession.state.value is ViewerSession.State.Connected
@@ -162,6 +178,9 @@ private sealed interface Page {
     object ColorLab : Page
     object GlassLab : Page
     object Watch : Page
+
+    /** 放映厅：厅先开、人先进来、片子后选。开发期从首页胶囊进入。 */
+    object Cinema : Page
     object Consent : Page
     data class ViewerJoin(val error: String?) : Page
     data class ViewerPreparing(val note: String) : Page
@@ -220,6 +239,24 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     var viewerIntent by remember { mutableStateOf(false) }
     /** 房主打开内置浏览器"一起看"。分享期间的一个覆盖层，不是独立会话。 */
     var showWatch by remember { mutableStateOf(false) }
+    /** 放映厅（内测入口）：不依赖是否正在分享，所以是一个独立的页面意图。 */
+    var showCinema by remember { mutableStateOf(false) }
+    /** 从「分享 → 双人票」递进来的链接；非空就直接开厅放这一页。 */
+    val sharedUrl by CinemaIntents.pending.collectAsState()
+    var cinemaUrl by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        // 冷启动时 onNewIntent 不会走，只能从 Activity 手里那份 intent 捞
+        CinemaIntents.fromActivity(context as? android.app.Activity)?.let {
+            cinemaUrl = it
+            showCinema = true
+        }
+    }
+    LaunchedEffect(sharedUrl) {
+        val u = sharedUrl ?: return@LaunchedEffect
+        cinemaUrl = u
+        showCinema = true
+        CinemaIntents.consume()
+    }
     var paste by remember { mutableStateOf("") }
     var viewerError by remember { mutableStateOf<String?>(null) }
 
@@ -420,6 +457,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     BackHandler(enabled = showSettings) { showSettings = false }
     BackHandler(enabled = showGlassLab) { showGlassLab = false; showSettings = true }
     BackHandler(enabled = showWatch) { showWatch = false }
+    BackHandler(enabled = showCinema) { showCinema = false }
     BackHandler(enabled = showColorLab) { showColorLab = false; showSettings = true }
 
     // 首页在两个分支里都要画（角色未定 / 兜底）。写成一处，避免以后改了其一忘了其二。
@@ -432,6 +470,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
             },
             onJoinViewer = { viewerIntent = true; paste = ""; viewerError = null },
             onSettings = { showSettings = true },
+            onOpenCinema = { showCinema = true },
             quality = quality,
             lastSummary = lastConnected,
         )
@@ -445,6 +484,9 @@ private fun AppRouter(backdrop: LayerBackdrop) {
 
         // 分享设置：纯 UI 意图，和授权指引一样排在最前面。
         showSettings -> Page.Settings
+
+        // 放映厅：独立的页面意图，不要求"正在分享"，所以排在 Watch 前面。
+        showCinema -> Page.Cinema
 
         // 一起看：分享期间的覆盖层，盖在会话屏之上（它成立的前提就是"我还在分享"）
         showWatch -> Page.Watch
@@ -511,6 +553,12 @@ private fun AppRouter(backdrop: LayerBackdrop) {
         when (p) {
             Page.ColorLab -> ColorLabScreen(backdrop = backdrop, onBack = { showColorLab = false })
             Page.GlassLab -> GlassLabScreen(backdrop = backdrop, onBack = { showGlassLab = false })
+
+            Page.Cinema -> CinemaScreen(
+                backdrop = backdrop,
+                initialUrl = cinemaUrl,
+                onBack = { showCinema = false },
+            )
 
             Page.Watch -> WatchTogetherScreen(
                 backdrop = backdrop,

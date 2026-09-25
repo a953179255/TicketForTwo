@@ -226,14 +226,44 @@ fork 一个 Chromium 换来的主要是 DRM 和站点兼容性 —— 而 **DRM 
 
 ---
 
-## 7. 未决
+## 7. P0 实测结果（2026-09-25，模拟器 t2test + 真实站点）
+
+跑法：`scripts/drive_cinema_probe.py emulator-5556 <url>` —— 用**真实分享意图**
+（`am start -a SEND -t text/plain --es android.intent.extra.TEXT …`）打开放映厅，
+14 秒后从 logcat 捞 `Cinema` 标签的三类读数。
+
+| 测的东西 | 结果 | 结论 |
+| --- | --- | --- |
+| 请求流嗅探（HLS） | Mux 测试流：抓到 `x36xhzz.m3u8` + 一条变体 `.m3u8` | 清单类能抓到 |
+| 请求流嗅探（真站点） | **B 站 `BV1GJ411x7h7`：抓到 `upos-sz-…bilivideo.com/…_da2-1-16.mp4?e=…` 一条直链** | **S 档成立**：不需要服务端 provider，自家 WebView 就能拿到观众可播的地址 |
+| 页面自述 | `blob=false dur=634s size=1920x1088` / `640×360·60s·直链` | `currentSrc` 是真实 URL 的情况比预期多（Android WebView 原生放 HLS） |
+| **EME / DRM** | `api=true` 但握手 `NotSupportedError: Unsupported keySystem` | **API 在、DRM 栈不在** —— MDN 那句"WebView 自 v43 支持"只说了前半句；Netflix 那类确定走不了 S/A，必须留 B 档 |
+| 递链接入口 | `ACTION_SEND` 冷启动与 singleTop 二次分享都接得住 | R1 的入口成立 |
+
+顺带抓到一个真 bug（已修 + 加测）：B 站埋点 `data.bilibili.com/log/web?…|…_da2-1-16.mp4|quit`
+把片名塞在查询串里，整条 URL 匹配后缀会把它当成"单文件片源"端给房主 ——
+房主一点，观众必然放不出来。改成**只在路径上看后缀** + 埋点域名黑名单。
+修完同一条 B 站地址的候选数从 2 → 1，且留下的那条是真的。
+
+**还没量到的**：MSE 站点（`currentSrc=blob:`）的覆盖率、需要登录的站点、以及
+"抓到的地址观众那边直接放"的成率（B 站这类直链绑 Referer/UA/IP，很可能要 A 档才成 —— 下一步就量这个）。
+`https://www.w3schools.com/html/mov_bbb.html` 那次抓到 0 条，**原因未定**（页面可能根本没加载出来，
+不是嗅探失败），别当成反例。
+
+单测：`scripts/run_unit_tests_ascii.sh` → 48 条全绿。
+⚠ 为什么绕这一圈：项目在 `G:\工作台\`（中文路径）下，Gradle 测试工作进程能启动、
+JUnit 能加载，但**每个测试类都 ClassNotFoundException**（连既有全绿的用例也一样），
+`clean` / `--no-configuration-cache` / 换 JDK 21 都救不回来；同一份代码复制到 ASCII 路径就正常跑。
+**这是量具坏了，不是代码坏了** —— 别把它读成"我的改动把测试搞崩了"。
+
+## 8. 其余未决
 
 - MSE 站点抓到的往往是**分片清单 + 一堆 header 要求**，S 档能覆盖的站点比例要先量一遍再承诺（P0-1 的产出）。
 - A 档中继会不会被站点判定为异常流量（同一 Cookie 换 IP 取片）—— 需要实测，且这是"能救回来多少"的上限。
 - 递链接进来后，如果那一页需要登录而观众没登录：走 A 档（借房主的会话）还是提示"你登录一下"，产品上还没定。
 - 跨网真机复验仍然欠着（手机在忙）；S 档第一次真实跑通，最好就在真机 + 真实站点上做。
 
-## 8. 已定的与待拍的
+## 9. 已定的与待拍的
 
 **已定（用户 2026-09-25 裁定，不再问）**
 

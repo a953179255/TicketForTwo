@@ -74,6 +74,7 @@ fun HomeScreen(
     onStart: () -> Unit,
     onJoinViewer: () -> Unit,
     onSettings: () -> Unit,
+    onOpenCinema: () -> Unit,
     quality: ShareQuality,
     lastSummary: String?,
 ) {
@@ -144,11 +145,20 @@ fun HomeScreen(
             }
         }
 
-        // 分享设置（原样保留：玻璃胶囊按钮）。
+        // 底部两颗胶囊：分享设置 + 放映厅。
         // 外面包一层 Column：这样它是"最后一个子项"，不再额外产生 PageScaffold 的元素间距，
         // 否则 160dp 的大圆会把这一屏整体撑出屏幕（实测底部胶囊会被裁掉半截）。
         Column {
-            PrimaryPill("分享设置", onSettings, backdrop, Modifier.fillMaxWidth(), filled = false)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                PrimaryPill(
+                    "放映厅", onOpenCinema, backdrop, Modifier.weight(1f),
+                    filled = false,
+                )
+                PrimaryPill(
+                    "分享设置", onSettings, backdrop, Modifier.weight(1f),
+                    filled = false,
+                )
+            }
             Spacer(Modifier.height(10.dp))
         }
     }
