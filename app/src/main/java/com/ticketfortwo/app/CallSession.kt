@@ -439,7 +439,13 @@ object CallSession {
         if (_role.value != Role.Host) return
         val obj = runCatching { JSONObject(text) }.getOrNull() ?: return
         when (obj.optString("t")) {
-            "hello" -> onViewerJoined()
+            "hello" -> {
+                // 观众那边的"能不能放"三要素。它只进日志不进界面：
+                // 现场出问题时，这一行是唯一能区分"流坏了"和"对方内核没播放器"的证据。
+                val env = obj.optString("env")
+                if (env.isNotEmpty()) Log.i(TAG, "VIEWER_ENV $env")
+                onViewerJoined()
+            }
 
             // 观众开麦克风时会主动发一轮 offer（谁改媒体谁发起）。
             // 这里的 acceptOffer 会顺着 createAnswer → onLocalDescription(Answer)

@@ -181,7 +181,7 @@ button.primary{background:var(--accent);color:#fff;border:0;border-radius:var(--
      实测教训：光把库打进 assets 并加一条路由**不等于它在页面上可用**——
      没有这个 script 标签时 window.Hls 一直是 undefined，Chrome 靠原生 HLS 照样能放，
      于是"看起来是好的"，换 Firefox 才会当场暴露。 -->
-<script src="/hls.min.js"></script>
+<script src="/hls.min.js" onerror="window.__hlsFail=1"></script>
 <script>
 /*
  * 观众端。与旧版最大的区别：**不再需要把链接发回给房主**。
@@ -263,7 +263,7 @@ function openSocket(){
     return;
   }
 
-  ws.onopen = () => { send({ t: 'hello', role: 'viewer' }); };
+  ws.onopen = () => { send({ t: 'hello', role: 'viewer', env: viewerEnv() }); };
   ws.onmessage = ev => { onMessage(ev.data); };
   ws.onclose = () => {
     if (closedByUs) return;
@@ -276,7 +276,22 @@ function openSocket(){
 }
 
 /** 信令通道此刻是否还开着。ICE 失败时用它分诊：通道都没了，媒体失败是必然结果。 */
+/** 信令通道此刻是否还开着。ICE 失败时用它分诊：通道都没了，媒体失败是必然结果。 */
 function signalingAlive(){ return !!ws && ws.readyState === 1; }
+
+/* 观众这边的"能不能放"取决于三件事：hls.js 到没到、这台内核支不支持 MSE、
+   原生 HLS 报的是 probably 还是 maybe。手机上实测到 hls.js 没到位、
+   而原生那条路根本不接流 —— 但房主那边只看得见一句"这条流一直没出画面"。
+   所以握手时把这三项一起送过去，落到房主的日志里（VIEWER_ENV）。 */
+function viewerEnv(){
+  let native = '-';
+  try { native = document.createElement('video').canPlayType('application/vnd.apple.mpegurl') || '-'; } catch (e) { native = '?'; }
+  return 'hls=' + (window.Hls ? 1 : 0) +
+    '/fail=' + (window.__hlsFail ? 1 : 0) +
+    '/mse=' + (window.MediaSource ? 1 : 0) +
+    '/native=' + native +
+    '/ua=' + String(navigator.userAgent || '').replace(/\s+/g, ' ').slice(0, 56);
+}
 
 function onMessage(text){
   let m = null;
@@ -727,7 +742,7 @@ function fmtClock(ms){
    也不再有两层 UI。取不到（跨域/签名过期/要会员）就撤掉这一层，
    退回看屏幕流，绝不留一个黑屏给观众。 */
 let cine = null, cineHls = null, cineApplyUntil = 0, cineTimer = null;
-let cineReady = false, cineWatch = null, cineAwaitTap = false, cineNeedSound = false;
+let cineReady = false, cineWatch = null, cineAwaitTap = false, cineNeedSound = false, cineLastErr = '';
 const lv = document.getElementById('lv'), lvBadge = document.getElementById('lvBadge'),
       cineBar = document.getElementById('cineBar');
 
@@ -784,6 +799,10 @@ function loadLocal(st) {
         cineHls.attachMedia(lv);
         watchCineProgress();
         cineHls.on(Hls.Events.ERROR, (e, d) => {
+          // 非致命错误也要留痕：手机上实测到一条流既不报致命错、也不出首帧，
+          // 回执只有"一直没出画面"这一句，谁都看不出是卡在哪一步。
+          if (d && !d.fatal) cineLastErr = (d.details || d.type || 'err');
+          if (d && !d.fatal && d.response) cineLastErr += '@' + d.response.code;
           if (!d || !d.fatal) return;
           /* 把 HTTP 状态一起报回去：403/404 是防盗链或地址过期，0/-1 是
              "请求发出去了但浏览器不给读"（CORS：CDN 没发 Access-Control-Allow-Origin）。
@@ -794,9 +813,17 @@ function loadLocal(st) {
           cineDown('这条流在观众这边取不到：' + (d.details || d.type) +
             (code != null ? '(' + code + ')' : ''), true, 'stream');
         });
-      } else if (lv.canPlayType('application/vnd.apple.mpegurl')) {
-        lv.src = st.url;                     // Safari 原生能放 m3u8
-      } else { cineDown('这个浏览器放不了 m3u8', true, 'unsupported'); return; }
+      } else if (lv.canPlayType('application/vnd.apple.mpegurl') === 'probably') {
+        // 只认 "probably"：手机上实测到 Chrome 对 mpegurl 回的是 "maybe"，
+        // 跟着把 src 交上去 → 平台播放器根本不接（networkState=3 无源），
+        // 最后报成一句含糊的"这条流一直没出画面"。宁可在这里说清。
+        lv.src = st.url;                     // Safari / 原生 HLS
+      } else {
+        cineDown(window.Hls ? '这台设备不支持 MSE 播放'
+                            : '播放器脚本没加载成功（这条隧道的网络不稳）',
+                 true, window.Hls ? 'unsupported' : 'hlsjs');
+        return;
+      }
     } else {
       lv.src = st.url;
     }
@@ -875,15 +902,29 @@ function stopLocalPlayer() {
   const pill = $('cineSound'); if (pill) pill.classList.add('hide');
 }
 
+/* 失败时要带上"卡在哪一步"的读数。timeout 这一类尤其需要：hls.js 不报致命错
+   也可能是清单没到、分片在重试、或者 worker 起不来 —— 只写"没出画面"，
+   房主和我们都只能猜。 */
+function cineDiag(){
+  const bits = ['rs' + lv.readyState, 'ns' + lv.networkState,
+                'hls' + (cineHls ? 1 : 0), 'src' + (lv.currentSrc ? 1 : 0)];
+  if (cineLastErr) bits.push(cineLastErr);
+  return bits.join('/');
+}
+
 function cineDown(reason, failed, code, ver) {
   const v = ver != null ? ver : (cine ? cine.ver : -1);
+  /* 读数要在拆播放器**之前**取。上一版把 cineDiag() 放在 ack 那一行，
+     而 stopLocalPlayer() 已经把 cineHls 置空、src 也撤了 —— 于是报出来的
+     "hls0/src0" 是我自己拆出来的现场，不是故障现场（量具自己撒了谎）。 */
+  const diag = cineDiag();
   stopLocalPlayer();
   paintCtlForCine(false);
   if (cineTimer) { clearInterval(cineTimer); cineTimer = null; }
   cine = null;
   cineBar.classList.add('hide');
   /* 收厅不是失败，别把它报成"对方放不出来" —— 那样房主会以为自己的选路有问题。 */
-  if (failed !== false) cineAck(false, code, reason || 'unknown', v);
+  if (failed !== false) cineAck(false, code, (reason || 'unknown') + '（' + diag + '）', v);
   $('topRight').textContent = gotVideo ? '画面已到' : '语音已通';
   if (reason) cineNote(reason + ' —— 退回看对方屏幕');
 }
@@ -1304,6 +1345,16 @@ function setBright(b){ activePlayer().style.filter = 'brightness(' + b.toFixed(2
   stage.addEventListener('pointerup', end, { passive: true });
   stage.addEventListener('pointercancel', () => { g = null; }, { passive: true });
 })();
+
+/* hls.js 是放映厅 S 档唯一的取流方式，413KB 走的是房主手机现场起的那条隧道 ——
+   手机上实测到过它没加载成功、于是整条 S 档静默退化成"看不了"。
+   失败过一次就再要一次（浏览器自己有缓存，重试几乎不花流量）。 */
+if (window.__hlsFail && !window.Hls) {
+  const again = document.createElement('script');
+  again.src = '/hls.min.js';
+  again.async = true;
+  document.head.appendChild(again);
+}
 
 /* 演示模式不启动信令：没有 ?k= 本来也连不上，一路报错的卡片会盖住要检查的画面 */
 if (!DEMO) boot();
