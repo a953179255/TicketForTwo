@@ -357,8 +357,29 @@ function enterVoiceModeIfNeeded(){
   if (!pc || pc.connectionState !== 'connected' || gotVideo) return;
   $('topBar').classList.remove('hide');
   $('ctlBar').classList.remove('hide');
-  $('topRight').textContent = '语音模式';
-  if (video.paused) askToPlay('语音模式', '对方只分享了声音，没有画面。点下面开始收听。');
+  $('topRight').textContent = '语音已通';
+  /* 判"要不要给等候卡"不能看 video.paused —— 一条视频轨都没到的时候
+     `<video>` 上根本没有源，paused 是 false，于是观众只看到一片黑，
+     什么提示都没有。要看的是"有没有收到画面"。 */
+  if (!gotVideo) askToPlay('厅已经进来了',
+    '语音已经通了，可以直接聊。对方还没选片 —— 他按下「开始放映」之后，' +
+    '这条片源会在你这个浏览器里本地播（原生画质）。点下面先让声音出来。');
+}
+
+/**
+ * 本地播同一条片源时的自动播放兜底。
+ *
+ * 和屏幕流那条不一样：这条 `<video>` **不静音**（观众要听原声），
+ * 所以浏览器可能直接拒 `play()`。没有这个入口的话，观众会看到一张
+ * 停在第 0 秒的封面，以为放映坏了。
+ */
+function askCinePlay(){
+  show(`<h1>就差一下点击</h1>
+    <p class="muted">浏览器不允许网页自己放出声音。点下面开始，进度会自动对齐到对方的位置。</p>
+    <button class="primary" id="btnCine">开始播放</button>`);
+  $('btnCine').onclick = () => lv.play().then(hidePanel).catch(() => {
+    show('<h1>还是没放出来</h1><p class="muted">这个浏览器拦得比较狠。让对方改用「分享屏幕」也能看。</p>');
+  });
 }
 
 /** 自动播放被浏览器拦下时的兜底入口（有声播放必须有用户手势）。 */
@@ -597,6 +618,9 @@ function onCinema(f) {
   cine = st;
   cineBar.classList.remove('hide');
   document.getElementById('watchBar').classList.add('hide');  // 一次只留一条横条
+  /* 顶栏那句"语音已通"是等候期的话；开始放映之后它还挂着，
+     观众会以为仍然没画面。状态换了，措辞也要跟着换。 */
+  $('topRight').textContent = '在一起看';
   if (switched) loadLocal(st); else syncLocal();
   paintCine();
 }
@@ -623,7 +647,11 @@ function loadLocal(st) {
       lv.src = st.url;
     }
   } catch (t) { cineDown('起播失败'); return; }
-  lv.play().catch(() => {});
+  lv.play().catch(() => { askCinePlay(); });
+  // 等候屏那张卡得收掉，不然它盖在刚接上的片源上面
+  hidePanel();
+  $('topBar').classList.remove('hide');
+  $('ctlBar').classList.remove('hide');
   if (!cineTimer) cineTimer = setInterval(syncLocal, 1000);
   /* 看门狗：光等 `error` 事件不够 —— 签名过期、被 CDN 静默限速、需要会员的站点，
      往往是不报错、就是不出画面。8 秒没首帧就自己退回屏幕流，
@@ -647,6 +675,9 @@ function cineDown(reason) {
   if (cineTimer) { clearInterval(cineTimer); cineTimer = null; }
   cine = null;
   cineBar.classList.add('hide');
+  /* 退回屏幕流时把顶栏那句还回去：不然"在一起看"会一直挂着，
+     而此刻对方其实已经没收厅就是在放片，只是这条流你这边放不了。 */
+  $('topRight').textContent = gotVideo ? '画面已到' : '语音已通';
   if (reason) cineNote(reason + ' —— 退回看对方屏幕');
 }
 
