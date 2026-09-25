@@ -57,6 +57,7 @@ import com.ticketfortwo.app.BuildConfig
 import com.ticketfortwo.app.ShareQuality
 import com.ticketfortwo.app.VoiceMode
 import com.ticketfortwo.app.ui.glass.GlassCard
+import com.ticketfortwo.app.ui.glass.GlassTextButton
 import com.ticketfortwo.app.ui.theme.GlassDimens
 import com.ticketfortwo.app.ui.theme.Ink
 import java.util.Locale
@@ -78,7 +79,6 @@ fun HomeScreen(
     onStart: () -> Unit,
     onJoinViewer: () -> Unit,
     onSettings: () -> Unit,
-    onOpenCinema: () -> Unit,
     quality: ShareQuality,
     lastSummary: String?,
 ) {
@@ -134,11 +134,13 @@ fun HomeScreen(
                             modifier = Modifier.size(34.dp),
                         )
                     },
-                label = "分享屏幕",
-                // 这句要说的是"**对方**那边零门槛"，不是"我自己也免安装"（旧文案"浏览器免安装"
-                // 就是在这儿误导的：分享端必须装 App）。
-                // 现在观看有两条路（App 内看 / 浏览器看），所以不再点名浏览器，只说结果。
-                sub = "发条链接，朋友就能看",
+                label = "分享画面",
+                /* 这颗圆原来叫「分享屏幕」，而「放映厅」是首页底下另一颗胶囊 ——
+                   可这两件事其实是同一件事：**把画面给出去**。分成两个入口，
+                   用户就得先懂"投屏"和"放映厅"的区别才点得对（点了屏幕分享才发现
+                   对方在看他翻相册）。现在收成一个入口，进去再选（见 ShareKindScreen）。
+                   名字也跟着改成"分享画面"：它承诺的是结果，不是一种技术。 */
+                sub = "选屏幕，或选一部片",
                 subOutside = subOutside,
                 )
             }
@@ -222,21 +224,142 @@ fun HomeScreen(
             }
         }
 
-        // 底部两颗胶囊：分享设置 + 放映厅。
-        // 外面包一层 Column：这样它是"最后一个子项"，不再额外产生 PageScaffold 的元素间距，
-        // 否则 160dp 的大圆会把这一屏整体撑出屏幕（实测底部胶囊会被裁掉半截）。
+        // 底部只留「分享设置」一颗：放映厅不再是首页的并列入口了 ——
+        // 它和"分享屏幕"是同一件事（把画面给出去）的两个选项，收在绿色那颗圆后面。
+        // 会话进行中仍然能直接进厅（CallScreen 上有那颗入口），这里收掉不会走进死路。
         Column {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                PrimaryPill(
-                    "放映厅", onOpenCinema, backdrop, Modifier.weight(1f),
-                    filled = false,
-                )
-                PrimaryPill(
-                    "分享设置", onSettings, backdrop, Modifier.weight(1f),
-                    filled = false,
-                )
-            }
+            PrimaryPill("分享设置", onSettings, backdrop, Modifier.fillMaxWidth(), filled = false)
             Spacer(Modifier.height(10.dp))
+        }
+    }
+}
+
+// ─────────────────── 首页 · 分享画面：选一种给出去 ───────────────────
+
+/**
+ * 「分享画面」的第二步：**给什么**。
+ *
+ * 原来首页上「分享屏幕」和「放映厅」是并列的两个入口，而这俩其实是同一件事
+ * （把画面给出去）的两条路。并列的后果是：用户点「分享屏幕」之前得先想明白
+ * "我要对方看我翻相册，还是看一部片子" —— 而多数人根本不知道这两者的区别，
+ * 于是点了投屏、对方就跟着看他切了三回微信。
+ *
+ * 收成一个入口之后，这一屏负责把区别在**点之前**说清楚：
+ * 各自"对方看到什么"、各自的前置条件，以及哪一条是默认的推荐。
+ * 推荐放映厅不是偏好问题：它是原生画质、不占用房主的屏幕，
+ * 而投屏那条路要压一层系统缩放、还把房主的隐私一起播出去。
+ */
+@Composable
+fun ShareKindScreen(
+    backdrop: LayerBackdrop,
+    quality: ShareQuality,
+    onPickScreen: () -> Unit,
+    onPickCinema: () -> Unit,
+    onSettings: () -> Unit,
+    onBack: () -> Unit,
+) {
+    val cfg = LocalConfiguration.current
+    val wide = cfg.screenWidthDp > cfg.screenHeightDp
+
+    val cinemaCard = @Composable {
+        KindCard(
+            backdrop = backdrop,
+            title = "一起放一部片",
+            chip = "推荐",
+            chipTone = ChipTone.Ok,
+            body = "你挑片子，对方那台手机自己播同一条地址 —— 画质是原生的，" +
+                "你的屏幕不会被播出去，回消息、切应用都不影响他看。",
+            foot = "厅先开：先发链接给他，再选片",
+            onClick = onPickCinema,
+        )
+    }
+    val screenCard = @Composable {
+        KindCard(
+            backdrop = backdrop,
+            title = "分享我的屏幕",
+            chip = "要系统授权",
+            chipTone = ChipTone.Neutral,
+            body = "对方同步看到你手机上的一切，而且跟着你走：切应用、翻相册、打字他那边都看得见。" +
+                "适合一起逛网页、演示个东西。",
+            foot = "每次都要重新授权一次，这是系统规则",
+            onClick = onPickScreen,
+        )
+    }
+
+    /* 整页一律可滚，两张卡**不给 weight(1f)**。
+     *
+     * 第一版横屏给 Row 加了 weight(1f)，实测（.dev/kind-03-chooser.png）两张卡被压成
+     * 170dp 高的空壳、正文只剩 2px —— 这一屏存在的意义就是那句"对方会看到什么"，
+     * 它被吃掉等于没做。weight 在矮屏上分给卡片的空间比内容需要的少，
+     * 而 Compose 不会因此把页面撑开，只会裁。改成"卡片按内容长、页面不够就滚"。 */
+    PageScaffold(modifier = Modifier.verticalScroll(rememberScrollState())) {
+        Spacer(Modifier.height(GlassDimens.sp4))
+        Headline("分享画面", "先选给对方看什么。两种都可以中途换，不用重来。")
+        if (wide) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp3),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Box(Modifier.weight(1f)) { cinemaCard() }
+                Box(Modifier.weight(1f)) { screenCard() }
+            }
+        } else {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp3)) {
+                cinemaCard()
+                screenCard()
+            }
+        }
+        // 声音档放在这一屏说一次：它决定"对方听不听得到你说话"，
+        // 而多数人是在这里才第一次意识到"原来默认不连麦"。
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                "声音：${VoiceMode.label(quality.voiceMode)}",
+                fontSize = 12.sp, color = Ink.TextMid, modifier = Modifier.weight(1f),
+            )
+            GlassTextButton("去改", onClick = onSettings, backdrop = backdrop)
+        }
+        Spacer(Modifier.height(GlassDimens.sp2))
+        PrimaryPill("返回", onBack, backdrop, Modifier.fillMaxWidth(), filled = false)
+        // 底部要留够：横屏时系统那根手势白条正好压在按钮上（实测 .dev/kind-08-land.png
+        // 里「返回」和白条重叠），navigationBarsPadding 在这一屏没替我们让开。
+        Spacer(Modifier.height(34.dp))
+    }
+}
+
+/** 选择页上的一张卡：整张可点，标题 + 一句"对方看到什么" + 前置条件。 */
+@Composable
+private fun KindCard(
+    backdrop: LayerBackdrop,
+    title: String,
+    chip: String,
+    chipTone: ChipTone,
+    body: String,
+    foot: String,
+    onClick: () -> Unit,
+) {
+    GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onClick)
+                .padding(GlassDimens.sp4),
+            verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    title,
+                    fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextHi,
+                    modifier = Modifier.weight(1f),
+                )
+                StatusChip(chip, chipTone)
+            }
+            Text(body, fontSize = 12.5.sp, color = Ink.TextMid, lineHeight = 18.sp)
+            Text(foot, fontSize = 11.sp, color = Ink.TextLow, lineHeight = 15.sp)
         }
     }
 }
@@ -719,7 +842,12 @@ fun ConsentGuideScreen(backdrop: LayerBackdrop, onContinue: () -> Unit, onBack: 
                 Box(Modifier.fillMaxWidth().height(1.dp).background(Ink.TextLow.copy(alpha = 0.25f)))
                 GuideStep(
                     "2", "允许麦克风",
-                    "不开麦克风就只能分享画面，不能连麦。"
+                    /* 这句要说清"麦克风在分享屏幕时是干什么的"。以前写"不开麦克风就不能连麦"，
+                       而现在默认档是「只有视频声」—— 连麦本来就是额外开启的，
+                       这句话会让人以为"不开麦克风就白分享了"。真相是：
+                       屏幕分享时影片声唯一的通道就是外放→麦克风，不给就是**有画无声**。 */
+                    "不给也能分享画面，但对方**听不到任何声音** —— 屏幕分享时影片声只能靠你的" +
+                        "外放灌进麦克风传过去。要连麦说话同样靠它。"
                 )
             }
         }

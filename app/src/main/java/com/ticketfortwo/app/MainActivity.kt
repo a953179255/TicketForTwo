@@ -67,6 +67,7 @@ import com.ticketfortwo.app.ui.app.HomeScreen
 import com.ticketfortwo.app.ui.app.InviteScreen
 import com.ticketfortwo.app.ui.app.PreparingScreen
 import com.ticketfortwo.app.ui.app.QualitySettingsScreen
+import com.ticketfortwo.app.ui.app.ShareKindScreen
 import com.ticketfortwo.app.ui.app.TicketForTwoAppRoot
 import com.ticketfortwo.app.ui.app.ViewerJoinScreen
 import kotlinx.coroutines.Dispatchers
@@ -181,8 +182,11 @@ private sealed interface Page {
     object GlassLab : Page
     object Watch : Page
 
-    /** 放映厅：厅先开、人先进来、片子后选。开发期从首页胶囊进入。 */
+    /** 放映厅：厅先开、人先进来、片子后选。从「分享画面」那一屏进来。 */
     object Cinema : Page
+
+    /** 「分享画面」的第二步：给对方看屏幕，还是一起放一部片。 */
+    object ShareKind : Page
     object Consent : Page
     data class ViewerJoin(val error: String?) : Page
     data class ViewerPreparing(val note: String) : Page
@@ -263,6 +267,8 @@ private fun AppRouter(backdrop: LayerBackdrop) {
      *  会重建 Activity，`remember` 一丢就把人从厅里踢回首页（实测：`wm density`
      *  一改，正在放映的厅就没了，而会话其实还活着）。 */
     var showCinema by rememberSaveable { mutableStateOf(false) }
+    /** 首页绿色那颗圆点开的"给什么"选择页。用 saveable：配置变化不该把它甩回首页。 */
+    var showShareKind by rememberSaveable { mutableStateOf(false) }
     /** 从「分享 → 双人票」递进来的链接；非空就直接开厅放这一页。 */
     val sharedUrl by CinemaIntents.pending.collectAsState()
     var cinemaUrl by remember { mutableStateOf<String?>(null) }
@@ -531,6 +537,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     BackHandler(enabled = showGlassLab) { showGlassLab = false; showSettings = true }
     BackHandler(enabled = showWatch) { showWatch = false }
     BackHandler(enabled = showCinema) { showCinema = false }
+    BackHandler(enabled = showShareKind) { showShareKind = false }
     BackHandler(enabled = showColorLab) { showColorLab = false; showSettings = true }
 
     // 首页在两个分支里都要画（角色未定 / 兜底）。写成一处，避免以后改了其一忘了其二。
@@ -538,16 +545,32 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     // 所以这一屏的措辞跟着系统授权的真实状态走，而不是"进了这一屏就算在分享"。
     val hostVideo by CallSession.localVideo.collectAsState()
 
+    /**
+     * 选择页里点了「分享我的屏幕」。
+     *
+     * 顺手把「只连麦」改回带画面的档位：那一档根本不建视频轨，
+     * 用户既然明确要"分享屏幕"，点完却什么都没发生（还是只有声音）是最坏的结果。
+     * 改了要说出来 —— 悄悄改用户的设置比不改更糟。
+     */
+    fun startScreenShare() {
+        showShareKind = false
+        if (!quality.videoEnabled) {
+            val q = quality.copy(voiceMode = VoiceMode.VideoOnly)
+            quality = q
+            scope.launch(Dispatchers.IO) { ShareQuality.save(context, q) }
+            context.toast("「只连麦」不传画面：已改成「只有视频声」")
+        }
+        showConsent = true
+    }
+
     val home: @Composable () -> Unit = {
         HomeScreen(
             backdrop = backdrop,
-            onStart = {
-                // 仅语音不需要投屏指引（那两步都是给投屏授权准备的），直接进权限链。
-                if (quality.videoEnabled) showConsent = true else startHostFlow()
-            },
+            // 绿色那颗圆不再直接开投屏：先进"给对方看什么"那一屏（放映厅和屏幕分享
+            // 是同一件事的两条路，并列在首页会让人点错）。
+            onStart = { showShareKind = true },
             onJoinViewer = { viewerIntent = true; paste = ""; viewerError = null },
             onSettings = { showSettings = true },
-            onOpenCinema = { openCinema() },
             quality = quality,
             lastSummary = lastConnected,
         )
@@ -561,6 +584,9 @@ private fun AppRouter(backdrop: LayerBackdrop) {
 
         // 分享设置：纯 UI 意图，和授权指引一样排在最前面。
         showSettings -> Page.Settings
+
+        // 「分享画面」的选择页：和投屏指引同级（都还没开会话），排在它们前面。
+        showShareKind -> Page.ShareKind
 
         // 放映厅：独立的页面意图，不要求"正在分享"，所以排在 Watch 前面。
         showCinema -> Page.Cinema
@@ -657,6 +683,15 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 onOpenColorLab = { showSettings = false; showColorLab = true },
                 onOpenGlassLab = { showSettings = false; showGlassLab = true },
                 onBack = { showSettings = false },
+            )
+
+            Page.ShareKind -> ShareKindScreen(
+                backdrop = backdrop,
+                quality = quality,
+                onPickScreen = { startScreenShare() },
+                onPickCinema = { showShareKind = false; openCinema() },
+                onSettings = { showShareKind = false; showSettings = true },
+                onBack = { showShareKind = false },
             )
 
             Page.Consent -> ConsentGuideScreen(
