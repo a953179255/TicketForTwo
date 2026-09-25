@@ -58,6 +58,14 @@ object SignalHub {
     /** 观众页面。放在 assets 里，改文案不用动 Kotlin。 */
     private const val PAGE_ASSET = "viewer/index.html"
 
+    /**
+     * 队列空闲多久就往观众打一个 WS ping。
+     * 实测隧道在 100~120 秒之间回收空闲连接，取 25s 是四倍余量 ——
+     * 心跳本身只有 2 字节，25 秒一次对流量可以忽略（一小时不到 30KB）。
+     */
+    private const val KEEPALIVE_IDLE_MS = 25_000L
+    private val EMPTY_FRAME = ByteArray(0)
+
     // ---- 房主侧接口（同进程，不走 socket）--------------------------------
 
     /** 从观众来的消息。房主订阅它，喂给 [com.ticketfortwo.app.rtc.Peer]。 */
@@ -203,14 +211,43 @@ object SignalHub {
         return true
     }
 
-    /** 专职写线程：唯一持有 socket 写权限的地方，永远不在调用者线程上发包。 */
+    /**
+     * 专职写线程：唯一持有 socket 写权限的地方，永远不在调用者线程上发包。
+     *
+     * 它还负责**空闲心跳**：队列 25 秒没东西可发，就往观众那条 WS 上打一个 ping 帧。
+     * 不加这个，一次正常的观看会在两分钟左右自己断掉 —— 实测：观众连上后双方什么都不做，
+     * t=91s 还是 `ice=CONNECTED`，t=121s 两边同时 `ice=CLOSED`，
+     * 房主侧日志是"观众已离开"、观众侧是"与房主的连接断了：对方可能已停"，
+     * 两边都以为是对面走了。我们自己的代码里没有任何 socket 超时（查过），
+     * 掐连接的是中间那层 Cloudflare 隧道对空闲 WS 的回收。
+     * 媒体是 P2P 的，本来跟这条 WS 没关系，但信令一断我们就拆 peer —— 于是健康通话被杀。
+     *
+     * ping 而不是发个 JSON：浏览器端的 WebSocket 不允许 JS 主动发 ping，
+     * 但会**自动回 pong**，所以一个方向的 ping 能让两条方向都有流量；
+     * 我们自己的观众端 [WsClient] 也回 pong。且 ping 不占消息语义，老版本观众看不懂也不会坏。
+     */
     private fun writeLoop() {
+        var idleMs = 0L
         while (running) {
             val msg = try {
                 outbox.poll(1, TimeUnit.SECONDS)
             } catch (e: InterruptedException) {
                 break
-            } ?: continue
+            }
+            if (msg == null) {
+                idleMs += 1_000
+                if (idleMs >= KEEPALIVE_IDLE_MS) {
+                    idleMs = 0
+                    val c0 = synchronized(lock) { viewer }
+                    if (c0 != null) {
+                        runCatching {
+                            synchronized(c0.writeLock) { writeFrame(c0.out, OP_PING, EMPTY_FRAME) }
+                        }.onFailure { Log.w(TAG, "心跳没发出去：${it.javaClass.name}") }
+                    }
+                }
+                continue
+            }
+            idleMs = 0
             val c = synchronized(lock) { viewer }
             if (c == null) {
                 // 观众走了就丢弃，不阻塞队列。也算"处理完"——否则 sayGoodbye 会白等到超时。
