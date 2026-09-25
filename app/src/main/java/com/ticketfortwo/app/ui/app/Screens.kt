@@ -794,6 +794,11 @@ fun InviteScreen(
     inviteUrl: String,
     onCopy: () -> Unit,
     onStop: () -> Unit,
+    /**
+     * 有没有真的在投屏。厅先开只起信令 + 语音，这时这颗钮按下去是"把厅关掉"，
+     * 写「停止分享」会让人以为自己在分享（而"我没在分享"恰恰是他想知道的那件事）。
+     */
+    screenSharing: Boolean = false,
 ) {
     PageScaffold {
         Spacer(Modifier.height(GlassDimens.sp6))
@@ -827,7 +832,7 @@ fun InviteScreen(
         StatusChip("你可以一直开着，他随时点开都能进", ChipTone.Ok)
 
         SpacerWeight()
-        PrimaryPill("停止分享", onStop, backdrop, Modifier.fillMaxWidth(), filled = false)
+        PrimaryPill(if (screenSharing) "停止分享" else "结束连麦", onStop, backdrop, Modifier.fillMaxWidth(), filled = false)
         Spacer(Modifier.height(GlassDimens.sp6))
     }
 }

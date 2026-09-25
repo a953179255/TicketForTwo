@@ -507,6 +507,41 @@ LEVEL_LOADED / FRAG_LOADED 任一到达）就把截止时间往后推 6 秒。�
 
 ---
 
+## 6.100 「厅先开 → 人进来 → 房主再开画面」原来是一条死路（2026-09-26）
+
+v2.1 的主体结构就是"先开放映厅、对方先进来、房主再决定给他看什么"。
+把这句话真的走一遍（两台模拟器，观众已在厅里、房主之后才按分享），
+一次撞出**四个**只有这条路径才有的缺陷 —— 它们各自单独看都"合理"，串起来是死路：
+
+1. **授权被丢掉**：`CallSession.startHost` 开头那句 `if (isActive) return`
+   把**刚拿到的投屏授权**也一起扔了（日志"已有进行中的分享，忽略本次请求"）。
+   ⇒ 新增 `attachScreenCapture`：采到轨后 `addTrack(只加视频)` + 再发一次 offer。
+2. **崩在主线程**：`addLocalTracks(vt, audioTrack)` 把**已经在同一条 pc 上的音频轨**
+   又交了一遍 → libwebrtc 抛 `IllegalStateException: C++ addTrack failed`，App 直接没了。
+   ⇒ 只加视频轨，并包 `runCatching`：这条路径失败不该带走整通电话。
+3. **房主界面永远转圈**：`"answer"` 分支无条件 `_state = Connecting`（那是给第一次握手写的），
+   而重新协商时传输一直是通的、libwebrtc **不会再报一次 CONNECTED** ⇒ 房主停在
+   "正在建立直连"，观众那边画面早就到了（实测均值 39.4）。同一个毛病还有 ICE 的
+   `CHECKING` 分支。⇒ 两处都改成"曾经连上过就不再退回转圈"（`iceWasConnected`）。
+4. **界面在说谎**：房主一回到会话屏就写"正在分享你的手机 / 对方看到的就是你现在这一屏"，
+   而厅先开根本没弹过投屏授权。⇒ 顶栏、卡片、停止按钮三处措辞全部跟着
+   `CallSession.localVideo` 走：没投屏时是「语音连麦中 / 厅里现在只有语音 / 结束连麦」，
+   并给出那颗缺失的**「让他看我的屏幕」**（设计里早就有，代码里一直没实现）。
+   等邀请那一屏（`InviteScreen`）底部那颗按钮同理。
+
+**观众侧还有一处同源的**（网页端，`assets/viewer/index.html`）：`startPeer` 每次收到 offer
+都 `new RTCPeerConnection` ⇒ 房主中途开画面时，浏览器把正在跑的连麦整条丢掉、旧 pc 还挂着不关。
+改成"有活着的 pc 就复用"（新增 `renegotiate()`：setRemote → createAnswer → 回发）。
+⚠ 这一条**只做了 `node --check` 与逻辑推演**：初进房那份 offer 时 `pc` 还是 null，
+走的仍是原路径，所以不会把主流程变坏；但"复用分支真的把画面接上来"还没在无头 Edge 里端到端验过。
+
+**回归**：新增 `scripts/check_share_after_join.py`（前置 = `open_room.py` +
+`drive_app_viewer.py --keep-sharing`），四条判据全绿才算通：
+房主日志「画面已接上」/ 观众 `first frame` / 观众截图均值 > 20 / 房主顶栏翻成「正在分享」。
+本轮实测 `PASS`（均值 36.0）。63 条单测 0 失败。
+
+---
+
 ## 7. P0 实测结果（2026-09-25，模拟器 t2test + 真实站点）
 
 跑法：`scripts/drive_cinema_probe.py emulator-5556 <url>` —— 用**真实分享意图**

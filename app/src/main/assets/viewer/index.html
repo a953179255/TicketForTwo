@@ -311,6 +311,17 @@ function onMessage(text){
 // ---- 建立直连 ---------------------------------------------------------
 
 async function startPeer(offerSdp){
+  /* **有活着的 pc 就复用**。
+   *
+   * 房主"先开厅、之后再按分享"会再发一份 offer（中途加视频轨 = 重新协商）。
+   * 原来这里每次 new 一条：正在跑的连麦与传输整条丢掉，旧的那条还挂着不关，
+   * 而浏览器对同一条信令通道给出两份 answer 也没有意义。
+   * 复用之后 setRemoteDescription(新 offer) → createAnswer 走的还是同一条连接，
+   * 画面接上来时声音不会断。 */
+  if (pc && pc.signalingState !== 'closed') {
+    await renegotiate(offerSdp);
+    return;
+  }
   pc = new RTCPeerConnection({ iceServers: STUN, bundlePolicy:'max-bundle', rtcpMuxPolicy:'require' });
   // 调试钩子：模块作用域里的 pc 从外部读不到，量测需要能查连接状态与统计。
   window.t2 = { pc, video, stats: null, fail: null };
@@ -379,6 +390,20 @@ async function startPeer(offerSdp){
   await pc.setLocalDescription(answer);
   send({ t: 'answer', sdp: pc.localDescription.sdp });
   startStats();
+}
+
+/** 重新协商：同一条 pc 上收下新 offer、回一份新 answer。传输不断，声音不丢。 */
+async function renegotiate(offerSdp){
+  try {
+    await pc.setRemoteDescription({ type: 'offer', sdp: offerSdp });
+    for (const c of pendingCands) { try { await pc.addIceCandidate(c); } catch (e) {} }
+    pendingCands = [];
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    send({ t: 'answer', sdp: pc.localDescription.sdp });
+  } catch (e) {
+    cineNote('重新协商没成：' + e);
+  }
 }
 
 async function addRemoteCandidate(m){

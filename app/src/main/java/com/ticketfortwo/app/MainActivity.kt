@@ -495,6 +495,10 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     BackHandler(enabled = showColorLab) { showColorLab = false; showSettings = true }
 
     // 首页在两个分支里都要画（角色未定 / 兜底）。写成一处，避免以后改了其一忘了其二。
+    // 房主此刻有没有视频轨（= 真的在投屏）。停止投屏时 CallSession 会把它置回 null，
+    // 所以这一屏的措辞跟着系统授权的真实状态走，而不是"进了这一屏就算在分享"。
+    val hostVideo by CallSession.localVideo.collectAsState()
+
     val home: @Composable () -> Unit = {
         HomeScreen(
             backdrop = backdrop,
@@ -705,6 +709,11 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 netLabel = stats?.viaLabel ?: "直连",
                 onOpenWatch = { showWatch = true },
                 onOpenCinema = { openCinema() },
+                // 厅先开不投屏 ⇒ 这一屏不能再写"正在分享你的手机"（见 CallScreen 的注释）。
+                screenSharing = hostVideo != null,
+                onStartShare = {
+                    if (quality.videoEnabled) showConsent = true else startHostFlow()
+                },
                 onStop = stop,
             )
 
@@ -719,6 +728,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 backdrop = backdrop,
                 inviteUrl = p.url,
                 onCopy = { context.copy("邀请链接", p.url) },
+                screenSharing = hostVideo != null,
                 onStop = stop,
             )
 

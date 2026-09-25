@@ -295,6 +295,15 @@ object CallSession {
     /** 观众信令断了之后的"最多等你这么久"兜底。 */
     private var viewerGoneJob: Job? = null
     private var peer: Peer? = null
+    /**
+     * 这条 PeerConnection **有没有真的连上过**。
+     *
+     * 用来挡住一类假状态：中途加视频轨会重新协商，libwebrtc 随之再报一次 CHECKING，
+     * 而传输本身从没断过 ⇒ 不会再有一次 CONNECTED 回调。原来 CHECKING 一律画成
+     * "正在建立直连"，于是房主接上画面之后永远卡在转圈那一屏（实测 17:30：观众均值 39.4、
+     * 画面早就到了，房主却写着"逐对尝试候选地址"）。
+     */
+    private var iceWasConnected = false
     private var capture: ScreenShareController? = null
     private var audioSource: AudioSource? = null
     private var audioTrack: AudioTrack? = null
@@ -346,7 +355,15 @@ object CallSession {
         quality: ShareQuality = ShareQuality(),
     ) {
         if (isActive) {
-            note("已有进行中的分享，忽略本次请求")
+            // **不能一律丢掉**。厅先开（只起信令 + 语音）之后再按「分享屏幕」是 v2.1 的主路径：
+            // 原来这道闸门把刚拿到的投屏授权一起扔了 —— 实测（t2test 17:18）观众已在厅里、
+            // 房主按「让他看我的屏幕」、系统授权返回 resultCode=-1，日志却是
+            // "已有进行中的分享，忽略本次请求"，于是观众那边永远只有语音。
+            if (permissionIntent != null && _role.value == Role.Host) {
+                attachScreenCapture(context, permissionIntent, quality)
+            } else {
+                note("已有进行中的会话，忽略本次请求")
+            }
             return
         }
         RtcEngine.init(context)
@@ -412,6 +429,65 @@ object CallSession {
     }
 
     /**
+     * 会话已经活着（厅先开 / 观众已进厅）时，把**刚授权的屏幕采集**接上去并重新协商。
+     *
+     * 走"加轨 + 再发一次 offer"而不是重建 peer：重建等于把一通正在连麦的通话拆掉重来，
+     * 观众会黑屏一下甚至直接失败（`onViewerJoined` 里为信令重连写过同一条理由）。
+     * 观众侧的 `"offer"` 分支不挑次数，收到就 setRemote + 回 answer，所以这条能走通。
+     */
+    private fun attachScreenCapture(context: Context, intent: Intent, q: ShareQuality) {
+        if (localVideoTrack != null) {
+            note("画面已经在传了，不重复接")
+            return
+        }
+        RtcEngine.init(context)
+        quality = q
+        val cap = ScreenShareController(context.applicationContext, intent).also { c ->
+            // 系统中途收回授权（锁屏、用户在通知栏点停止）：这里**不能** stop(整个会话) ——
+            // 厅还在、语音还在，把整通电话拆掉比退回"只有语音"严重得多。
+            c.onStoppedBySystem = { reason ->
+                note("系统停止画面：$reason（厅里继续语音）")
+                runCatching { c.stopCapture() }
+                if (capture === c) capture = null
+                localVideoTrack = null
+                _localVideo.value = null
+            }
+            capture = c
+        }
+        val vt = cap.start(fps = q.fps, scale = q.scale)
+        if (vt == null) {
+            note("屏幕采集没起来，观众那边还是只有语音")
+            return
+        }
+        localVideoTrack = vt
+        _localVideo.value = vt
+        val p = peer
+        if (p == null) {
+            // 观众还没进来：轨先备着，等人进来时 onViewerJoined 会把它加进 offer。
+            note("画面已备好，等对方进厅就发过去")
+            return
+        }
+        // **只加视频轨**：音频轨在观众进厅那次已经 addTrack 过了，再交一遍给同一条
+        // PeerConnection 会抛 `IllegalStateException: C++ addTrack failed`
+        // （实测 17:27 直接把 App 崩在主线程上）。包一层 runCatching：这条路径失败
+        // 不该让整通电话没了，说清楚就好。
+        val senders = runCatching { p.addLocalTracks(vt, null) }.getOrNull()
+        if (senders?.video == null) {
+            note("画面采到了，但接不进这条连接 —— 让对方重新点一次链接就能看到")
+            return
+        }
+        videoSender = senders.video
+        applyVideoBitrateCap(q.maxVideoBps)
+        p.startOffer()
+        // 这条连接本来就是通的（只是重新协商），所以状态立刻摆回"已连上"：
+        // 等回调是等不到的，房主会一直看到"正在建立直连"。
+        if (p.connectionState == org.webrtc.PeerConnection.IceConnectionState.CONNECTED) {
+            _state.value = State.Connected
+        }
+        note("画面已接上，正在推给对方")
+    }
+
+    /**
      * 门牌链接单独存一份，**不跟着 [state] 走**。
      *
      * 原来它只挂在 `State.WaitingViewer` 上，于是观众一进来（状态变 Connecting）
@@ -461,7 +537,11 @@ object CallSession {
                 val sdp = obj.optString("sdp")
                 if (sdp.isNotEmpty()) {
                     note("收到对方应答，完成握手")
-                    _state.value = State.Connecting
+                    // 只有**第一次**握手才需要画"正在建立直连"。中途加视频轨（房主先开厅、
+                    // 之后才按分享）也会走到这一行，而那时传输一直是通的、libwebrtc 不会再报
+                    // 一次 CONNECTED —— 于是房主永远停在转圈屏（实测 17:38：观众均值 39.4
+                    // 画面早就到了，房主还写着"逐对尝试候选地址"）。
+                    if (!iceWasConnected) _state.value = State.Connecting
                     peer?.acceptAnswer(sdp)
                 }
             }
@@ -559,6 +639,7 @@ object CallSession {
         }
 
         note("观众已加入，开始建立直连")
+        iceWasConnected = false
         _state.value = State.Connecting
 
         teardownPeer()
@@ -707,6 +788,7 @@ object CallSession {
                 _state.value = when (s) {
                     PeerConnection.IceConnectionState.CONNECTED,
                     PeerConnection.IceConnectionState.COMPLETED -> {
+                        iceWasConnected = true
                         startStatsPump()
                         State.Connected
                     }
@@ -723,7 +805,9 @@ object CallSession {
                         State.Connecting
                     }
 
-                    PeerConnection.IceConnectionState.CHECKING -> State.Connecting
+                    // 已经连上过 ⇒ 这次 CHECKING 只是重新协商的回查，别把会话画回"正在建立直连"
+                    PeerConnection.IceConnectionState.CHECKING ->
+                        if (iceWasConnected) _state.value else State.Connecting
                     else -> _state.value
                 }
             }

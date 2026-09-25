@@ -176,6 +176,17 @@ fun CallScreen(
     /** 房主侧：打开内置浏览器一起看。 */
     onOpenWatch: () -> Unit = {},
     onOpenCinema: () -> Unit = {},
+    /**
+     * 房主侧：**此刻到底有没有在投屏**。
+     *
+     * 厅先开那条路根本不投屏（只起信令 + 语音），而这一屏原来无论什么状态都写着
+     * "正在分享你的手机 / 对方看到的就是你现在这一屏"。实测（t2test 17:06）房主从放映厅
+     * 按返回回到这一屏，系统投屏授权一次都没弹过，屏幕上却说他正在分享 ——
+     * 这句既让他白担心"别切应用"，也让他以为不用再按分享那颗钮了。
+     */
+    screenSharing: Boolean = false,
+    /** 非投屏状态下那颗「让他看我的屏幕」：走和首页一样的授权链。 */
+    onStartShare: () -> Unit = {},
     /** 观众侧正在画中画：玻璃控件与手势层全部让路，小窗里只留画面。 */
     pipMode: Boolean = false,
     onStop: () -> Unit,
@@ -215,7 +226,7 @@ fun CallScreen(
         // 房主这屏没有 SurfaceView，玻璃就能正常采样环境底；
         // 观众那屏视频压在最下面，SurfaceView 的内容抓不到（backdrop issue #98），只能退化成 scrim。
         if (isHost) {
-            HostStage(backdrop, peerLabel, onOpenWatch, onOpenCinema)
+            HostStage(backdrop, peerLabel, onOpenWatch, onOpenCinema, screenSharing, onStartShare)
         } else {
             // 首帧没到之前这块区域是纯黑 —— 用户分不清"对方画面全黑"和"卡住了"，所以必须有等待提示。
             var firstFrame by remember(remoteTrack) { mutableStateOf(false) }
@@ -291,15 +302,20 @@ fun CallScreen(
                     Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    // 红点 = "你的屏幕正在被别人看"。只有语音时它是绿的：该报警的时候别贬值。
                     Box(
                         Modifier
                             .width(7.dp)
                             .height(7.dp)
-                            .background(Ink.Error, CircleShape)
+                            .background(
+                                if (isHost && !screenSharing) Ink.Live else Ink.Error,
+                                CircleShape,
+                            )
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        if (isHost) "正在分享" else "正在观看",
+                        // 房主侧这句跟着**有没有视频轨**走：厅先开时没投屏，写"正在分享"就是谎话。
+                        if (isHost) { if (screenSharing) "正在分享" else "语音连麦中" } else "正在观看",
                         fontSize = 11.5.sp,
                         color = Ink.TextHi,
                     )
@@ -348,7 +364,7 @@ fun CallScreen(
             netLabel = netLabel,
             orientationLabel = orientationLabel,
             onCycleOrientation = onCycleOrientation,
-            stopDesc = if (isHost) "停止分享" else "停止观看",
+            stopDesc = if (isHost) { if (screenSharing) "停止分享" else "结束连麦" } else "停止观看",
             refract = isHost,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -459,6 +475,8 @@ private fun HostStage(
     peerLabel: String,
     onOpenWatch: () -> Unit,
     onOpenCinema: () -> Unit,
+    screenSharing: Boolean,
+    onStartShare: () -> Unit,
 ) {
     Column(
         Modifier.fillMaxSize().padding(horizontal = GlassDimens.screenH),
@@ -470,16 +488,32 @@ private fun HostStage(
                 Modifier.padding(GlassDimens.sp5),
                 verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2),
             ) {
-                Text("正在分享你的手机", fontSize = 19.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextHi)
                 Text(
-                    "对方看到的就是你现在这一屏，而且跟着你走：切到别的应用、打开相册，" +
-                        "他那边也同步换画面。想停就点下面的停止。",
+                    if (screenSharing) "正在分享你的手机" else "厅里现在只有语音",
+                    fontSize = 19.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextHi,
+                )
+                Text(
+                    if (screenSharing)
+                        "对方看到的就是你现在这一屏，而且跟着你走：切到别的应用、打开相册，" +
+                            "他那边也同步换画面。想停就点下面的停止。"
+                    else
+                        "他听得到你，但看不到你 —— 系统还没问过投屏授权。" +
+                            "要让他看你这屏就按下面那颗，想放片就进放映厅让他自己播原画。",
                     fontSize = 12.5.sp,
                     color = Ink.TextMid,
                     lineHeight = 18.sp,
                 )
                 Spacer(Modifier.height(GlassDimens.sp1))
                 Text(peerLabel, fontSize = 11.5.sp, color = Ink.TextLow)
+                // 没在投屏时这颗排最前，而且是这一屏唯一的实心按钮：此刻的主操作就是它。
+                if (!screenSharing) {
+                    PrimaryPill(
+                        text = "让他看我的屏幕",
+                        onClick = onStartShare,
+                        backdrop = backdrop,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 // 一起看：播放器在我们手里，对方才可能真的动得到进度。
                 // 放在这张卡里而不是控制岛上 —— 控制岛要留给"通话级"的三个动作，
                 // 而这一颗是"接下来要干什么"，和卡片说的是同一件事。
