@@ -76,8 +76,19 @@ def main():
     elif not tap("HLS 测试流"):
         print("FAIL  找不到「HLS 测试流」")
         return 1
-    print("等 12 秒让片源被嗅到…")
-    time.sleep(12)
+    print("等片源被嗅到（轮询，不固定 sleep）…")
+    # 固定 sleep 会误判：页面加载 + 首个清单请求到达的耗时随网络浮动，
+    # 睡够了再点「开始放映」有时会点在"还没有候选"的状态上，
+    # 于是脚本报了成功、其实房主根本没递片（这一坑今天踩过一次）。
+    got = False
+    for _ in range(40):
+        if any("可播地址" in l for l in labels("可播地址")):
+            got = True
+            break
+        time.sleep(1)
+    if not got:
+        print("FAIL  30 秒内没嗅到可播地址（页面可能没加载出来）")
+        return 1
     for l in labels("候选", "嗅", "video")[:4]:
         print("  屏上:", l[:150])
     if not tap("开始放映"):

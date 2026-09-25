@@ -163,6 +163,12 @@ button.primary{background:var(--accent);color:#fff;border:0;border-radius:var(--
   </div>
 </div>
 
+<!-- hls.js：房主递来 m3u8 时，没有原生 HLS 的浏览器（Firefox 等）全靠它。
+     这条加载失败不致命：下面的代码会先试原生，再不行就撤掉本地层退回屏幕流。
+     实测教训：光把库打进 assets 并加一条路由**不等于它在页面上可用**——
+     没有这个 script 标签时 window.Hls 一直是 undefined，Chrome 靠原生 HLS 照样能放，
+     于是"看起来是好的"，换 Firefox 才会当场暴露。 -->
+<script src="/hls.min.js"></script>
 <script>
 /*
  * 观众端。与旧版最大的区别：**不再需要把链接发回给房主**。
@@ -353,8 +359,25 @@ async function addRemoteCandidate(m){
 }
 
 /** 连上 2.5 秒仍无视频轨 → 房主开的是「仅语音」。给控件条、给收听入口，别让人对着黑屏等。 */
+/**
+ * S 档时把底岛上"描述屏幕流"的那两格收掉。
+ *
+ * 那两格（分辨率/码率、fps）说的是屏幕流那条轨；观众本地播片源时它们恒为"—"，
+ * 挂在那儿会让人以为"画面坏了"。延迟那格留着 —— 它量的是连麦那条路，仍然有用。
+ */
+function paintCtlForCine(on){
+  ['sFps', 'sNet'].forEach(id => {
+    const el = $(id) && $(id).closest('.stat');
+    if (el) el.style.display = on ? 'none' : '';
+  });
+}
+
 function enterVoiceModeIfNeeded(){
   if (!pc || pc.connectionState !== 'connected' || gotVideo) return;
+  /* 已经在放片了就不该再弹等候卡 —— 实测过这个时序：仅语音的厅里 `gotVideo` 永远是 false，
+     2.5 秒的定时器比"晚进厅时房主推过来的当前状态"晚到，于是本地播放器都跑起来了、
+     进度也在走，屏幕上却还压着一张"对方还没选片"。 */
+  if (typeof cine !== 'undefined' && cine) return;
   $('topBar').classList.remove('hide');
   $('ctlBar').classList.remove('hide');
   $('topRight').textContent = '语音已通';
@@ -616,6 +639,8 @@ function onCinema(f) {
   if (cine && st.ver < cine.ver) return;   // 乱序到达的旧状态：丢掉，别把进度倒回去
   const switched = !cine || cine.url !== st.url;
   cine = st;
+  // 放映已经开始，等候期那个定时器就没用了，撤掉免得它晚一步把卡片盖回来
+  if (voiceTimer) { clearTimeout(voiceTimer); voiceTimer = null; }
   cineBar.classList.remove('hide');
   document.getElementById('watchBar').classList.add('hide');  // 一次只留一条横条
   /* 顶栏那句"语音已通"是等候期的话；开始放映之后它还挂着，
@@ -629,6 +654,7 @@ function loadLocal(st) {
   stopLocalPlayer();
   cineReady = false;
   lv.classList.remove('hide'); lvBadge.classList.remove('hide');
+  paintCtlForCine(true);
   lvBadge.innerHTML = '本地播放 · <b>准备中…</b>';
   const isHls = /\.m3u8([?#]|$)/i.test(st.url) || st.kind === 'master';
   try {
@@ -672,6 +698,7 @@ function stopLocalPlayer() {
 
 function cineDown(reason) {
   stopLocalPlayer();
+  paintCtlForCine(false);
   if (cineTimer) { clearInterval(cineTimer); cineTimer = null; }
   cine = null;
   cineBar.classList.add('hide');

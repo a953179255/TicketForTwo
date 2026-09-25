@@ -65,6 +65,9 @@ const val CINEMA_TEST_HLS = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
 /** 试嗅探用的普通单文件页（本地资产，不依赖网络）。 */
 const val CINEMA_TEST_LOCAL = WATCH_TEST_URL
 
+/** 第二条内置测试流：URL 不同，专门用来测"放映中途换片"。 */
+const val CINEMA_TEST_HLS_2 = "https://test-streams.mux.dev/pts_shift/master.m3u8"
+
 /**
  * 放映厅 · 房主侧第一版：**厅先开，人先进来，片子后选**。
  *
@@ -237,6 +240,27 @@ fun CinemaScreen(
         onDispose { CallSession.onCinemaCommand = null }
     }
 
+    /**
+     * 把一条候选递给对方（或换成它）。
+     *
+     * 放映中再点另一条 = **换片**，不需要先收厅再放：收厅那一步在观众那边
+     * 会真的退回屏幕流，用它当中转等于白闪一下。
+     */
+    fun screen(h: MediaSniffer.Hit) {
+        val wasScreening = cinema != null
+        CallSession.setCinemaTrack(
+            CinemaSync.Track(
+                url = h.url,
+                kind = h.kind.name.lowercase(),
+                title = player?.title?.takeIf { t -> t.isNotBlank() && !t.startsWith("http", true) }
+                    ?: MediaSniffer.hostLabel(h.url),
+                durationMs = player?.durMs ?: 0L,
+            ),
+        )
+        note = if (wasScreening) "已换片：${h.kind.name.lowercase()}"
+        else "已把这条递给对方：${h.kind.name.lowercase()}"
+    }
+
     Column(Modifier.fillMaxSize()) {
         GlassPageBar(backdrop, title = "放映厅", onBack = onBack) {
             Text(
@@ -277,6 +301,9 @@ fun CinemaScreen(
             GlassTextButton(if (showPanel) "收起嗅探" else "展开嗅探", onClick = {
                 showPanel = !showPanel
             }, backdrop)
+            GlassTextButton("换一条流", onClick = {
+                inputUrl = CINEMA_TEST_HLS_2; pageUrl = CINEMA_TEST_HLS_2
+            }, backdrop)
             // 放映/收厅：房主确认才切 —— 嗅探有认错的时候（广告分片、预告片），
             // 自动切等于把误判直接端给对方。
             GlassTextButton(if (cinema == null) "开始放映" else "收厅", onClick = {
@@ -294,17 +321,7 @@ fun CinemaScreen(
                             "还没嗅到可播的地址，先让片子播起来"
                         }
                     } else {
-                        CallSession.setCinemaTrack(
-                            CinemaSync.Track(
-                                url = h.url,
-                                kind = h.kind.name.lowercase(),
-                                title = player?.title?.takeIf {
-                                    it.isNotBlank() && !it.startsWith("http", true)
-                                } ?: MediaSniffer.hostLabel(h.url),
-                                durationMs = player?.durMs ?: 0L,
-                            ),
-                        )
-                        note = "已把这条递给对方：${h.kind}"
+                        screen(h)
                     }
                 }
             }, backdrop)
@@ -340,10 +357,7 @@ fun CinemaScreen(
                     note = "邀请链接已复制，发给对方就能进厅"
                 }
             },
-            onPick = { h ->
-                context.copy("片源", h.url)
-                note = "已复制：${MediaSniffer.shorten(h.url, 40)}"
-            },
+            onPick = { h -> screen(h) },
         )
     }
 
@@ -475,6 +489,11 @@ private fun CinemaPanel(
                     )
                 }
                 if (showSniffer) {
+                    Text(
+                        "点一条就放给对方（放映中点另一条 = 换片，不用先收厅）",
+                        fontSize = 10.sp,
+                        color = Ink.TextLow,
+                    )
                     // 下面是 P0 那两条量具读数：平时收着，出问题时要一眼能看到。
                     Text(
                         probe?.let {

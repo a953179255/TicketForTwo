@@ -183,6 +183,8 @@ object CallSession {
             return
         }
         cinemaVersion++
+        // 换片和首次递出去要在日志里分得开，否则回看时看不出中途换过片
+        val wasScreening = _cinema.value != null
         _cinema.value = CinemaSync.State(
             track = track,
             posMs = 0L,
@@ -191,7 +193,8 @@ object CallSession {
             version = cinemaVersion,
         )
         broadcastCinema()
-        note("片源已递给对方：${CinemaSync.sanitize(track.title)}")
+        val what = CinemaSync.sanitize(track.title)
+        note(if (wasScreening) "换片了：$what" else "片源已递给对方：$what")
     }
 
     /** 放映厅那一屏每轮询到一次播放器状态就调它。 */
@@ -263,6 +266,21 @@ object CallSession {
         // 观众侧的一切消息都由这条流驱动。
         scope.launch {
             SignalHub.incoming.collect { onViewerMessage(it) }
+        }
+        /* 后来者要能立刻拿到当前状态。
+         *
+         * 原来只靠"放映厅那一屏每 2 秒重发一次"，可那条循环的前提是**探测得到房主的页面**：
+         * 直接在 WebView 里打开一个 .m3u8 时，Chromium 用的是内置播放器，DOM 里没有 `<video>`，
+         * 探针返回空 → 不重发 → 晚进厅的观众永远停在"对方还没选片"，
+         * 而房主那边明明写着"正在放映"。实测就是这么翻的。
+         * 所以在"观众连上"这一刻主动把当前状态推一次（synctv 也是这个做法：进场先推 current）。 */
+        scope.launch {
+            SignalHub.viewerConnected.collect { on ->
+                if (on) {
+                    broadcastCinema()
+                    broadcastWatch()
+                }
+            }
         }
     }
 
