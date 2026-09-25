@@ -243,8 +243,21 @@ object CallSession {
         broadcastCinema()
     }
 
+    /**
+     * 有人进厅（或信令刚接回来）时，把厅里现在的状态补发一遍。
+     *
+     * 见 [onViewerJoined] 里那段实测：放映状态平时只跟着进度广播，
+     * 而那条路依赖房主 WebView 的探针问得到 <video>；问不到就一次都不发，
+     * 晚进厅的观众于是永远看不到放映条。这里不问探针，直接把会话里那份状态发出去。
+     */
+    private fun rebroadcastRoomState() {
+        broadcastCinema()
+        broadcastWatch()
+    }
+
     private fun broadcastCinema() {
         if (!SignalHub.viewerConnected.value) return
+
         val st = _cinema.value
         val json = JSONObject().apply {
             put("t", "cinema")
@@ -664,12 +677,24 @@ object CallSession {
             note("观众信令重连，画面不断")
             viewerGoneJob?.cancel(); viewerGoneJob = null
             _state.value = State.Connected
+            // 重连之后也要把当前状态再发一遍，理由同下。
+            rebroadcastRoomState()
             return
         }
 
         note("观众已加入，开始建立直连")
         iceWasConnected = false
         _state.value = State.Connecting
+        /* 有人进厅就把当前放映/同看状态补发一次。
+         *
+         * 不补的话会出现这种看着像灵异现象的事：房主早就在放了，晚一步进厅的观众
+         * 屏幕上什么都没有，而房主那边 12 秒后报"没等到对方的回执"。
+         * 平时这条状态是跟着进度每 2 秒广播一次的（publishCinemaProgress），
+         * 但那条路**依赖房主 WebView 的探针问得到 <video>** —— 直接在 WebView 里打开
+         * 一条 .m3u8 时用的是 Chromium 自带播放器，影子 DOM 问不到，于是一次都不发。
+         * 实测（20:52 t2test）：房主 20:52:13 递了片，观众 20:52:25 进厅，
+         * 30 秒后放映条还是空的 —— 就是这个空档。 */
+        rebroadcastRoomState()
 
         teardownPeer()
         val p = newPeer(context, Peer.Role.Offerer)

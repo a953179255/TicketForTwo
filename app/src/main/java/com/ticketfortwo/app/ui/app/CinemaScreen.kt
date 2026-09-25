@@ -101,6 +101,8 @@ fun CinemaScreen(
     backdrop: LayerBackdrop,
     /** 「分享 → 双人票」递进来的链接；非空就一进来就打开它，而不是停在本地测试页。 */
     initialUrl: String? = null,
+    /** 第几次递链接：同一条链接再分享一次也要能重新加载这一页，见 MainActivity 的 cinemaSeq。 */
+    jumpSeq: Long = 0L,
     /** 厅已开但对方还没进来时，这一条就是邀请链接 —— 厅的入口动作是"发链接"。 */
     inviteUrl: String? = null,
     viewerOnline: Boolean = false,
@@ -212,7 +214,7 @@ fun CinemaScreen(
     // 而人重复分享，多半是因为第一次没成（页面报错、被挡、想重看），
     // 所以正确的响应是重新加载这一页，并让人看见我们在动。
     var handledShare by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(initialUrl) {
+    LaunchedEffect(initialUrl, jumpSeq) {
         val u = initialUrl?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
         val norm = normalizeUrl(u)
         when {

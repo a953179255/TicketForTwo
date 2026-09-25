@@ -266,6 +266,14 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     /** 从「分享 → 双人票」递进来的链接；非空就直接开厅放这一页。 */
     val sharedUrl by CinemaIntents.pending.collectAsState()
     var cinemaUrl by remember { mutableStateOf<String?>(null) }
+    /* 第几次递链接。放映厅那边拿它当 LaunchedEffect 的 key 之一。
+     *
+     * 为什么要有：key 只有 URL 时，**同一条链接第二次递进来什么都不会发生** ——
+     * 状态值没变，effect 不重跑。而人重复分享，多半正是因为第一次没成
+     * （页面报错、被挡、想重看），最该响应的时候反而没反应。
+     * CinemaScreen 里那段 `handledShare == u -> 重新加载这一页` 本来就是为了这一刻写的，
+     * 可它永远进不去：effect 压根没再跑一次。 */
+    var cinemaSeq by remember { mutableStateOf(0L) }
     var paste by remember { mutableStateOf("") }
     var viewerError by remember { mutableStateOf<String?>(null) }
 
@@ -389,6 +397,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
      */
     fun enterCinema(url: String) {
         cinemaUrl = url
+        cinemaSeq += 1
         openCinema()
         showCinema = true
     }
@@ -625,6 +634,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
             Page.Cinema -> CinemaScreen(
                 backdrop = backdrop,
                 initialUrl = cinemaUrl,
+                jumpSeq = cinemaSeq,
                 inviteUrl = sessionInvite,
                 viewerOnline = viewerOnline,
                 voiceMode = quality.voiceMode,
