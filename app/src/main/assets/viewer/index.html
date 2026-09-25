@@ -399,14 +399,14 @@ function paintCtlForCine(on){
  * 带上版本号：回执在路上时房主可能已经换片了，不标版本就会把上一条的失败
  * 显示在新的一条上面 —— 那比不报更误导人。ver 拿不到就发 -1（房主按"未知版本一律采信"处理）。
  */
-let cineAckedVer = -1;
+let cineAckedVer = -1, cineAckedOk = false;
 function cineAck(ok, code, detail, ver){
   const v = ver == null ? -1 : ver;
   /* 一条片源只回一次执。实测：一条 404 的 m3u8 会连着抛两次 fatal
      （hls.js 重试一轮），不去重房主那边就是刷屏 —— 而统计按条数算命中率的话，
      同一个失败会被数成两个。 */
-  if (v >= 0 && v === cineAckedVer) return;
-  cineAckedVer = v;
+  if (v >= 0 && v === cineAckedVer && (!ok || cineAckedOk)) return;
+  cineAckedVer = v; cineAckedOk = !!ok;
   send({ t: 'cineack',
     f: v + '|' + (ok ? 'ok' : 'fail') + '|' + (code || 'other') + '|' + (detail || '') });
 }
@@ -440,10 +440,21 @@ function enterVoiceModeIfNeeded(){
  * 停在第 0 秒的封面，以为放映坏了。
  */
 function askCinePlay(){
+  /* 自动播放被拦 ≠ 放不出来 —— 这是两件事，以前被合成一件，于是出现一个很糟的组合：
+     屏幕上正写着"就差一下点击"，8 秒看门狗同时判定"这条流没出画面"，
+     把播放器拆了、还向房主报了一条 fail。手机上实测到：人刚进厅、一次没点，
+     第一条片源必然走这条路（Android Chrome 要有声播放必须有手势）。
+     现在：等待手势期间看门狗停表，并如实告诉房主"对方点一下就开始播"。 */
+  cineAwaitTap = true;
+  if (cineWatch) { clearTimeout(cineWatch); cineWatch = null; }
+  const st = cine;
+  cineAck(false, 'gesture', '浏览器要先点一下才开始放（点页面任意处即可）', st ? st.ver : -1);
   show(`<h1>就差一下点击</h1>
     <p class="muted">浏览器不允许网页自己放出声音。点下面开始，进度会自动对齐到对方的位置。</p>
     <button class="primary" id="btnCine">开始播放</button>`);
-  $('btnCine').onclick = () => lv.play().then(hidePanel).catch(() => {
+  $('btnCine').onclick = () => lv.play().then(() => {
+    cineAwaitTap = false; hidePanel();
+  }).catch(() => {
     show('<h1>还是没放出来</h1><p class="muted">这个浏览器拦得比较狠。让对方改用「分享屏幕」也能看。</p>');
   });
 }
@@ -611,7 +622,15 @@ function paintMic(){
 $('btnMic').onclick = () => { toggleMic(); };
 let volOn = true;
 $('btnVol').innerHTML = ICON.vol;
-$('btnVol').onclick = () => { volOn = !volOn; video.muted = !volOn; $('btnVol').innerHTML = volOn ? ICON.vol : ICON.mute2; };
+$('btnVol').onclick = () => {
+  volOn = !volOn;
+  /* 放映厅里在放的是 `lv`，不是屏幕流那个 `video` —— 原来这里只动 video，
+     于是"本地播放中点音量"什么也没发生（图标翻了，声音没变）。 */
+  const target = (typeof cine !== 'undefined' && cine) ? lv : video;
+  target.muted = !volOn;
+  if (target === lv) cineNeedSound = false;
+  $('btnVol').innerHTML = volOn ? ICON.vol : ICON.mute2;
+};
 $('btnPip').innerHTML = ICON.pip;
 $('btnPip').onclick = async () => {
   try { if (document.pictureInPictureElement) await document.exitPictureInPicture(); else await video.requestPictureInPicture(); }
@@ -687,7 +706,7 @@ function fmtClock(ms){
    也不再有两层 UI。取不到（跨域/签名过期/要会员）就撤掉这一层，
    退回看屏幕流，绝不留一个黑屏给观众。 */
 let cine = null, cineHls = null, cineApplyUntil = 0, cineTimer = null;
-let cineReady = false, cineWatch = null;
+let cineReady = false, cineWatch = null, cineAwaitTap = false, cineNeedSound = false;
 const lv = document.getElementById('lv'), lvBadge = document.getElementById('lvBadge'),
       cineBar = document.getElementById('cineBar');
 
@@ -760,6 +779,16 @@ function loadLocal(st) {
       lv.src = st.url;
     }
   } catch (t) { cineDown('起播失败：' + t, true, 'start'); return; }
+  /* 先**静音**把画面放出来，再请人点一下开声音。
+     *
+     * 原来一上来就要有声播放：手机浏览器（Chrome 的 autoplay 政策）在没有用户手势时
+     * 直接拒绝 play()，于是画面迟迟不出 → 8 秒看门狗判"这条流放不出" → 退回屏幕流，
+     * 房主那边还收到一条 fail。实测：手机上第一条片源必然踩这条路 ——
+     * 而"观众是用手机浏览器看"恰恰是这个产品最常见的那一端。
+     * 静音自动播放是被允许的，所以画面立刻就有、进度也能对齐，只差一次点击给声音。 */
+  lv.muted = true;
+  cineNeedSound = true;
+  armSoundOnce();
   lv.play().catch(() => { askCinePlay(); });
   // 等候屏那张卡得收掉，不然它盖在刚接上的片源上面
   hidePanel();
@@ -771,13 +800,16 @@ function loadLocal(st) {
      否则观众对着一块黑以为是自己网卡。 */
   if (cineWatch) clearTimeout(cineWatch);
   cineWatch = setTimeout(() => {
-    if (cine && !cineReady) cineDown('这条流 8 秒没出画面', true, 'timeout');
+    // 等人点一下的时候不停表：那时候"没画面"是我们自己没播，不是流坏了
+    if (cine && !cineReady && !cineAwaitTap) cineDown('这条流 8 秒没出画面', true, 'timeout');
   }, 8000);
 }
 
 function stopLocalPlayer() {
   if (cineWatch) { clearTimeout(cineWatch); cineWatch = null; }
   cineReady = false;
+  cineNeedSound = false;
+  lv.muted = false;
   if (cineHls) { runCute(() => cineHls.destroy()); cineHls = null; }
   runCute(() => { lv.pause(); lv.removeAttribute('src'); lv.load(); });
   lv.classList.add('hide'); lvBadge.classList.add('hide');
@@ -810,7 +842,7 @@ function syncLocal() {
   } else {
     lv.playbackRate = 1;
   }
-  if (cine.playing && lv.paused) lv.play().catch(() => {});
+  if (cine.playing && lv.paused && !cineAwaitTap) lv.play().catch(() => {});
   if (!cine.playing && !lv.paused) lv.pause();
   paintCine(drift);
 }
@@ -832,7 +864,22 @@ function paintCine(drift) {
   else if (typeof drift !== 'number' || Math.abs(drift) > 5000) d.textContent = '同步中';
   else d.textContent = 'Δ' + Math.round(drift) + 'ms';
   lvBadge.innerHTML = '本地播放 · <b>' +
-    (lv.videoWidth ? lv.videoWidth + '×' + lv.videoHeight : '准备中…') + '</b>';
+    (lv.videoWidth ? lv.videoWidth + '×' + lv.videoHeight : '准备中…') + '</b>' +
+    (cineNeedSound ? ' · 点一下开声音' : '');
+}
+
+function armSoundOnce(){
+  if (!cineNeedSound) return;
+  const stage = $('stage') || document.body;
+  stage.addEventListener('pointerdown', unMuteCine, { once: true });
+}
+function unMuteCine(){
+  if (!cineNeedSound) return;
+  cineNeedSound = false;
+  lv.muted = false;
+  runCute(() => lv.play());
+  paintCine();
+  cineNote('声音已开');
 }
 
 function sendCine(act) {
@@ -847,6 +894,7 @@ lv.addEventListener('loadedmetadata', () => {
   // 首帧出来才敢说"原生画质"：这一行是 S 档成没成的直接证据
   if (!lv.videoWidth) return;
   cineReady = true;
+  cineAwaitTap = false;
   cineAck(true, 'ok', lv.videoWidth + 'x' + lv.videoHeight, cine ? cine.ver : -1);
   console.log('CINEMA_LOCAL', lv.videoWidth + 'x' + lv.videoHeight, lv.duration);
   paintCine();

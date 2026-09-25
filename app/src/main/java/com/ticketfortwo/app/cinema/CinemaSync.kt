@@ -293,6 +293,14 @@ object CinemaSync {
             ack.detail.ifBlank { "看的是屏幕分享" },
             AckTone.Neutral,
         )
+        /* 观众那边只是等一次点击（手机浏览器不许网页自己放出声音）。
+           这既不是"放不出"也不是"没回执" —— 报成红色会把人支去查网络，
+           而正确的做法就一个字：点。手机上实测到第一条片源必然走这条路。 */
+        ack.code == "gesture" -> AckLine(
+            "对方点一下就开始播",
+            ack.detail.takeIf { it.isNotBlank() },
+            AckTone.Waiting,
+        )
         else -> AckLine(
             "对方放不出这条",
             ack.detail.ifBlank { ack.code },

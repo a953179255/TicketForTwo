@@ -214,13 +214,24 @@ class CinemaSyncTest {
         assertEquals(CinemaSync.AckTone.Warn, stale.tone)
         assertTrue(stale.detail!!.contains("收厅"))
 
+        /* 手机浏览器不许自己放出声音 → 观众那边只是等一次点击。
+           报成红色（放不出）会把房主支去查网络，而正确的做法是"等他点一下"；
+           报成"没等到回执"同样是误导。手机上实测到过：第一条片源必然走这条路。 */
+        val tap = CinemaSync.describeAck(
+            CinemaSync.parseAck("9|fail|gesture|浏览器要先点一下才开始播")!!,
+            viewerOnline = true, timedOut = false,
+        )
+        assertEquals(CinemaSync.AckTone.Waiting, tap.tone)
+        assertEquals("对方点一下就开始播", tap.head)
+        assertTrue(tap.detail!!.contains("点一下"))
+
         /* 标题行长度是**几何约束**，不是文风问题：
            上一版把长话拼进标题行，App 那句在卡里换了行，第二行正好压在"正在放映"下面，
            两个字叠在一起（截图实测）。所有分支的 head 都得短到不会换行。
            宽度按"中日韩算两格、其余算一格"估 —— 按字符数不行，
            "1920x1080" 九个字符只占六个汉字的位置。 */
         fun width(s: String) = s.sumOf { if (it.code >= 0x2E80) 2 else 1 }
-        listOf(off, waiting, live, fail, inApp, stale).forEach {
+        listOf(off, waiting, live, fail, inApp, stale, tap).forEach {
             val w = width(it.head)
             assertTrue("标题行太宽（$w 格）：${it.head}", w <= 30)
         }

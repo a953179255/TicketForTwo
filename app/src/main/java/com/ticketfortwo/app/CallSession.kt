@@ -283,6 +283,8 @@ object CallSession {
                 ack.ok -> "对方已经播起来了（${ack.detail.ifBlank { "首帧已到" }}）"
                 // App 里的观众不是"放不出来"，是这条路他没走 —— 别把他说成故障
                 ack.code == "appviewer" -> "对方在用 App 看：走的是屏幕分享，不是本地播放"
+                // 手机浏览器不许网页自己放出声音：这属于"等他点一下"，不是失败
+                ack.code == "gesture" -> "对方浏览器要先点一下才开始播（手机上很常见，等他点）"
                 else -> "对方放不出这条：${ack.detail.ifBlank { ack.code }}。可以收厅改共享屏幕"
             },
         )
