@@ -53,6 +53,9 @@ AUDIT_JS = r"""
     out.els.push({
       id, shown, x: Math.round(r.x), y: Math.round(r.y),
       w: Math.round(r.width), h: Math.round(r.height),
+      // 透明度必须一起报：只看 opacity > 0.05 的话，一层正在淡出（0.2）也算"可见"，
+      // 于是极窄视口那张截图整屏发暗、矩形却全绿 —— 量到了"在"，没量到"看得清"。
+      op: parseFloat(cs.opacity || '1'),
       text: (el.textContent || '').trim().slice(0, 26),
     });
   }

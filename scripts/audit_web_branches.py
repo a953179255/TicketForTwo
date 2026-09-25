@@ -84,6 +84,18 @@ def main():
             cdp.call("Emulation.setDeviceMetricsOverride",
                      {"width": w, "height": h, "deviceScaleFactor": 2, "mobile": True})
 
+        def wake_and_settle(w, h):
+            """点一下舞台把控件唤醒，并**等淡入结束**再量。
+            不这么做的话量到的是正在淡出的那一帧：矩形全绿、截图整屏发暗。"""
+            for typ in ("mousePressed", "mouseReleased"):
+                cdp.call("Input.dispatchMouseEvent",
+                         {"type": typ, "x": w // 2, "y": h // 2, "button": "left", "clickCount": 1})
+            for _ in range(12):
+                op = ev("getComputedStyle(document.getElementById('topBar')).opacity")
+                if op is None or float(op) >= 0.98:
+                    return
+                time.sleep(0.25)
+
         def geo():
             a = ev(f"({AUDIT_JS})({json.dumps(IDS)})")
             problems = []
@@ -92,6 +104,9 @@ def main():
             for e in shown:
                 if e["x"] < -1 or e["y"] < -1 or e["x"] + e["w"] > vw + 1 or e["y"] + e["h"] > vh + 1:
                     problems.append(f"OUT {e['id']} 超出视口")
+                if e.get("op", 1) < 0.9:
+                    problems.append(
+                        f"DIM      {e['id']} 只有 {int(e.get('op', 1) * 100)}% 亮度，看不清")
             overlay = {"topBar", "ctlBar", "cineBar", "watchBar", "lvBadge", "hud", "panel"}
             vis = [e for e in shown if e["id"] in overlay]
             for i in range(len(vis)):
@@ -153,6 +168,7 @@ def main():
         print("== 3) 极窄视口 320x568 ==")
         set_view(320, 568)
         time.sleep(0.6)
+        wake_and_settle(320, 568)
         shown, problems = geo()
         for msg in problems:
             bad += 1
