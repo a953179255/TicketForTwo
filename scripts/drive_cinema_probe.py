@@ -113,6 +113,8 @@ def main():
             return 1
         print(f"OK    分享入口已接住：{url[:70]}")
     else:
+        tap("展开嗅探")          # 测试胶囊现在在嗅探面板里
+        time.sleep(0.8)
         if not wait_and_tap("HLS 测试流"):
             print("FAIL  找不到「HLS 测试流」按钮")
             return 1

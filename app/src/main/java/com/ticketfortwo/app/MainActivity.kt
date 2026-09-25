@@ -11,6 +11,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import android.view.WindowManager
 import android.widget.Toast
@@ -204,7 +205,8 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     val state by CallSession.state.collectAsState()
     val sessionRole by CallSession.role.collectAsState()
     val remoteVideo by CallSession.remoteVideo.collectAsState()
-    val micMuted by CallSession.micMuted.collectAsState()
+    val hostMicLive by CallSession.micLive.collectAsState()
+    val hostHearsViewer by CallSession.hostHearsViewer.collectAsState()
     val stats by CallSession.netStats.collectAsState()
 
     // 观众端（App 内收看）的状态 —— 与房主的 CallSession 并行、互斥使用
@@ -236,7 +238,18 @@ private fun AppRouter(backdrop: LayerBackdrop) {
         if (granted) ViewerSession.enableMic(context)
         else context.toast("没给麦克风权限：只能看画面，说不了话")
     }
-    remember { ViewerSession.setOrientationMode(context.prefs().orientationMode()); Unit }
+    /* 观众屏方向偏好**不再从盘上恢复**（以前这一行是 `setOrientationMode(prefs.orientationMode())`）。
+     *
+     * 起因是用户报"App 一打开就是横屏，手机明明是竖着拿的"。查下来是这么回事：
+     * 观看界面上那颗「方向：跟随/竖屏/横屏」按钮的选择被写进了 SharedPreferences，
+     * 于是某一次看片时顺手点的"锁横屏"会一直留着 —— 它不属于任何一场通话，
+     * 而 `ViewerSession` 是进程级单例、状态能活过 Activity 重建，所以只要那场观看还没散，
+     * 回到首页、甚至杀掉重开，屏幕都被锁在横屏上，而**唯一能改它的按钮只在观看界面里**：
+     * 用户看到的是"App 坏了"，不是一个他自己设过的开关。
+     * 方向是"这一次怎么看"，不是"这个 App 长什么样"，所以让它跟着这一场走
+     * （散场时 ViewerSession.stop() 把它退回"跟随"）。这里顺手把那个已经没人读的键清掉，
+     * 免得将来谁再加持久化，把老用户当年那一下点击原地复活。 */
+    remember { context.prefs().clearOrientationLock(); Unit }
 
     var showConsent by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
@@ -441,7 +454,9 @@ private fun AppRouter(backdrop: LayerBackdrop) {
         val want = when (target) {
             OrientationTarget.Landscape -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
             OrientationTarget.Portrait -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-            OrientationTarget.Keep -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            // "交还给用户"不能只写 UNSPECIFIED，见下面 handBackOrientation 的注释 ——
+            // 那是这一屏最容易踩的一个坑：写了等于没还。
+            OrientationTarget.Keep -> handBackOrientation(a)
         }
         if (a.requestedOrientation != want) {
             Log.i("MainActivity", "观众屏方向 → $target（模式 ${viewerOrient.name}，内容横=$viewerLandscape）")
@@ -597,6 +612,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 initialUrl = cinemaUrl,
                 inviteUrl = sessionInvite,
                 viewerOnline = viewerOnline,
+                voiceMode = quality.voiceMode,
                 onBack = { showCinema = false },
             )
 
@@ -647,8 +663,8 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                     OrientationMode.Landscape -> "横屏"
                 },
                 onCycleOrientation = {
-                    val next = ViewerSession.cycleOrientationMode()
-                    context.prefs().setOrientationMode(next.name)
+                    // 只改内存里这一场的状态，不落盘 —— 理由见上面"不再从盘上恢复"那段。
+                    ViewerSession.cycleOrientationMode()
                 },
                 onViewerVolume = { ViewerSession.setVolume(it) },
                 watch = viewerWatch,
@@ -703,8 +719,14 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 // 以前这里是写死的「已直连」—— 没人看的时候也说"已直连"，
                 // 等于把用户问的"到底有没有人在观看"用一个假答案糊过去了。
                 peerLabel = if (viewerOnline) "1 人正在观看 · 已直连" else "还没有人加入",
-                micOn = !micMuted,
-                onToggleMic = { CallSession.setMicMuted(!micMuted) },
+                // 图标跟着**实际**开没开走，不跟着 micMuted：「只有视频声」下麦克风是被
+                // 声音档关掉的，那时 micMuted 还是 false，照旧写就会画出一个骗人的"说话中"。
+                micOn = hostMicLive,
+                onToggleMic = { CallSession.toggleMic() },
+                voiceLabel = VoiceMode.label(quality.voiceMode),
+                // 只有视频声时房主那边把对方的上行静音了（setSpeakerMute），
+                // 这一屏必须说实话，否则他会以为"他没说话"，其实是他听不见。
+                canHearViewer = hostHearsViewer,
                 latencyMs = stats?.rttMs,
                 netLabel = stats?.viaLabel ?: "直连",
                 onOpenWatch = { showWatch = true },
@@ -712,7 +734,12 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 // 厅先开不投屏 ⇒ 这一屏不能再写"正在分享你的手机"（见 CallScreen 的注释）。
                 screenSharing = hostVideo != null,
                 onStartShare = {
-                    if (quality.videoEnabled) showConsent = true else startHostFlow()
+                    if (quality.videoEnabled) {
+                        showConsent = true
+                    } else {
+                        // 只连麦这一档没有画面可给，按钮不该再承诺"让他看我的屏幕"。
+                        context.toast("现在是「只连麦」：要去分享设置里改成带画面的档位")
+                    }
                 },
                 onStop = stop,
             )
@@ -745,6 +772,32 @@ private fun AppRouter(backdrop: LayerBackdrop) {
 
 // ───────────────────────────── 小工具 ─────────────────────────────
 
+/**
+ * 不观看的时候，把屏幕方向**真正**交还给用户。
+ *
+ * 直觉写法是 `SCREEN_ORIENTATION_UNSPECIFIED`（"我不表态了，系统你看着办"），
+ * 但在关掉自动旋转的手机上这句话不成立：那时系统已经不听加速度传感器，
+ * 用的是"最后一次生效的方向"，于是我们为了看横屏片强行转过的那一转会一直留在屏幕上 ——
+ * 用户退出观看、甚至杀掉重开，看到的都是横屏，而手机明明竖着拿在手里。
+ * 这正是"App 一打开就是横屏"的第二条来路（第一条是方向偏好被持久化，已单独修掉）。
+ *
+ * 所以交还时必须把用户自己锁的那个方向**说出来**：`Settings.System.user_rotation`
+ * 是可读的（0=竖 / 1=横 / 2=反向竖 / 3=反向横），自动旋转开着时不用管，传感器会定。
+ */
+private fun handBackOrientation(a: Activity): Int {
+    val resolver = a.contentResolver
+    fun sys(key: String, def: Int) = runCatching { Settings.System.getInt(resolver, key, def) }.getOrDefault(def)
+    if (sys(Settings.System.ACCELEROMETER_ROTATION, 0) == 1) {
+        return ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    }
+    return when (sys(Settings.System.USER_ROTATION, 0)) {
+        1 -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        2 -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
+        3 -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
+        else -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+    }
+}
+
 private fun granted(context: Context, permission: String): Boolean =
     context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
 
@@ -758,6 +811,8 @@ private fun Context.toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_
 
 private const val PREFS = "t2"
 private const val KEY_LAST_CONNECTED = "last_connected"
+
+/** 已废弃：观众屏方向改成"只管这一场"之后没人再读它，只在启动时清一次，见 Prefs.clearOrientationLock。 */
 private const val KEY_ORIENT = "viewer_orientation"
 
 private class Prefs(context: Context) {
@@ -765,12 +820,11 @@ private class Prefs(context: Context) {
 
     fun markConnected() = sp.edit().putLong(KEY_LAST_CONNECTED, System.currentTimeMillis()).apply()
 
-    /** 观众屏方向偏好。存的是枚举名，取值失败一律退回 Follow（宁可跟随，不可乱锁）。 */
-    fun orientationMode(): OrientationMode =
-        runCatching { OrientationMode.valueOf(sp.getString(KEY_ORIENT, null) ?: "Follow") }
-            .getOrDefault(OrientationMode.Follow)
-
-    fun setOrientationMode(name: String) = sp.edit().putString(KEY_ORIENT, name).apply()
+    /**
+     * 观众屏方向那个键已经废弃（见 AppRouter 里不再恢复它的那段注释）。
+     * 这里只负责把老装机留下的值抹掉 —— 不读、不写，所以也不会再影响任何人。
+     */
+    fun clearOrientationLock() = sp.edit().remove(KEY_ORIENT).apply()
 
     fun lastSummary(): String? {
         val at = sp.getLong(KEY_LAST_CONNECTED, 0L)

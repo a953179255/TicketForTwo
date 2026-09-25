@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.sp
 import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.ticketfortwo.app.BuildConfig
 import com.ticketfortwo.app.ShareQuality
+import com.ticketfortwo.app.VoiceMode
 import com.ticketfortwo.app.ui.glass.GlassCard
 import com.ticketfortwo.app.ui.theme.GlassDimens
 import com.ticketfortwo.app.ui.theme.Ink
@@ -633,18 +634,34 @@ fun QualitySettingsScreen(
             }
         }
 
-        SectionTitle("分享内容")
+        SectionTitle("声音与画面")
         GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
             Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
                 SegmentRow(
-                    options = listOf("画面 + 语音", "仅语音"),
-                    selected = if (quality.videoEnabled) 0 else 1,
-                ) { onChange(quality.copy(videoEnabled = it == 0)) }
-                if (quality.videoEnabled) {
-                    StatusChip("开始分享时会弹系统投屏授权；对方看到的就是你的屏幕", ChipTone.Neutral)
-                } else {
-                    StatusChip("仅语音：不弹投屏授权，几乎不耗流量（约 0.3 MB/分钟），适合纯连麦", ChipTone.Ok)
-                }
+                    options = VoiceMode.entries.map { VoiceMode.label(it) },
+                    selected = VoiceMode.entries.indexOf(quality.voiceMode),
+                ) { onChange(quality.copy(voiceMode = VoiceMode.entries[it])) }
+                Text(
+                    when (quality.voiceMode) {
+                        /* 每一档都要说清"声音从哪儿来"，因为这三条路的物理来源不一样：
+                           分享屏幕时影片声只能靠外放灌进麦克风；放映厅里对方是自己播原声的，
+                           那时麦克风反而是回声的来源，会被自动关掉。写一句"默认只有视频声"
+                           而不解释这个，用户就会在放映厅里纳闷"我麦克风关了怎么他还有声音"。 */
+                        VoiceMode.VideoOnly ->
+                            "默认档。对方只听画面那边的声音，不说话进来。\n" +
+                                "· 放映厅里对方自己播原声，你的麦克风会自动关掉（不然两份声音叠成回声）\n" +
+                                "· 整屏分享时影片声只能靠你的外放进麦克风 —— 想让他听清就外放大声点\n" +
+                                "· 他想开口，得先把这里改成「视频声 + 连麦」"
+                        VoiceMode.VideoPlusCall ->
+                            "两边都能说话。放映厅里你的麦克风会一直开着，可能和对方那份原声叠在一起 —— " +
+                                "觉得回声就切回「只有视频声」。"
+                        VoiceMode.CallOnly ->
+                            "不弹投屏授权，几乎不耗流量（约 0.3 MB/分钟），适合纯连麦。"
+                    },
+                    fontSize = 11.5.sp,
+                    color = Ink.TextMid,
+                    lineHeight = 17.sp,
+                )
             }
         }
 
@@ -653,7 +670,9 @@ fun QualitySettingsScreen(
             Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp1)) {
                 InfoRow("开关位置", "通话中控制岛上的麦克风按钮")
                 Text(
-                    "麦克风随时可静音/取消，不在这里设置 —— 这页只管「开始分享前」定下的画质。",
+                    "麦克风随时可静音/取消，不在这里设置 —— 这页只管「开始分享前」定下的画质。\n" +
+                        "回声消除按机型走：机器自带硬件消回声就交给它，没有就用 WebRTC 自己的软件消回声，" +
+                        "两端同一套规则。",
                     fontSize = 12.sp,
                     color = Ink.TextMid,
                     lineHeight = 17.sp,

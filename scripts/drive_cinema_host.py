@@ -73,8 +73,13 @@ def main():
         adb("shell", "am", "start", "-a", "android.intent.action.SEND", "-t", "text/plain",
             "--es", "android.intent.extra.TEXT", f"'{SITE}'", "-n", f"{PKG}/.MainActivity")
         time.sleep(7)
-    elif not tap("HLS 测试流"):
-        print("FAIL  找不到「HLS 测试流」")
+    else:
+        # 三颗测试胶囊已从主操作行挪进「展开嗅探」里面（它们是量具，不该和「开始放映」
+        # 抢同一行 —— 横屏时那一行正好把画面挤没）。所以先开面板再点。
+        tap("展开嗅探")
+        time.sleep(0.8)
+        if not tap("HLS 测试流"):
+            print("FAIL  展开嗅探后仍找不到「HLS 测试流」")
         return 1
     print("等片源被嗅到（轮询，不固定 sleep）…")
     # 固定 sleep 会误判：页面加载 + 首个清单请求到达的耗时随网络浮动，

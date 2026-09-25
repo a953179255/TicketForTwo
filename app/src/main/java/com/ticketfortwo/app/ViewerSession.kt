@@ -345,6 +345,13 @@ object ViewerSession {
         _cinema.value = null
         _cinemaAllowed.value = false
         cinemaAckedVersion = -1L
+        /* 方向偏好跟着这一场走，散场就回"跟随"。
+         *
+         * 它以前是写进 SharedPreferences 的，于是某次看片时点的"锁横屏"会一直生效：
+         * 这一场还没散的时候，回到首页、甚至重开 App 都停在横屏，而能改它的按钮只在
+         * 观看界面里 —— 用户报的"App 一打开就是横屏，手机明明是竖着拿的"就是这么来的。
+         * 见 MainActivity 里同一件事的另一半（不再从盘上恢复）。 */
+        _orientationMode.value = OrientationMode.Follow
         _state.value = State.Idle
     }
 
@@ -653,7 +660,9 @@ object ViewerSession {
             note("未授予麦克风权限：只看画面，不能连麦")
             return null
         }
-        val src = RtcEngine.factory.createAudioSource(MediaConstraints()) ?: return null
+        // 约束和房主侧同一份：回声消除该开在哪一档只在一处决定，两端各写一套的话，
+        // 出问题时就说不清是哪一端没开。
+        val src = RtcEngine.factory.createAudioSource(RtcEngine.audioSourceConstraints()) ?: return null
         val track = RtcEngine.factory.createAudioTrack("mic", src)
         // 跟着 _micMuted 走，别写死 false：写死就把"要不要发声音"这个决定
         // 复制到了两个地方，调用方一改顺序就会悄悄变成常发静音（房主收得到、听不见）。
@@ -661,6 +670,7 @@ object ViewerSession {
         audioSource = src
         audioTrack = track
         _micLive.value = true
+        RtcEngine.logAudioProcessingState("viewer")
         return track
     }
 

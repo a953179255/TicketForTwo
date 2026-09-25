@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -37,6 +38,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -44,6 +46,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.ticketfortwo.app.CallSession
+import com.ticketfortwo.app.VoiceMode
 import com.ticketfortwo.app.cinema.CinemaDebug
 import com.ticketfortwo.app.cinema.CinemaProbe
 import com.ticketfortwo.app.cinema.CinemaSync
@@ -101,6 +104,8 @@ fun CinemaScreen(
     /** 厅已开但对方还没进来时，这一条就是邀请链接 —— 厅的入口动作是"发链接"。 */
     inviteUrl: String? = null,
     viewerOnline: Boolean = false,
+    /** 这一场的声音档，只为在状态卡上说实话（"只有视频声"时麦克风可能是关着的）。 */
+    voiceMode: VoiceMode = VoiceMode.VideoOnly,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -323,6 +328,127 @@ fun CinemaScreen(
         }
     }
 
+    /* ── 横屏是另一种排法 ─────────────────────────────────────────────────
+     *
+     * 用户直接指出："横屏状态的 UI 排版不太对，占用的位置太多了，能看到的有效信息很少。"
+     * 量一下就明白他指的是什么：2400x1080 的横屏上，纵向只有约 390dp，而竖屏那套
+     * 顶栏(56) + 地址行(56) + 胶囊行(48) + 底部卡(100~236) 一层层摞下来，
+     * 留给画面的权重只剩一两百 dp —— 一块横屏手机放不了一个横屏视频，本末倒置。
+     *
+     * 横屏改成左右分栏：画面在左、吃掉尽可能多的宽度；地址、动作、状态卡挤进右边
+     * 一条固定宽度的控制栏。这样画面拿到的是"整屏高度 × (屏宽 - 320dp)"，
+     * 16:9 的片子在横屏上第一次是铺得开的。
+     *
+     * 顺带把三颗**测试用**的胶囊（换一条流 / 本地测试页 / HLS 测试流）挪进「展开嗅探」
+     * 里面：它们是量具，不是给用户看的，而它们正好占了主操作那一行的一半宽度。
+     * 依赖它们的脚本改成先点「展开嗅探」（scripts/drive_cinema_*.py 已同步）。 */
+    val wide = LocalConfiguration.current.let { it.screenWidthDp > it.screenHeightDp }
+
+    val addressRow: @Composable (Modifier) -> Unit = { rowModifier -> Row(
+        rowModifier.fillMaxWidth().padding(horizontal = GlassDimens.screenH, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        CompactGlassField(
+            value = inputUrl,
+            onValueChange = { inputUrl = it },
+            label = "地址",
+            // 权重给到 1f 之外还要留缝：不加 weight 时限宽的行为是"文字压在按钮下面"，
+            // 实测长 URL 会一路顶到「打开」按钮底下，看着像按钮粘在字上。
+            //
+            // 框与按钮**必须同高**（274dp 窄屏实测：框 40、按钮 52，居中之后按钮
+            // 上下各探出 6dp，这一行看着像两个没对齐的零件）。44dp 是触控下限，
+            // 所以把框抬到 44、按钮压到 44，而不是反过来迁就 40。
+            modifier = Modifier.weight(1f).padding(end = 2.dp),
+            boxHeight = 44.dp,
+        )
+        PrimaryPill(text = "打开", onClick = {
+            pageUrl = normalizeUrl(inputUrl)
+            note = "正在打开，嗅探中…"
+        }, backdrop = backdrop, height = 44.dp)
+    }
+    }
+
+    val actionRow: @Composable () -> Unit = { Row(
+        /* 这一排原来是不滚动的五颗胶囊：屏宽不够时**最后一颗「开始放映」整个被切到屏外**
+           （uiautomator 里根本找不到它，实测点不到 —— 主操作按钮看不见，等于这一屏没有主操作）。
+           现在按重要度排序 + 允许横滑：主操作永远在最左边看得见的位置，调试用的排到最后。 */
+        Modifier.fillMaxWidth().padding(start = GlassDimens.screenH, bottom = 4.dp)
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        // 放映/收厅：房主确认才切 —— 嗅探有认错的时候（广告分片、预告片），
+        // 自动切等于把误判直接端给对方。
+        GlassTextButton(if (cinema == null) "开始放映" else "收厅", onClick = {
+            if (cinema != null) {
+                CallSession.setCinemaTrack(null)
+                note = "已收厅，对方那边退回等候屏"
+            } else {
+                val h = CinemaProbe.bestOf(hits)
+                if (h != null) {
+                    screen(h)
+                } else {
+                    val pv = player
+                    // 分开说三种"没候选"，每种都给出下一步：
+                    // ① 嗅到的只是本机文件地址；② 页面有播放器但没在放；③ 真的什么都没有。
+                    // ② 是最常见的一种（11 站样本里"没嗅到"的四站中两站如此：B 站、Vimeo
+                    // 都是按下播放才去取流，没有请求就没有可嗅的地址）—— 那就替他点上。
+                    note = when {
+                        CinemaProbe.localOnly(hits) != null ->
+                            "嗅到的是本机文件地址（file://），对方播不了 —— 打开一个网页里的播放器再试"
+                        pv != null && !pv.playing -> {
+                            webView.post {
+                                webView.evaluateJavascript(
+                                    WatchSync.jsFor(WatchCmd.Play, pv.posMs, pv.durMs),
+                                    null,
+                                )
+                            }
+                            "这页还没播 —— 先替你点上播放，等它开始取流再按一次「开始放映」"
+                        }
+                        else ->
+                            "还没嗅到地址 —— 先在这页把视频点成播放（多数站点是按了播放才去取流），" +
+                                "再按开始放映"
+                    }
+                }
+            }
+        }, backdrop)
+        GlassTextButton(if (showPanel) "收起嗅探" else "展开嗅探", onClick = {
+            showPanel = !showPanel
+        }, backdrop)
+    }
+    }
+
+    val panel: @Composable (Modifier) -> Unit = { panelModifier -> CinemaPanel(
+        modifier = panelModifier,
+        wide = wide,
+        backdrop = backdrop,
+        cinema = cinema,
+        player = player,
+        allowControl = allowControl,
+        onAllowChange = {
+            allowControl = it
+            CallSession.setViewerMayControl(it)
+        },
+        hits = hits,
+        note = note,
+        showSniffer = showPanel,
+        probe = probe,
+        eme = eme,
+        inviteUrl = inviteUrl,
+        viewerOnline = viewerOnline,
+        playback = playback,
+        voiceLine = VoiceMode.label(voiceMode),
+        onCopyInvite = {
+            inviteUrl?.let {
+                context.copy("邀请链接", it)
+                note = "邀请链接已复制，发给对方就能进厅"
+            }
+        },
+        onPick = { h -> screen(h) },
+        onTestUrl = { u -> inputUrl = u; pageUrl = u },
+    )
+    }
+
     Column(Modifier.fillMaxSize()) {
         GlassPageBar(backdrop, title = "放映厅", onBack = onBack) {
             Text(
@@ -332,125 +458,40 @@ fun CinemaScreen(
             )
         }
 
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = GlassDimens.screenH, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            CompactGlassField(
-                value = inputUrl,
-                onValueChange = { inputUrl = it },
-                label = "地址",
-                // 权重给到 1f 之外还要留缝：不加 weight 时限宽的行为是"文字压在按钮下面"，
-                // 实测长 URL 会一路顶到「打开」按钮底下，看着像按钮粘在字上。
-                //
-                // 框与按钮**必须同高**（274dp 窄屏实测：框 40、按钮 52，居中之后按钮
-                // 上下各探出 6dp，这一行看着像两个没对齐的零件）。44dp 是触控下限，
-                // 所以把框抬到 44、按钮压到 44，而不是反过来迁就 40。
-                modifier = Modifier.weight(1f).padding(end = 2.dp),
-                boxHeight = 44.dp,
-            )
-            PrimaryPill(text = "打开", onClick = {
-                pageUrl = normalizeUrl(inputUrl)
-                note = "正在打开，嗅探中…"
-            }, backdrop = backdrop, height = 44.dp)
-        }
-        /* 这一排原来是不滚动的五颗胶囊：屏宽不够时**最后一颗「开始放映」整个被切到屏外**
-           （uiautomator 里根本找不到它，实测点不到 —— 主操作按钮看不见，等于这一屏没有主操作）。
-           现在按重要度排序 + 允许横滑：主操作永远在最左边看得见的位置，调试用的两排到最后。 */
-        Row(
-            Modifier.fillMaxWidth().padding(start = GlassDimens.screenH, bottom = 4.dp)
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            // 放映/收厅：房主确认才切 —— 嗅探有认错的时候（广告分片、预告片），
-            // 自动切等于把误判直接端给对方。
-            GlassTextButton(if (cinema == null) "开始放映" else "收厅", onClick = {
-                if (cinema != null) {
-                    CallSession.setCinemaTrack(null)
-                    note = "已收厅，对方那边退回等候屏"
-                } else {
-                    val h = CinemaProbe.bestOf(hits)
-                    if (h != null) {
-                        screen(h)
-                    } else {
-                        val pv = player
-                        // 分开说三种"没候选"，每种都给出下一步：
-                        // ① 嗅到的只是本机文件地址；② 页面有播放器但没在放；③ 真的什么都没有。
-                        // ② 是最常见的一种（11 站样本里"没嗅到"的四站中两站如此：B 站、Vimeo
-                        // 都是按下播放才去取流，没有请求就没有可嗅的地址）—— 那就替他点上。
-                        note = when {
-                            CinemaProbe.localOnly(hits) != null ->
-                                "嗅到的是本机文件地址（file://），对方播不了 —— 打开一个网页里的播放器再试"
-                            pv != null && !pv.playing -> {
-                                webView.post {
-                                    webView.evaluateJavascript(
-                                        WatchSync.jsFor(WatchCmd.Play, pv.posMs, pv.durMs),
-                                        null,
-                                    )
-                                }
-                                "这页还没播 —— 先替你点上播放，等它开始取流再按一次「开始放映」"
-                            }
-                            else ->
-                                "还没嗅到地址 —— 先在这页把视频点成播放（多数站点是按了播放才去取流），" +
-                                    "再按开始放映"
-                        }
-                    }
+        if (wide) {
+            Row(Modifier.fillMaxWidth().weight(1f)) {
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .padding(start = GlassDimens.screenH, bottom = 6.dp),
+                ) {
+                    AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
                 }
-            }, backdrop)
-            GlassTextButton(if (showPanel) "收起嗅探" else "展开嗅探", onClick = {
-                showPanel = !showPanel
-            }, backdrop)
-            GlassTextButton("换一条流", onClick = {
-                inputUrl = CINEMA_TEST_HLS_2; pageUrl = CINEMA_TEST_HLS_2
-            }, backdrop)
-            GlassTextButton("本地测试页", onClick = {
-                inputUrl = CINEMA_TEST_LOCAL; pageUrl = CINEMA_TEST_LOCAL
-            }, backdrop)
-            GlassTextButton("HLS 测试流", onClick = {
-                inputUrl = CINEMA_TEST_HLS; pageUrl = CINEMA_TEST_HLS
-            }, backdrop)
-        }
-
-        Box(
-            Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = GlassDimens.screenH),
-        ) {
-            AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
-        }
-
-        /* 这张卡**一直在**：它是厅的控制面（邀请、放映状态、方向盘开关），
-           「收起嗅探」收的只是量具那几行，不是整张卡。
-           原来写成 `if (showPanel || cinema != null)`，于是"默认收着量具 + 还没选片"
-           这两个条件一叠加，整张卡直接消失，屏幕上只剩一块黑 —— 量具默认收起之后
-           第一时间就踩到了（截图实测）。 */
-        CinemaPanel(
-            backdrop = backdrop,
-            cinema = cinema,
-            player = player,
-            allowControl = allowControl,
-            onAllowChange = {
-                allowControl = it
-                CallSession.setViewerMayControl(it)
-            },
-            hits = hits,
-            note = note,
-            showSniffer = showPanel,
-            probe = probe,
-            eme = eme,
-            inviteUrl = inviteUrl,
-            viewerOnline = viewerOnline,
-            playback = playback,
-            onCopyInvite = {
-                inviteUrl?.let {
-                    context.copy("邀请链接", it)
-                    note = "邀请链接已复制，发给对方就能进厅"
+                Column(Modifier.width(320.dp).fillMaxHeight()) {
+                    addressRow(Modifier)
+                    actionRow()
+                    panel(Modifier.weight(1f).padding(bottom = 6.dp))
                 }
-            },
-            onPick = { h -> screen(h) },
-        )
+            }
+        } else {
+            addressRow(Modifier)
+            actionRow()
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = GlassDimens.screenH),
+            ) {
+                AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
+            }
+            /* 这张卡**一直在**：它是厅的控制面（邀请、放映状态、方向盘开关），
+               「收起嗅探」收的只是量具那几行，不是整张卡。
+               原来写成 `if (showPanel || cinema != null)`，于是"默认收着量具 + 还没选片"
+               这两个条件一叠加，整张卡直接消失，屏幕上只剩一块黑 —— 量具默认收起之后
+               第一时间就踩到了（截图实测）。 */
+            panel(Modifier)
+        }
     }
 
     if (fullScreenView != null) {
@@ -468,6 +509,9 @@ fun CinemaScreen(
  */
 @Composable
 private fun CinemaPanel(
+    modifier: Modifier = Modifier,
+    /** 横屏：卡片挤在右边一条 320dp 的栏里，长说明文案必须让位给事实行。 */
+    wide: Boolean = false,
     backdrop: LayerBackdrop,
     cinema: CinemaSync.State?,
     player: com.ticketfortwo.app.watch.WatchState?,
@@ -483,8 +527,12 @@ private fun CinemaPanel(
     viewerOnline: Boolean,
     /** 对方那边这条到底播没播起来；null = 还没回执。 */
     playback: CinemaSync.PlaybackAck?,
+    /** 这一场的声音档（"只有视频声"时要说明麦克风为什么是关的）。 */
+    voiceLine: String?,
     onCopyInvite: () -> Unit,
     onPick: (MediaSniffer.Hit) -> Unit,
+    /** 三颗测试用胶囊的目标地址。它们从主操作行挪进「展开嗅探」，见 CinemaScreen 的排布注释。 */
+    onTestUrl: (String) -> Unit,
 ) {
     // 计数也只数"对方真能播的"：把 file:// 算进"1 条可播地址"是骗房主。
     val playable = hits.filter {
@@ -493,6 +541,8 @@ private fun CinemaPanel(
     /** 现在到底有没有在分享画面 —— 厅先开那条路是不投屏的，措辞要跟着这个走。 */
     val localVideo by CallSession.localVideo.collectAsState()
     val screenShared = localVideo != null
+    /** 对方是不是已经在这条流上本地播起来了 —— 决定"只有视频声"时麦克风该不该关着。 */
+    val viewerLocalPlays = playback?.ok == true
     /* 换片之后重新开始等回执。跟着 version 走而不是跟 cinema 走：
        进度每秒都在更新 cinema，那样这个定时器会被无限续期，永远不超时。 */
     var ackWaited by remember { mutableStateOf(false) }
@@ -516,7 +566,7 @@ private fun CinemaPanel(
     }
     GlassPanel(
         backdrop = backdrop,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+        modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
         /* 这张卡是多行的，不能用 radiusIsland —— 那个 token 是 9999dp 的**胶囊**，
            Compose 会把圆角钳到短边一半，于是卡的两端变成两个半圆，
            第一行标题正好落在半圆里，看着就像"字被玻璃边缘切掉"（截图实测过）。
@@ -533,8 +583,12 @@ private fun CinemaPanel(
                     // 用 heightIn 而不是固定 height：固定高度会把卡片自己的内容切掉
                     // （实测：标题被截在上缘、最后一行 URL 被切一半），
                     // 内容短时又该收起来，不该撑着一块空玻璃。
+                    //
+                    // 横屏时这张卡拿到的是分栏剩下的那点高度，所以**不管收没收量具都要能滚**，
+                    // 否则最后一行被栏底切掉（竖屏沿用原来的规则：只有展开量具才限高）。
                     .then(
-                        if (showSniffer) {
+                        if (wide) Modifier.verticalScroll(rememberScrollState())
+                        else if (showSniffer) {
                             Modifier.heightIn(max = 236.dp).verticalScroll(rememberScrollState())
                         } else {
                             Modifier
@@ -595,6 +649,17 @@ private fun CinemaPanel(
                             color = if (allowControl) Ink.Live else Ink.TextMid,
                         )
                     }
+                    /* 声音档在放映中这一屏特别要说：这一档下麦克风可能是**我们替他关的**
+                       （对方本地播原声，房主再外放一遍就是回声）。不写出来，房主会以为
+                       自己麦克风图标亮着对方就该听见他。 */
+                    if (voiceLine != null) {
+                        Text(
+                            voiceLine + if (viewerLocalPlays) " · 对方自己播原声，你的麦克风已关" else "",
+                            fontSize = 10.5.sp,
+                            color = if (viewerLocalPlays) Ink.Warn else Ink.TextLow,
+                            lineHeight = 14.sp,
+                        )
+                    }
                 } else {
                     // 还没选片
                     Text(
@@ -624,8 +689,13 @@ private fun CinemaPanel(
                     Text(
                         /* 这句话原来写死"对方现在看到的是你的屏幕" —— 可厅先开这条路
                            **根本不投屏**（只起信令 + 语音），观众看到的是一块等候屏。
-                           措辞跟着事实走：有没有在分享画面，是问出来的不是假设的。 */
-                        if (screenShared)
+                           措辞跟着事实走：有没有在分享画面，是问出来的不是假设的。
+                           横屏时压成一句：这张卡在分栏里只有几百 dp 高，
+                           四行教学文案会把"放映状态"那几行挤出卡外（用户说的"有效信息太少"）。 */
+                        if (wide) {
+                            if (screenShared) "按「开始放映」他就改成自己播这条流（原生画质）"
+                            else "按「开始放映」，他那边本地播这条流；你的屏幕不用分享出去"
+                        } else if (screenShared)
                             "对方现在看到的是你的屏幕。按「开始放映」，他就改成自己播这条流 " +
                                 "—— 画质原生，也不再压两层控件。要手挑候选就点「展开嗅探」。"
                         else
@@ -638,6 +708,17 @@ private fun CinemaPanel(
                     )
                 }
                 if (showSniffer) {
+                    /* 三颗测试胶囊从主操作行搬到这里（见 CinemaScreen 的排布注释）：
+                       它们是量具，不该和「开始放映」抢同一行。 */
+                    Row(
+                        Modifier.fillMaxWidth().padding(bottom = 4.dp)
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        GlassTextButton("换一条流", onClick = { onTestUrl(CINEMA_TEST_HLS_2) }, backdrop)
+                        GlassTextButton("本地测试页", onClick = { onTestUrl(CINEMA_TEST_LOCAL) }, backdrop)
+                        GlassTextButton("HLS 测试流", onClick = { onTestUrl(CINEMA_TEST_HLS) }, backdrop)
+                    }
                     Text(
                         "点一条就放给对方（放映中点另一条 = 换片，不用先收厅）",
                         fontSize = 10.sp,

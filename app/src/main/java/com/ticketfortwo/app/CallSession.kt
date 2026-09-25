@@ -105,6 +105,19 @@ object CallSession {
     private val _micMuted = MutableStateFlow(false)
     val micMuted: StateFlow<Boolean> = _micMuted.asStateFlow()
 
+    /**
+     * 麦克风**实际**开没开。和 [micMuted] 分开是必要的：声音档是「只有视频声」而对方
+     * 已经在本地播原声时，麦克风会被我们主动关掉（[VoiceMode.hostMicNeeded]），
+     * 但用户并没有按静音。界面如果只看 micMuted，就会在麦克风其实闭着的时候画一个
+     * "说话中"的图标，而对方那边一点声音都没有。
+     */
+    private val _micLive = MutableStateFlow(false)
+    val micLive: StateFlow<Boolean> = _micLive.asStateFlow()
+
+    /** 这一场房主听不听得到对方说话（「只有视频声」= 听不到）。给 UI 说实话用。 */
+    private val _hostHearsViewer = MutableStateFlow(true)
+    val hostHearsViewer: StateFlow<Boolean> = _hostHearsViewer.asStateFlow()
+
     /** 当前这一端在分享里的角色。放这里而不是 Activity 里：Activity 会被系统回收，
      *  分享不会 —— 重建后 UI 要能从会话本身恢复出正确的分支。 */
     private val _role = MutableStateFlow<Role?>(null)
@@ -192,12 +205,16 @@ object CallSession {
             _cinema.value = null
             _viewerPlayback.value = null
             broadcastCinema()
+            applyVoicePolicy("收厅")
             note("已收厅，回到整屏分享")
             return
         }
         cinemaVersion++
         // 换了一条片，上一条的回执就不该继续显示在卡片上（否则"对方放不了"会跟着人走）
         _viewerPlayback.value = null
+        // 换片之后要按声音档重判一次麦克风：上一条对方是本地播（麦已关），这一条
+        // 可能换成一条他放不出来的地址 —— 那时观众只能靠房主外放灌麦听声，麦必须开回来。
+        applyVoicePolicy("递片")
         // 换片和首次递出去要在日志里分得开，否则回看时看不出中途换过片
         val wasScreening = _cinema.value != null
         _cinema.value = CinemaSync.State(
@@ -276,6 +293,9 @@ object CallSession {
             return
         }
         _viewerPlayback.value = ack
+        // 对方"能不能自己出声"直接决定房主要不要开着麦克风（只有视频声 + 他本地播 = 关掉），
+        // 所以这条回执是声音档的一个输入，不能只拿去画界面。
+        applyVoicePolicy("回执 ${if (ack.ok) "ok" else "fail"}")
         // 这行是给统计脚本读的，措辞可以改，前缀和字段顺序不能改
         Log.i(TAG, "CINEMA_ACK ${ack.version}|${if (ack.ok) "ok" else "fail"}|${ack.code}|${ack.detail}")
         note(
@@ -312,6 +332,12 @@ object CallSession {
     /** 采集出来的本地视频轨 —— 观众加入时才 addTrack，所以要先留着。 */
     private var localVideoTrack: VideoTrack? = null
     private var quality: ShareQuality = ShareQuality()
+
+    /**
+     * 用户这一场明确按过"要说话"。为 true 时声音档不再自动关麦克风
+     * （自动关是为了防回声，不是禁令；他要说话就得让他说）。
+     */
+    private var micOverride = false
     private var sessionContext: Context? = null
 
     val isActive: Boolean get() = capture != null || peer != null || SignalHub.port != 0
@@ -394,6 +420,9 @@ object CallSession {
             _state.value = State.Failed("没有麦克风权限，语音模式无法开始；请授予麦克风权限后重试")
             return
         }
+        // 只连麦这一档不该去要投屏授权；反过来说，没拿到授权 Intent 才一定是用户选的档位
+        // （采集失败是另一回事，ScreenShareController 自己会报）。
+        if (permissionIntent == null) note("只连麦：不采集画面")
 
         // 传话员与门牌都不需要用户操作，但都不是瞬间完成，所以状态机要把这几秒画出来。
         scope.launch {
@@ -650,7 +679,7 @@ object CallSession {
         if (senders.video != null) {
             applyVideoBitrateCap(quality.maxVideoBps)
         } else {
-            note("仅语音模式：不发送视频")
+            note("只连麦：不发送视频")
         }
         p.startOffer()
     }
@@ -659,7 +688,49 @@ object CallSession {
 
     fun setMicMuted(muted: Boolean) {
         _micMuted.value = muted
-        audioTrack?.setEnabled(!muted)
+        applyVoicePolicy("手动静音")
+    }
+
+    /**
+     * 界面上那颗麦克风按钮的唯一入口。
+     *
+     * 翻的是**实际开没开**（[micLive]），不是 `micMuted` 这个布尔。区别在「只有视频声」
+     * 这一档：那时麦克风可能已经被声音档关掉了，而 `micMuted` 仍是 false —— 按钮若照旧写
+     * `setMicMuted(!micMuted)`，点下去只是把 false 变成 true，图标翻了、状态没变，
+     * 正是观众侧修过的同一个"图标骗人"毛病。
+     *
+     * 用户明确要开麦时给它一个覆盖位：这一场不再自动关（代价是对方那边会和自己的
+     * 原声叠成两份，所以提示里要说清楚，别让人以为开了没生效）。
+     */
+    fun toggleMic() {
+        micOverride = !_micLive.value
+        _micMuted.value = !_micLive.value
+        applyVoicePolicy("用户切麦")
+        if (micOverride && quality.voiceMode == VoiceMode.VideoOnly) {
+            note("已开麦。对方在本地播原声，你出声会和他那份叠在一起 —— 想只留视频声就再点一次")
+        }
+    }
+
+    /**
+     * 麦克风到底开不开、房主听不听得到对方 —— 声音档唯一落地的地方。
+     *
+     * 三处会调它：会话起/加轨、收到观众的放映回执、用户点静音。之所以集中成一个函数，
+     * 是因为这三个地方都想"顺手 setEnabled 一下"，而条件有两个（用户静音 + 声音档），
+     * 分散着写一定会出现"某条路径把该关的开着"。
+     */
+    private fun applyVoicePolicy(reason: String) {
+        val mode = quality.voiceMode
+        // "对方在本地播"必须是**这条厅的回执**说的 ok，不能只看有没有回执：
+        // 收厅之后回执清空，此时麦克风要按 B 档（外放灌麦）的规则重新开回来。
+        val viewerLocal = _cinema.value != null && _viewerPlayback.value?.ok == true
+        val micOn = (micOverride || VoiceMode.hostMicNeeded(mode, viewerLocal)) && !_micMuted.value
+        audioTrack?.setEnabled(micOn)
+        _micLive.value = micOn
+        val hears = VoiceMode.hostHearsViewer(mode)
+        RtcEngine.setDownlinkMuted(!hears)
+        _hostHearsViewer.value = hears
+        Log.i(TAG, "声音档[$reason] ${mode.name} 对方本地播=$viewerLocal 手动静音=${_micMuted.value} " +
+            "覆盖=$micOverride → 麦克风=$micOn 房主听对方=$hears")
     }
 
     /**
@@ -701,6 +772,13 @@ object CallSession {
         _remoteVideo.value = null
         _role.value = null
         _micMuted.value = false
+        _micLive.value = false
+        _hostHearsViewer.value = true
+        micOverride = false
+        // 下行静音是**设备级**的开关（整个进程共用一个音频设备模块）：这一场为了"只有视频声"
+        // 把它关了，下一场如果没人复位，同一台机器上改当观众时就听不见对方 —— 而且现象
+        // 看起来像"他的麦克风坏了"。所以停会时第一件事就是把它交还。
+        RtcEngine.setDownlinkMuted(false)
         _state.value = State.Idle
         // 隧道随进程停了，这条链接也就失效了 —— 留着会让界面继续显示一个打不开的门牌
         _inviteUrl.value = null
@@ -839,9 +917,11 @@ object CallSession {
     }
 
     /**
-     * 麦克风轨。用空的 [MediaConstraints] —— 默认就会启用 AEC / NS / AGC。
+     * 麦克风轨。约束由 [RtcEngine.audioSourceConstraints] 给 —— 回声消除开在哪一档、
+     * 为什么不能写空，理由全在那一处。
+     *
      * 关键约束：**这条轨存在时**，addTrack 产生的 transceiver 是 sendrecv，
-     * 双向才都有声音（静音只 setEnabled(false)，不移除轨道）。
+     * 双向才都有声音（开合只 setEnabled(false)，不移除轨道）。
      *
      * 没有 RECORD_AUDIO 就**根本不建这条轨**：libwebrtc 的音频设备是在连接时才
      * 打开 AudioRecord，届时权限被拒会走 SDK 内部的 CHECK 失败路径（可能直接 abort），
@@ -855,11 +935,12 @@ object CallSession {
             note("未授予麦克风权限：本次只能分享画面，不能连麦")
             return null
         }
-        val src = RtcEngine.factory.createAudioSource(MediaConstraints()) ?: return null
+        val src = RtcEngine.factory.createAudioSource(RtcEngine.audioSourceConstraints()) ?: return null
         val track = RtcEngine.factory.createAudioTrack("mic", src)
-        track.setEnabled(!_micMuted.value)
         audioSource = src
         audioTrack = track
+        RtcEngine.logAudioProcessingState("host")
+        applyVoicePolicy("建轨")
         return track
     }
 

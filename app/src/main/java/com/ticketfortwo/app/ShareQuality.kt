@@ -18,18 +18,27 @@ data class ShareQuality(
     val scale: Float = CallSession.DEFAULT_CAPTURE_SCALE,
     val fps: Int = CallSession.DEFAULT_VIDEO_FPS,
     val maxVideoBps: Int = CallSession.DEFAULT_MAX_VIDEO_BPS,
-    /** false = 纯语音：不申请投屏、不建视频轨，offer 里没有视频 m-line。 */
-    val videoEnabled: Boolean = true,
+    /** 声音怎么传（[VoiceMode]）。默认只有视频声，连麦要额外开启。 */
+    val voiceMode: VoiceMode = VoiceMode.VideoOnly,
 ) {
+
+    /**
+     * 这一档要不要传画面。
+     *
+     * 以前它是一个存进 SharedPreferences 的布尔字段（`q_video`），和"语音"混在一起表达
+     * 三件事；现在由 [voiceMode] 派生 —— 只连麦才没有画面。留这个名字是因为调用方
+     * 关心的就是"要不要去要投屏授权"，没必要为了改名去动六处判断。
+     */
+    val videoEnabled: Boolean get() = VoiceMode.sendsVideo(voiceMode)
 
     /** 分辨率档的用户文案。**必须带屏宽** —— 见 [resolutionLabelFor]。 */
     fun resolutionLabel(screenWidthPx: Int): String = resolutionLabelFor(scale, screenWidthPx)
 
     /** 首页与设置页一行摘要。 */
     fun summary(screenWidthPx: Int): String = if (!videoEnabled) {
-        "仅语音"
+        VoiceMode.label(voiceMode)
     } else {
-        "${resolutionLabel(screenWidthPx)} · $fps 帧 · ${bpsLabel(maxVideoBps)}"
+        "${VoiceMode.label(voiceMode)} · ${resolutionLabel(screenWidthPx)} · $fps 帧 · ${bpsLabel(maxVideoBps)}"
     }
 
     /**
@@ -95,6 +104,7 @@ data class ShareQuality(
         private const val K_FPS = "q_fps"
         private const val K_BPS = "q_bps"
         private const val K_VIDEO = "q_video"
+        private const val K_VOICE = "q_voice"
 
         fun load(context: Context): ShareQuality {
             val d = ShareQuality()
@@ -106,8 +116,24 @@ data class ShareQuality(
                 fps = sp.getInt(K_FPS, d.fps).takeIf { it in FPS_MIN..FPS_MAX } ?: d.fps,
                 // 码率可能是「自定义」值（不在预设档里），所以按范围校验而不是按档位成员。
                 maxVideoBps = sp.getInt(K_BPS, d.maxVideoBps).takeIf { it in BPS_MIN..BPS_MAX } ?: d.maxVideoBps,
-                videoEnabled = sp.getBoolean(K_VIDEO, d.videoEnabled),
+                voiceMode = voiceModeOf(sp),
             )
+        }
+
+        /**
+         * 读声音档，并且把**旧版那份布尔**翻译过来。
+         *
+         * 旧版只有 `q_video`（true=画面+语音 / false=仅语音）。直接丢掉它会让老用户的
+         * "仅语音"在升级后变成"有画面"——那是行为突变；所以：新键没写过时，
+         * `q_video=false` 认作 [VoiceMode.CallOnly]，其余一律落到默认档
+         * [VoiceMode.VideoOnly]（旧档里"画面+语音"和"连麦"本来就是同一件事，
+         * 而默认只有视频声正是这次要改的东西）。
+         */
+        private fun voiceModeOf(sp: android.content.SharedPreferences): VoiceMode {
+            sp.getString(K_VOICE, null)?.let { raw ->
+                return runCatching { VoiceMode.valueOf(raw) }.getOrDefault(VoiceMode.VideoOnly)
+            }
+            return if (sp.getBoolean(K_VIDEO, true)) VoiceMode.VideoOnly else VoiceMode.CallOnly
         }
 
         fun save(context: Context, q: ShareQuality) {
@@ -115,7 +141,10 @@ data class ShareQuality(
                 .putFloat(K_SCALE, q.scale)
                 .putInt(K_FPS, q.fps)
                 .putInt(K_BPS, q.maxVideoBps)
+                // 两个键一起写：`q_video` 现在是派生值，但留着它，
+                // 万一回滚到旧版本，至少画面/仅语音这一层语义还在。
                 .putBoolean(K_VIDEO, q.videoEnabled)
+                .putString(K_VOICE, q.voiceMode.name)
                 .apply()
         }
     }

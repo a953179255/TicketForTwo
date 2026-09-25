@@ -193,6 +193,15 @@ fun CallScreen(
     screenSharing: Boolean = false,
     /** 非投屏状态下那颗「让他看我的屏幕」：走和首页一样的授权链。 */
     onStartShare: () -> Unit = {},
+    /**
+     * 房主侧：这一场的声音档，以及"你听不听得到对方"。
+     *
+     * 「只有视频声」会把房主侧的下行静音（观众的声音不放出来，顺手断掉一条回声路径）。
+     * 那时房主看到的是"对方一直没说话"，真相是"他说了你听不见" —— 这两句话用户会做出
+     * 完全不同的动作，所以必须写在屏幕上，不能留在实现里。
+     */
+    voiceLabel: String? = null,
+    canHearViewer: Boolean = true,
     /** 观众侧正在画中画：玻璃控件与手势层全部让路，小窗里只留画面。 */
     pipMode: Boolean = false,
     onStop: () -> Unit,
@@ -251,7 +260,10 @@ fun CallScreen(
         // 房主这屏没有 SurfaceView，玻璃就能正常采样环境底；
         // 观众那屏视频压在最下面，SurfaceView 的内容抓不到（backdrop issue #98），只能退化成 scrim。
         if (isHost) {
-            HostStage(backdrop, peerLabel, onOpenWatch, onOpenCinema, screenSharing, onStartShare)
+            HostStage(
+                backdrop, peerLabel, onOpenWatch, onOpenCinema, screenSharing, onStartShare,
+                voiceLabel = voiceLabel, canHearViewer = canHearViewer, micOn = micOn,
+            )
         } else {
             // 首帧没到之前这块区域是纯黑 —— 用户分不清"对方画面全黑"和"卡住了"，所以必须有等待提示。
             // 不能拿 remoteTrack 当 key：轨道一到，state 就被重建成 false，
@@ -522,7 +534,22 @@ private fun HostStage(
     onOpenCinema: () -> Unit,
     screenSharing: Boolean,
     onStartShare: () -> Unit,
+    voiceLabel: String?,
+    canHearViewer: Boolean,
+    micOn: Boolean,
 ) {
+    /* 谁听得到谁 —— 这一行必须自己说，不能让房主去猜。
+     *
+     * 「只有视频声」这一档同时关掉了两样东西：对方本地播原声时房主的麦克风（防两份声音
+     * 叠成回声），以及房主侧的下行播放（听不见观众）。少了这行字，房主看到的就是
+     * "我麦克风图标是亮的、对方一直没吭声"，然后去怀疑网络。 */
+    val voiceLine = voiceLabel?.let { v ->
+        when {
+            !canHearViewer && !micOn -> "$v · 你的麦克风已关，你也听不到他"
+            !canHearViewer -> "$v · 你出声他听不到，要双向就改成连麦"
+            else -> v
+        }
+    }
     Column(
         Modifier.fillMaxSize().padding(horizontal = GlassDimens.screenH),
         verticalArrangement = Arrangement.Center,
@@ -542,7 +569,9 @@ private fun HostStage(
                         "对方看到的就是你现在这一屏，而且跟着你走：切到别的应用、打开相册，" +
                             "他那边也同步换画面。想停就点下面的停止。"
                     else
-                        "他听得到你，但看不到你 —— 系统还没问过投屏授权。" +
+                        // 原来写死"他听得到你"—— 只有视频声 + 对方本地播原声时麦克风是关着的，
+                        // 那句就成了假话。谁听得到谁交给下面那行说实话。
+                        "他现在只有声音、没有画面 —— 系统还没问过投屏授权。" +
                             "要让他看你这屏就按下面那颗，想放片就进放映厅让他自己播原画。",
                     fontSize = 12.5.sp,
                     color = Ink.TextMid,
@@ -550,6 +579,16 @@ private fun HostStage(
                 )
                 Spacer(Modifier.height(GlassDimens.sp1))
                 Text(peerLabel, fontSize = 11.5.sp, color = Ink.TextLow)
+                // 分两行而不是拼一行：320dp 宽的机器上"还没有人加入 · 只有视频声 ·
+                // 你的麦克风已关，你也听不到他"整句必溢出（Compose 里溢出是静默截断）。
+                if (voiceLine != null) {
+                    Text(
+                        voiceLine,
+                        fontSize = 11.5.sp,
+                        lineHeight = 16.sp,
+                        color = if (canHearViewer) Ink.TextLow else Ink.Warn,
+                    )
+                }
                 // 没在投屏时这颗排最前，而且是这一屏唯一的实心按钮：此刻的主操作就是它。
                 if (!screenSharing) {
                     PrimaryPill(
