@@ -890,7 +890,14 @@ SyncWatch 1.25s 硬跳 + 0.12~1.25s 之间用 ±6% 变速微调，couple-cinema 
 （这一轮 PC 侧对 trycloudflare 和 github.com 的 TLS 都被掐断过，浏览器打开隧道直接
 `ERR_CONNECTION_CLOSED`）。
 
-已核到的：831px 宽时 `#stage.ambient` 生效、`#v` 盒子 385x722 居中（比例 0.533，
-与 480x900 一致）、圆角 16px、后景层铺满视口且 filter 已应用。
-**没核到的**：真实像素截图 —— 内置浏览器当时没有可见表面，headless Chrome 又起不来，
-所以"余晖好不好看"这一眼还没看到，隧道通了以后在真链接上补。
+已核到的（headless Chrome 1280x820 打开 `?demo=canvas`，截图见 `.dev/ambient-wide.png`）：
+`#stage.ambient` 生效；`#v` 盒子 385x722 居中，比例 0.533 与 480x900 一致；圆角 16px；
+后景层铺满视口、`blur(42px) saturate(1.4) brightness(.5)` 已应用。
+**左右黑边区像素均值 26.5**（纯黑是 0~5），窄屏 420x820 同一区域是另一套布局 ——
+也就是说"居中 + 大片死黑"确实变成了"居中卡片 + 画面余晖"。
+
+两处没核到，别当成已核：
+1. headless 的虚拟时间下，前层 `<video>` 只画到黑帧、后层拿到了彩色帧，
+   所以这张图证明的是**布局与后景层**，不是"真实视频下的观感"。
+2. 真房主 + 真隧道下的观感还没看（这一轮 PC 侧对 trycloudflare 的 TLS 被掐断过，
+   浏览器直接 `ERR_CONNECTION_CLOSED`）。隧道恢复后要在真链接上补看一眼。
