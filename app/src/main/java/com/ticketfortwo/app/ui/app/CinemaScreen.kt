@@ -45,6 +45,7 @@ import com.ticketfortwo.app.CallSession
 import com.ticketfortwo.app.cinema.CinemaProbe
 import com.ticketfortwo.app.cinema.CinemaSync
 import com.ticketfortwo.app.cinema.MediaSniffer
+import com.ticketfortwo.app.cinema.SRC_PAGE
 import com.ticketfortwo.app.cinema.SnifferState
 import com.ticketfortwo.app.watch.WatchCmd
 import com.ticketfortwo.app.watch.WatchSync
@@ -52,6 +53,7 @@ import com.ticketfortwo.app.ui.glass.CompactGlassField
 import com.ticketfortwo.app.ui.glass.GlassPageBar
 import com.ticketfortwo.app.ui.glass.GlassPanel
 import com.ticketfortwo.app.ui.glass.GlassTextButton
+import com.ticketfortwo.app.ui.glass.LiquidToggle
 import com.ticketfortwo.app.ui.theme.GlassDimens
 import com.ticketfortwo.app.ui.theme.Ink
 import kotlinx.coroutines.delay
@@ -95,6 +97,10 @@ fun CinemaScreen(
     val cinema by CallSession.cinema.collectAsState()
     /** 房主这一侧播放器的位置/时长/标题 —— 直接复用 watch 那套探针，形状一样。 */
     var player by remember { mutableStateOf<com.ticketfortwo.app.watch.WatchState?>(null) }
+    /** 方向盘给不给对方。会话里那份是真值，这里只是本地即时反馈（点下去先亮起来）。 */
+    val mayControl by CallSession.viewerMayControl.collectAsState()
+    var allowControl by remember { mutableStateOf(mayControl) }
+    LaunchedEffect(mayControl) { allowControl = mayControl }
 
     val sniffer = remember { SnifferState() }
 
@@ -172,9 +178,15 @@ fun CinemaScreen(
             delay(800)
             webView.evaluateJavascript(MediaSniffer.emeReadJs()) { raw ->
                 val r = CinemaProbe.parseEme(raw)
-                eme = r
-                if (r.state != "running") {
-                    Log.i("Cinema", "EME ${r.state} api=${r.api} keys=${r.createKeys} err=${r.detail}")
+                // 换页会把 window 上的暂存结果一起冲掉（state=missing）——
+                // 这时要重新发起探测，而不是把 "missing" 当成最终结论显示给房主。
+                if (r.state == "missing") {
+                    webView.post { webView.evaluateJavascript(MediaSniffer.emeStartJs(), null) }
+                } else {
+                    eme = r
+                    if (r.state != "running") {
+                        Log.i("Cinema", "EME ${r.state} api=${r.api} keys=${r.createKeys} err=${r.detail}")
+                    }
                 }
             }
             if (eme?.state?.let { it != "running" && it != "pending" } == true) break
@@ -294,12 +306,20 @@ fun CinemaScreen(
             AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
         }
 
-        if (showPanel) SnifferPanel(
+        if (showPanel || cinema != null) CinemaPanel(
             backdrop = backdrop,
-            probe = probe,
-            eme = eme,
+            cinema = cinema,
+            player = player,
+            allowControl = allowControl,
+            onAllowChange = {
+                allowControl = it
+                CallSession.setViewerMayControl(it)
+            },
             hits = hits,
             note = note,
+            showSniffer = showPanel,
+            probe = probe,
+            eme = eme,
             onPick = { h ->
                 context.copy("片源", h.url)
                 note = "已复制：${MediaSniffer.shorten(h.url, 40)}"
@@ -314,18 +334,26 @@ fun CinemaScreen(
     }
 }
 
-/** 嗅探结果面板：一句总览 + 候选列表。 */
+/**
+ * 厅的底部卡。**放映中**和**没选片**是两副样子 ——
+ * 房主按下"开始放映"之后，最想知道的是"对方在不在看、放到哪了、我能不能把方向盘收回来"，
+ * 而不是那串嗅探日志。嗅探列表退到"展开嗅探"后面（它是量具，不是日常界面）。
+ */
 @Composable
-private fun SnifferPanel(
+private fun CinemaPanel(
     backdrop: LayerBackdrop,
-    probe: MediaSniffer.PageProbe?,
-    eme: CinemaProbe.EmeReport?,
+    cinema: CinemaSync.State?,
+    player: com.ticketfortwo.app.watch.WatchState?,
+    allowControl: Boolean,
+    onAllowChange: (Boolean) -> Unit,
     hits: List<MediaSniffer.Hit>,
     note: String,
+    showSniffer: Boolean,
+    probe: MediaSniffer.PageProbe?,
+    eme: CinemaProbe.EmeReport?,
     onPick: (MediaSniffer.Hit) -> Unit,
 ) {
     val playable = hits.filter { MediaSniffer.playable(it.kind) }
-    val best = CinemaProbe.bestOf(playable)
     GlassPanel(
         backdrop = backdrop,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -334,68 +362,103 @@ private fun SnifferPanel(
         content = {
             Column(
                 Modifier
-                    .height(214.dp)
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                    .fillMaxWidth()
+                    .then(if (showSniffer) Modifier.height(214.dp).verticalScroll(rememberScrollState()) else Modifier)
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                if (cinema != null) {
+                    // 放映中
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "正在放映",
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Ink.Live,
+                        )
+                        Text(
+                            "  对方本地播 · 原生画质",
+                            fontSize = 11.sp,
+                            color = Ink.TextMid,
+                        )
+                    }
                     Text(
-                        "嗅探",
+                        cinema.track.title.ifBlank { CinemaSync.sanitize(cinema.track.url) },
+                        fontSize = 12.sp,
+                        color = Ink.TextHi,
+                        maxLines = 1,
+                    )
+                    Text(
+                        "${CinemaSync.formatTime(player?.posMs ?: cinema.posMs)} / " +
+                            "${CinemaSync.formatTime(player?.durMs ?: cinema.durMs)} · " +
+                            (if (player?.playing == true) "播放中" else "暂停"),
+                        fontSize = 11.sp,
+                        color = Ink.TextLow,
+                    )
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        LiquidToggle(allowControl, { onAllowChange(it) }, backdrop)
+                        Box(Modifier.width(8.dp))
+                        Text(
+                            if (allowControl) "对方可以控制进度" else "进度只由我这边动",
+                            fontSize = 11.sp,
+                            color = if (allowControl) Ink.Live else Ink.TextMid,
+                        )
+                    }
+                } else {
+                    // 还没选片
+                    Text(
+                        if (playable.isEmpty()) "厅里还没选片" else "嗅到 ${playable.size} 条可播地址",
                         fontSize = 12.5.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = Ink.TextHi,
                     )
                     Text(
-                        "  ${playable.size} 条候选 / 共 ${hits.size} 条媒体请求",
+                        "对方现在看到的是你的屏幕。挑一条按「开始放映」，" +
+                            "他就改成自己播那条流 —— 画质原生，屏幕上也不再压两层控件。",
                         fontSize = 11.sp,
                         color = Ink.TextMid,
+                        lineHeight = 16.sp,
                     )
                 }
-                Text(
-                    probe?.let {
-                        val sz = if (it.videoWidth > 0) "${it.videoWidth}×${it.videoHeight}" else "未出画面"
-                        "页面里的 <video>：$sz · ${it.durationSec.toInt()}s" +
-                            " · ${if (it.isBlob) "blob:（MSE，源码地址在 JS 里）" else "直链"}"
-                    } ?: "还没问到页面",
-                    fontSize = 11.sp,
-                    color = if (probe?.isBlob == true) Ink.Warn else Ink.TextLow,
-                )
-                Text(CinemaProbe.describeEme(eme), fontSize = 11.sp, color = Ink.TextLow)
-                Box(Modifier.width(1.dp).height(6.dp))
-                if (best != null) {
+                if (showSniffer) {
+                    // 下面是 P0 那两条量具读数：平时收着，出问题时要一眼能看到。
                     Text(
-                        "最佳候选：${best.kind} · ${MediaSniffer.shorten(best.url, 64)}",
-                        fontSize = 11.sp,
-                        color = Ink.Live,
+                        probe?.let {
+                            val sz = if (it.videoWidth > 0) "${it.videoWidth}×${it.videoHeight}" else "未出画面"
+                            "页面 <video>：$sz · ${it.durationSec.toInt()}s · " +
+                                (if (it.isBlob) "blob:（MSE）" else "直链")
+                        } ?: "还没问到页面",
+                        fontSize = 10.5.sp,
+                        color = if (probe?.isBlob == true) Ink.Warn else Ink.TextLow,
                     )
-                }
-                if (playable.isEmpty()) {
                     Text(
-                        "还没嗅到可播的地址。打开一个真的在放片的页面看看。",
-                        fontSize = 11.sp,
+                        CinemaProbe.describeEme(eme),
+                        fontSize = 10.5.sp,
                         color = Ink.TextLow,
                     )
-                }
-                playable.forEach { h ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            "${h.kind.name.take(4)} · ${h.hits}次 · ${if (h.sources and 2 != 0) "页面" else "请求"}",
-                            fontSize = 10.sp,
-                            color = Ink.TextLow,
-                        )
-                        Box(Modifier.width(8.dp))
-                        Text(
-                            MediaSniffer.shorten(h.url, 58),
-                            fontSize = 10.5.sp,
-                            color = Ink.TextMid,
-                            maxLines = 2,
-                            modifier = Modifier.weight(1f).clickable { onPick(h) },
-                        )
+                    playable.forEach { h ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "${h.kind.name.take(4)} · ${h.hits}次 · ${if (h.sources and SRC_PAGE != 0) "页面" else "请求"}",
+                                fontSize = 10.sp,
+                                color = Ink.TextLow,
+                            )
+                            Box(Modifier.width(8.dp))
+                            Text(
+                                MediaSniffer.shorten(h.url, 58),
+                                fontSize = 10.5.sp,
+                                color = Ink.TextMid,
+                                maxLines = 2,
+                                modifier = Modifier.weight(1f).clickable { onPick(h) },
+                            )
+                        }
                     }
                 }
                 Text(note, fontSize = 10.5.sp, color = Ink.TextLow)
@@ -403,6 +466,8 @@ private fun SnifferPanel(
         }
     )
 }
+
+/** 与 cinema 包里那份是同一个常量，直接 import，不在这里另立一个 2。 */
 
 /**
  * 放映指令最终要落到房主这个 WebView 上，而"怎么往页面里注脚本"只有 watch 那一套（已测）。
