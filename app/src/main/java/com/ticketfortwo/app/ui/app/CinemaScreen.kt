@@ -59,6 +59,8 @@ import com.ticketfortwo.app.ui.glass.GlassTextButton
 import com.ticketfortwo.app.ui.glass.LiquidToggle
 import com.ticketfortwo.app.ui.theme.GlassDimens
 import com.ticketfortwo.app.ui.theme.Ink
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
 import kotlinx.coroutines.delay
 
 /** 试嗅探用的公开 HLS 测试流（Mux 官方测试台，无需登录、无 DRM）。 */
@@ -454,6 +456,7 @@ fun CinemaScreen(
     if (fullScreenView != null) {
         Box(Modifier.fillMaxSize()) {
             AndroidView(factory = { fullScreenView!! }, modifier = Modifier.fillMaxSize())
+            FullscreenHint("按返回键回到放映厅")
         }
     }
 }
@@ -700,4 +703,30 @@ private fun CinemaSync.Cmd.toWatchCmd(): WatchCmd = when (this) {
 private fun Context.copy(label: String, text: String) {
     val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
     cm.setPrimaryClip(ClipData.newPlainText(label, text))
+}
+
+/**
+ * 网页自己进了全屏（`onShowCustomView`）之后，App 的顶栏、地址栏、放映卡片
+ * 全部被盖住 —— 房主看到的是"我的 App 没了"，而出路只有系统返回键。
+ * 实测：横屏一转，`watch/test.html` 的 video 就走到这条路上（.dev/cinema-host-land2.png）。
+ * 所以浮一条会自己消失的提示，说清"这不是坏了，按返回就回来"；3.5 秒后收起，
+ * 不挡画面，也不吃掉落在它下面的点击（没有 pointerInput 的节点不消费事件）。
+ */
+@Composable
+private fun androidx.compose.foundation.layout.BoxScope.FullscreenHint(text: String) {
+    var shown by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        delay(3_500)
+        shown = false
+    }
+    if (!shown) return
+    Box(
+        Modifier
+            .align(androidx.compose.ui.Alignment.BottomCenter)
+            .padding(bottom = 30.dp)
+            .background(androidx.compose.ui.graphics.Color(0xB0000000), RoundedCornerShape(percent = 50))
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+    ) {
+        Text(text, fontSize = 12.sp, color = Ink.TextHi)
+    }
 }

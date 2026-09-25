@@ -155,8 +155,15 @@ def main():
             problems.append(f"CLIPPED-EDGE {n['text'][:20]!r} 底/右边正好压在屏幕边缘")
     # 文本节点被视口/裁剪吃掉半截时，bounds 高度会明显矮于同屏其它文本
     # （实测：观众加入页横屏下说明行只剩 3px 高，而正常一行是 63px）。
-    tall = max((n["y2"] - n["y1"] for n in ns), default=0)
+    # 用**中位数**而不是最大值当"正常行高"：一屏里只要有一个多行 EditText（126px），
+    # 拿它当基准就会把旁边那颗 42px 的小标签报成"被裁"（实测首页/放映厅各报 6 条假的）。
+    hs = sorted(n["y2"] - n["y1"] for n in ns)
+    tall = hs[len(hs) // 2] if hs else 0
     for n in ns:
+        # 高度 0 的节点是"根本没量到边界"（WebView 把 video 控件报成空矩形），
+        # 不是被裁 —— 上一版一屏报了六条假的 SQUISHED。
+        if (n["y2"] - n["y1"]) <= 0 or (n["x2"] - n["x1"]) <= 0:
+            continue
         if tall and (n["y2"] - n["y1"]) < tall * 0.45:
             problems.append(
                 f"SQUISHED {n['text'][:20]!r} 高 {n['y2'] - n['y1']}px，同屏正常文本 {tall}px —— 被裁了")
