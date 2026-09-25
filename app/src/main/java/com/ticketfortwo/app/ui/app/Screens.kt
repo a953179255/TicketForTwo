@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
@@ -42,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -78,6 +80,12 @@ fun HomeScreen(
     quality: ShareQuality,
     lastSummary: String?,
 ) {
+    // 横屏（含平板、折叠屏展开）单独一套排法，见下面 wideHome 的两处分支。
+    // 判据用**屏幕**长宽比，不用某一块容器的：信息卡那边也要同一个结论，
+    // 两处各算各的会出现"圆并排了、信息卡还竖着堆三行"的半吊子布局。
+    val cfg = LocalConfiguration.current
+    val wideHome = cfg.screenWidthDp > cfg.screenHeightDp
+
     PageScaffold {
         Headline("双人票", "把你的屏幕，变成你和朋友的私人影院。")
 
@@ -91,17 +99,22 @@ fun HomeScreen(
             Modifier.fillMaxWidth().weight(1f),
             contentAlignment = Alignment.Center,
         ) {
-            val orbSize = minOf(160.dp, maxHeight * 0.44f)
+            /**
+             * **横屏是另一种排法**（2400x1080 实测，.dev/home-landscape.png）：沿用竖排时
+             * weight(1f) 只给到 ~150dp 高，圆被压到 66dp —— 圆里的标题整个被圆形裁剪吃掉
+             * （dump 里连「分享屏幕」这个节点都没有），第二颗圆「进入观看」直接掉到屏外，
+             * 于是首页在横屏下**只剩一个能用的入口**。横屏改成两颗圆并排：宽度有的是
+             * （2400px），高度反而能按可用的 72% 给，标题也装得下了。
+             */
+            val wide = wideHome
+            val orbSize = minOf(160.dp, maxHeight * if (wide) 0.72f else 0.44f)
             // 圆里装得下三行内容的经验下限（图标 34 + 标题 + 说明 + 间距）；
-            // 低于它就说明那行改画到圆下面，别让文字溢出圆外压住下一个圆。
-            val subOutside = orbSize < 128.dp
+            // 低于它就把说明改画到圆下面，别让文字溢出圆外压住下一个圆。
+            val subOutside = wide || orbSize < 128.dp
             /* 矮屏上这两颗圆 + 两行说明就是装不进 weight(1f) 给的那点高度（实测 594dp 高的
                机器上第二颗圆被底部信息卡压掉半截）。让**这一块自己可滚**：
                高屏内容放得下 → 看不出任何变化；矮屏 → 能滚着看完，而不是叠在一起。 */
-            Column(
-                Modifier.verticalScroll(rememberScrollState()),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
+            val shareOrb = @Composable {
                 GlassOrbEntry(
                     onClick = onStart,
                     backdrop = backdrop,
@@ -122,9 +135,8 @@ fun HomeScreen(
                 sub = "发条链接，朋友就能看",
                 subOutside = subOutside,
                 )
-                // 说明挪到圆外之后，两颗圆之间要多留一点：原来固定 16dp，
-                // 而那行小字自己就有 ~19dp 高，会贴着下一个圆的上沿。
-                Spacer(Modifier.height(if (subOutside) 30.dp else 16.dp))
+            }
+            val joinOrb = @Composable {
                 GlassOrbEntry(
                     onClick = onJoinViewer,
                     backdrop = backdrop,
@@ -143,18 +155,56 @@ fun HomeScreen(
                     subOutside = subOutside,
                 )
             }
+            if (wide) {
+                // 横屏：两颗圆并排。间距按"说明那行不会压到邻圆"给（说明最长 9 个字 ≈ 120dp，
+                // 圆半径 ~54dp，所以 48dp 的缝只是视觉间距，真正不重叠靠各自的宽度）。
+                Row(
+                    Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(48.dp, Alignment.CenterHorizontally),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    shareOrb()
+                    joinOrb()
+                }
+            } else {
+                Column(
+                    Modifier.verticalScroll(rememberScrollState()),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    shareOrb()
+                    // 说明挪到圆外之后，两颗圆之间要多留一点：原来固定 16dp，
+                    // 而那行小字自己就有 ~19dp 高，会贴着下一个圆的上沿。
+                    Spacer(Modifier.height(if (subOutside) 30.dp else 16.dp))
+                    joinOrb()
+                }
+            }
         }
 
         // 信息卡（原样保留：画质 / 流量 / 麦克风 / 上次连接）。
         // 圆放大到 160dp 后垂直空间变紧，这里的内边距与行距各收一档。
         GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(GlassDimens.sp3), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
-                InfoRow("分享画质", quality.summary(rememberScreenWidthPx()))
-                if (quality.videoEnabled) {
-                    InfoRow("流量上限", "约 ${quality.estMbPerMinute()} MB/分钟")
+            val info = buildList {
+                add("分享画质" to quality.summary(rememberScreenWidthPx()))
+                if (quality.videoEnabled) add("流量上限" to "约 ${quality.estMbPerMinute()} MB/分钟")
+                add("麦克风" to "开")
+                if (lastSummary != null) add("上次连接" to lastSummary)
+            }
+            if (wideHome) {
+                /* 横屏把这张卡**摊成一行**：竖排四行要 ~95dp，而横屏整屏只有 411dp 高，
+                   两颗圆并排后剩下的空间刚好不够（实测信息卡会把第二颗圆挤出可视区）。
+                   横屏宽度有 900dp，一行放得下，于是高度只花 ~24dp。 */
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = GlassDimens.sp3, vertical = GlassDimens.sp2)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp4),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    info.forEach { (k, v) -> InfoChip(k, v) }
                 }
-                InfoRow("麦克风", "开")
-                if (lastSummary != null) InfoRow("上次连接", lastSummary)
+            } else {
+                Column(Modifier.padding(GlassDimens.sp3), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
+                    info.forEach { (k, v) -> InfoRow(k, v) }
+                }
             }
         }
 
@@ -225,6 +275,10 @@ fun GlassOrbEntry(
     tintAlpha: Float = 0.80f,
     brightAlpha: Float = 0.20f,
 ) {
+    // 自己包一层 Column：`subOutside` 那行小字**必须**紧跟在圆下面。
+    // 之前它是这个函数的第二个兄弟节点，等于把"我是竖排的"这个假设交给调用方 ——
+    // 首页横屏改成两颗圆并排时，说明文字就顺着 Row 跑到圆的右边去了（2400x1080 实测）。
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
     GlassCard(
         onClick = onClick,
         backdrop = backdrop,
@@ -267,10 +321,14 @@ fun GlassOrbEntry(
         Text(
             sub,
             fontSize = 10.sp,
-            color = Ink.TextLow,
+            // 圆**外面**那行小字压在壁纸上，不是压在玻璃上：TextLow(#7A7A7A) 的亮度只有
+            // 0.19，实测在花壁纸上几乎读不出来（同一件事在 SectionTitle 上记过一次）。
+            // 圆里面那行仍然用 OrbInk —— 它背后是着色过的玻璃，不是壁纸。
+            color = Ink.TextMid,
             modifier = Modifier.padding(top = 5.dp),
         )
     }
+    }   // Column（见上面"自己包一层 Column"的注释）
 }
 
 /**
@@ -654,6 +712,15 @@ fun ConsentGuideScreen(backdrop: LayerBackdrop, onContinue: () -> Unit, onBack: 
     }
 }
 
+/** 横屏首页用的"标签 值"横排单元：竖排 InfoRow 在横屏太吃高度。 */
+@Composable
+private fun InfoChip(label: String, value: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(label, fontSize = 12.sp, color = Ink.TextMid)
+        Text(value, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Ink.TextHi)
+    }
+}
+
 @Composable
 private fun GuideStep(no: String, title: String, body: String) {
     Row(
@@ -774,11 +841,17 @@ fun InviteScreen(
  *   换分辨率就废了。
  */
 @Composable
-fun PasteField(value: String, onChange: (String) -> Unit, hint: String = "长按粘贴") {
+fun PasteField(
+    value: String,
+    onChange: (String) -> Unit,
+    hint: String = "长按粘贴",
+    /** 86dp 是竖屏四行的手感值；横屏要省高度（见 ViewerJoinScreen 的 wide 分支）。 */
+    boxHeight: Dp = 86.dp,
+) {
     Box(
         Modifier
             .fillMaxWidth()
-            .height(86.dp)
+            .height(boxHeight)
             .background(Color.Black.copy(alpha = 0.32f), RoundedCornerShape(GlassDimens.radiusMd))
             .padding(GlassDimens.sp3),
     ) {

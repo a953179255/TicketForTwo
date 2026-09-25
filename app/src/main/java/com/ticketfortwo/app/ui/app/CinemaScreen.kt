@@ -341,12 +341,17 @@ fun CinemaScreen(
                 label = "地址",
                 // 权重给到 1f 之外还要留缝：不加 weight 时限宽的行为是"文字压在按钮下面"，
                 // 实测长 URL 会一路顶到「打开」按钮底下，看着像按钮粘在字上。
+                //
+                // 框与按钮**必须同高**（274dp 窄屏实测：框 40、按钮 52，居中之后按钮
+                // 上下各探出 6dp，这一行看着像两个没对齐的零件）。44dp 是触控下限，
+                // 所以把框抬到 44、按钮压到 44，而不是反过来迁就 40。
                 modifier = Modifier.weight(1f).padding(end = 2.dp),
+                boxHeight = 44.dp,
             )
             PrimaryPill(text = "打开", onClick = {
                 pageUrl = normalizeUrl(inputUrl)
                 note = "正在打开，嗅探中…"
-            }, backdrop = backdrop)
+            }, backdrop = backdrop, height = 44.dp)
         }
         /* 这一排原来是不滚动的五颗胶囊：屏宽不够时**最后一颗「开始放映」整个被切到屏外**
            （uiautomator 里根本找不到它，实测点不到 —— 主操作按钮看不见，等于这一屏没有主操作）。

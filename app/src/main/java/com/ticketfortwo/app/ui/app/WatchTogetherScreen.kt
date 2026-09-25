@@ -174,8 +174,16 @@ fun WatchTogetherScreen(
                 onValueChange = { inputUrl = it },
                 label = "地址",
                 modifier = Modifier.weight(1f),
+                // 与「打开」按钮同高：框 40 / 按钮 52 时这一行上下各探出 6dp，看着像没对齐
+                // （同一处缺陷在放映厅地址栏实测到，这里一起改）。
+                boxHeight = 44.dp,
             )
-            PrimaryPill(text = "打开", onClick = { pageUrl = normalizeUrl(inputUrl) }, backdrop = backdrop)
+            PrimaryPill(
+                text = "打开",
+                onClick = { pageUrl = normalizeUrl(inputUrl) },
+                backdrop = backdrop,
+                height = 44.dp,
+            )
         }
         Row(
             Modifier.fillMaxWidth().padding(start = GlassDimens.screenH, bottom = 4.dp),

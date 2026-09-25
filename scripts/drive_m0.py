@@ -135,8 +135,15 @@ def main():
     # 于是脚本往下找系统对话框、找不到、报"界面坏了"——上一轮就是这么白查的。
     # 判据用"首页那颗按钮还在不在"：还在就说明这一下没生效，再点一次。
     consent = None
-    for attempt in range(3):
-        tap(start["cx"], start["cy"])
+    for attempt in range(4):
+        # 每一轮都**重新定位**那颗钮、用它的当前中心点。上一版拿首轮缓存的坐标连点三次，
+        # 首页此刻若还在入场转场/滚动里，三下全点在空白处 —— 于是脚本一路往下走，
+        # 最后报"找不到 Next/Start now"，看起来像界面坏了，其实是量具用了过期坐标。
+        s = ui()
+        cur = find(s, text="开始分享") or find(s, text="分享屏幕")
+        if cur is None:
+            break  # 已经离开首页：上一轮那一下其实生效了
+        tap(cur["cx"], cur["cy"])
         time.sleep(2)
         # 玻璃化之后多了一屏"授权指引"（ConsentGuideScreen）：系统会连着问两件事，
         # 不先讲清楚"要选整个屏幕"，用户十次有三次会选成单应用，然后以为 App 坏了。
@@ -150,7 +157,9 @@ def main():
             if attempt:
                 print(f"   第 {attempt + 1} 次点击才生效（前几次被转场吞了）")
             break
-        print("   这点没生效，界面还在首页 → 再点一次")
+        # 冷启动头几秒窗口还没接指针：多等一会儿再点，比立刻连点有效
+        print("   这点没生效，界面还在首页 → 等一拍再重新定位、再点")
+        time.sleep(3)
 
     if consent:
         shot("02-consent")

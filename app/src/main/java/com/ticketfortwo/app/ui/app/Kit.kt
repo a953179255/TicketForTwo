@@ -109,11 +109,13 @@ fun PrimaryPill(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     filled: Boolean = true,
+    /** 默认 52dp（主操作的手感值）。和输入框并排时按框的高度传，别让按钮比框高一截。 */
+    height: androidx.compose.ui.unit.Dp = 52.dp,
 ) {
     LiquidGlassButton(
         onClick = onClick,
         backdrop = backdrop,
-        modifier = modifier.height(52.dp),
+        modifier = modifier.height(height),
         shape = RoundedCornerShape(percent = 50),
         enabled = enabled,
         surfaceColor = if (filled) Ink.AccentSolid else null,

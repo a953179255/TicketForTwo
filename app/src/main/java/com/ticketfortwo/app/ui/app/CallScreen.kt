@@ -5,6 +5,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
@@ -27,7 +29,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -37,6 +41,7 @@ import com.ticketfortwo.app.watch.WatchState
 import com.ticketfortwo.app.ui.glass.GlassPanel
 import com.ticketfortwo.app.ui.theme.GlassDimens
 import com.ticketfortwo.app.ui.theme.Ink
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
@@ -61,8 +66,29 @@ fun VideoLayer(
     val context = LocalContext.current
     val renderer = remember { SurfaceViewRenderer(context) }
     var ready by remember { mutableStateOf(false) }
+    // 帧的真实宽高（px）。首帧之前是 Zero ⇒ 视频区先铺满，尺寸到了再收成正确比例。
+    var frameSize by remember { mutableStateOf(IntSize.Zero) }
 
-    Box(modifier) {
+    /* 把这块 Surface **摆成和帧一样的比例**，而不是铺满整屏再让渲染器去缩放。
+       原因（2400x1080 实测，.dev/fit-portrait.png）：房主那屏是 540x1200 的竖帧，
+       铺满横屏后仍按"填满"处理，上下各切掉四成以上 —— 观众看到的是中间一条，
+       而"他看到的就是你现在这一屏"是这个产品的立身之本，切掉就等于说谎。
+       自己按等比适中算出视图尺寸之后，视图比例与帧一致 ⇒ 无论渲染器内部默认是
+       "铺满"还是"适中"（实测 setScalingType 在这里并不足以扭转结果），两种缩放同解。 */
+    BoxWithConstraints(modifier, contentAlignment = Alignment.Center) {
+        val density = LocalDensity.current
+        val f = frameSize
+        val videoModifier = if (f.width <= 0 || f.height <= 0) {
+            Modifier.fillMaxSize()
+        } else {
+            val s = minOf(
+                constraints.maxWidth.toFloat() / f.width,
+                constraints.maxHeight.toFloat() / f.height,
+            )
+            with(density) {
+                Modifier.size((f.width * s).roundToInt().toDp(), (f.height * s).roundToInt().toDp())
+            }
+        }
         AndroidView(
             factory = {
                 RtcEngine.init(context)
@@ -79,6 +105,7 @@ fun VideoLayer(
 
                         override fun onFrameResolutionChanged(w: Int, h: Int, rot: Int) {
                             Log.i("VideoLayer", "$onLabel resolution ${w}x$h rot=$rot")
+                            frameSize = IntSize(w, h)
                             // 帧尺寸是"对方横没横屏"唯一的证据。上一版这里只打日志就完了，
                             // 于是内容变成横的、观众屏还竖着，画面缩成中间一条。
                             renderer.post { onResolution(w, h) }
@@ -86,10 +113,18 @@ fun VideoLayer(
                     },
                 )
                 ready = true
+                // **不能裁**：不给缩放类型时，这块 Surface 实测是"铺满并切掉多出来的部分"。
+                // 竖屏看竖屏时两者比例几乎一样，看不出问题；观众一点「横屏」就露馅 ——
+                // 实测 2400x1080 的横屏里，房主那 1080x2400 的一屏被放大 2.22 倍后
+                // 只剩中间 1080/5333 ≈ 20% 高的一条，上下全被切掉（.dev/ls-land3.png）。
+                // 这个产品的立身之本是"他看到的就是你现在这一屏"，切掉就等于说谎，
+                // 所以一律等比适中：比例不合就留边，一帧都不少。
+                // （常量名带 SCALE_ 前缀，是这个 webrtc-sdk 分支的写法，别照抄上游）
+                renderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
                 renderer
             },
             onRelease = { renderer.release() },
-            modifier = Modifier.fillMaxSize(),
+            modifier = videoModifier,
         )
     }
     DisposableEffect(track, ready) {

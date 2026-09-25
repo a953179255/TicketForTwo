@@ -1220,6 +1220,13 @@ fun CompactGlassField(
         androidx.compose.foundation.text.KeyboardActions.Default,
     /** 框下方的辅助说明文字（替代 Material supportingText） */
     supportingText: String? = null,
+    /**
+     * 框自身高度。**默认 40dp 不要改**（那是弹窗密度调定值，见下面 Row 的注释）。
+     * 只有一种情况需要传：这一行里还有一个更高的兄弟控件（如「打开」按钮），
+     * 两个高度不一样时 CenterVertically 会把按钮顶得比框上下都高，看着像贴歪了 ——
+     * 放映厅地址栏实测就是这样（框 40 / 按钮 52）。
+     */
+    boxHeight: androidx.compose.ui.unit.Dp = 40.dp,
     trailing: @Composable (() -> Unit)? = null
 ) {
     val interaction = androidx.compose.runtime.remember {
@@ -1249,7 +1256,7 @@ fun CompactGlassField(
             .fillMaxWidth()
             // 高度 40dp（原 48）：弹窗内密度优化——48dp 在三段分段布局里
             // 单屏能看的行数太少（2026-09-11 用户反馈输入框太大空余多）
-            .height(40.dp)
+            .height(boxHeight)
             .background(container, shape)
             .border(if (focused) 1.5.dp else 1.dp, borderColor, shape)
             .padding(end = 4.dp),
