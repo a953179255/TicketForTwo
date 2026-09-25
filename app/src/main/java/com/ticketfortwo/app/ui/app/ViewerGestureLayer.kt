@@ -173,8 +173,12 @@ fun resetActivityBrightness(activity: Activity?) {
         val p = a.window.attributes
         p.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
         a.window.attributes = p
-        // 留一行证据：亮度是窗口级覆盖，出问题只会表现为"这台手机看着比别人暗"，
-        // 屏幕上没有任何线索，没有日志就只能靠 dumpsys 猜。
+        // 必须再要一次 relayout。`Window.getAttributes()` 返回的就是 WindowManager
+        // 手里那个对象，改完再 set 回去是"同一个实例的自我赋值"，系统这边不会因此重算
+        // 亮度 —— 实测：日志打了"已交还系统"，dumpsys 里 mBrightnessState 还停在 0.02，
+        // 直到按 HOME 让窗口失去焦点，DisplayPowerController 才改回 manual。
+        // 用户不会按 HOME，所以这里主动催一次。
+        a.window.decorView.requestLayout()
         Log.i("ViewerGesture", "窗口亮度已交还系统")
     }
 }

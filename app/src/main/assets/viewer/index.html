@@ -43,6 +43,24 @@ video{width:100%;height:100%;object-fit:contain;background:#000;display:block}
 .stat{display:flex;flex-direction:column;font-size:10.5px;color:var(--text-mid);line-height:1.25}
 .stat b{font-size:12.5px;color:#fff;font-weight:640}
 .sep{width:1px;height:26px;background:rgba(255,255,255,.18)}
+/* 同看条：房主播放器的只读镜像，压在控制岛上方（控制岛占 20..82px，故 bottom:90）。
+   和 .bottom 一样用 width:max-content + margin:0 auto 收成一颗药丸，别拉满整幅压住画面。 */
+.watch{bottom:90px;display:flex;flex-direction:column;gap:6px;padding:9px 12px;border-radius:var(--r-lg);
+  background:var(--scrim);width:max-content;max-width:100%;margin:0 auto;backdrop-filter:blur(10px)}
+.watch .line1,.watch .line2{display:flex;align-items:center;gap:8px}
+#wTitle{font-size:12px;color:var(--text-hi);max-width:52vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wbtn{min-width:46px;height:34px;padding:0 10px;border-radius:var(--pill);flex:none;cursor:pointer;
+  border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.14);color:#fff;
+  font:inherit;font-size:12.5px;font-weight:640;line-height:1;
+  transition:transform .12s cubic-bezier(.32,2.32,.61,.27),background .12s}
+.wbtn:active{transform:scale(.90,1.06)}
+/* 按下去了但进度还没变（要等房主下一次广播）—— 用这一闪代替乐观更新，告诉人"收到了" */
+.wbtn.hit{background:#fff;color:#0a0a0a}
+/* 不能控制时必须**一眼看出来**，只靠"点了没反应"会被当成卡住。
+   写在 .hit 之后，同权重下后来者赢：权限一收，残留的按下高亮立刻让位。 */
+.wbtn:disabled{opacity:.36;cursor:default;transform:none;background:rgba(255,255,255,.05);
+  color:var(--text-low);border-style:dashed}
+.wtime{font-size:11.5px;color:var(--text-mid);white-space:nowrap;font-variant-numeric:tabular-nums}
 .center{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px;z-index:6}
 .card{background:var(--surface-1);border:1px solid rgba(255,255,255,.08);border-radius:var(--r-card);
   padding:20px;max-width:520px;width:100%;text-align:left;box-shadow:0 10px 28px rgba(0,0,0,.44)}
@@ -83,6 +101,21 @@ button.primary{background:var(--accent);color:#fff;border:0;border-radius:var(--
     <button class="ctl" id="btnVol" title="音量"></button>
     <button class="ctl" id="btnPip" title="悬浮小窗"></button>
     <button class="ctl" id="btnFull" title="全屏"></button>
+  </div>
+
+  <!-- 同看条：只在房主还在广播时出现（见 JS 里的 WATCH_STALE_MS），所以初始 hide -->
+  <div class="overlay watch hide" id="watchBar">
+    <div class="line1">
+      <span id="wTitle">一起看</span>
+      <span class="chip" id="wPerm">仅观看</span>
+    </div>
+    <div class="line2" id="wKeys">
+      <button class="wbtn" id="wBack" title="后退 10 秒">-10</button>
+      <button class="wbtn" id="wPlay" title="暂停 / 继续">▶</button>
+      <button class="wbtn" id="wFwd" title="前进 10 秒">+10</button>
+      <span class="wtime" id="wTime">0:00 / 0:00</span>
+    </div>
+    <div class="line2 hide" id="wMissing"><span class="wtime">对方还没打开播放器</span></div>
   </div>
 
   <div class="center" id="panel">
@@ -187,6 +220,7 @@ function onMessage(text){
   if (m.t === 'offer') startPeer(m.sdp);
   else if (m.t === 'cand') addRemoteCandidate(m);
   else if (m.t === 'bye') { closedByUs = true; reportEnded('房主结束了分享'); }
+  else if (m.t === 'watch') onWatch(m.f);
 }
 
 // ---- 建立直连 ---------------------------------------------------------
@@ -299,6 +333,7 @@ function askToPlay(title, body){
 function reportEnded(s){
   closedByUs = true;
   if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+  stopWatch();      // 广播源已经没了，同看条留着就是一根拔了线的音量键
   try { if (pc) pc.close(); } catch (e) {}
   const live = $('topBar').querySelector('.live');
   if (live) {
@@ -317,6 +352,9 @@ function reportEnded(s){
 
 function reportFailure(s){
   closedByUs = true;
+  // 画面到不了观众眼前，"一起看"就没有一起看的人了：条子收掉，别压在错误说明上面。
+  // 房主那边的播放器不受影响 —— 这里停的只是这条**镜像**。
+  stopWatch();
   show(`<h1>连不上房主的手机</h1>
     <p class="muted">网页能打开，<b>不代表画面一定连得通</b>。纯直连在部分网络下会失败，而且这一版没有中继兜底。</p>
     <div class="kv"><span>当前状态</span><span class="chip bad">${escapeHtml(String(s))}</span></div>
@@ -435,6 +473,118 @@ $('btnFull').onclick = async () => {
   }, 400);
 };
 video.addEventListener('click', () => { if (video.paused) video.play(); });
+
+// ---- 一起看（同看条） ---------------------------------------------------
+
+/*
+ * 房主在他手机 App 的内置浏览器里放片，每约 1 秒把播放器状态广播一条过来：
+ *   房主→观众 {"t":"watch","f":"found|posMs|durMs|playing|allow|title"}
+ *   观众→房主 {"t":"wcmd","f":"act|arg"}   act ∈ play|pause|seek|step
+ * 这一条是房主那台播放器的**只读镜像** + 一根控制线。两件事决定了下面的全部写法：
+ *  1. 不做本地乐观更新。按下 +10 之后进度一动不动，等下一次广播带回真相 ——
+ *     两边永远只有一个进度，才不会演出"我这边跳了、他那边其实没动"这种更难解释的假象。
+ *     反馈只在按钮上闪一下（.hit）。
+ *  2. 权限的真正闸门在房主侧（CallSession 收消息时判 allow）。这里显示「仅观看」并置灰，
+ *     是为了让人明白点了为什么没用，而不是为了拦住那条消息。
+ *
+ * 它走的是信令 WebSocket，跟 WebRTC 媒体通道无关 —— 画面还没通的时候房主可能已经在放片了，
+ * 所以这条的显隐故意不看 pc.connectionState。
+ */
+const WATCH_STALE_MS = 5000;   // 一秒一条，5 秒没动静只有两种可能：他不播了，或关了页面
+const WATCH_GAP_MS = 250;      // 连点保护：一次快进/快退要跨隧道跑一个来回
+const WATCH_STEP_MS = 10000;
+
+let watch = null;            // 最近一次解出来的房主播放器状态；null = 同看条不显示
+let watchAt = 0;             // 最近一次收到广播的时刻 —— 判陈旧只认这一个时间戳
+let watchTimer = null;
+let lastWatchCmdAt = 0;
+
+/** m:ss，过了一小时才写成 h:mm:ss。与房主侧 WatchSync.formatTime 同一套，别两边各写一个样。 */
+function fmtClock(ms){
+  if (!(ms > 0)) return '0:00';
+  const total = Math.floor(ms / 1000);
+  const s = total % 60, m = Math.floor(total / 60) % 60, h = Math.floor(total / 3600);
+  const p = n => (n < 10 ? '0' + n : '' + n);
+  return h > 0 ? `${h}:${p(m)}:${p(s)}` : `${m}:${p(s)}`;
+}
+
+function onWatch(f){
+  const p = String(f == null ? '' : f).split('|');
+  // 字段不齐（老房主、半截消息）整条丢掉并把条收起来：猜出来的进度比没有进度更坏。
+  if (p.length < 5) return setWatch(null);
+  const pos = Number(p[1]), dur = Number(p[2]);
+  if (!Number.isFinite(pos) || !Number.isFinite(dur)) return setWatch(null);
+  // title 排在最后一段，带空格无所谓；真混进竖线时按房主侧一样的做法把余下拼回来。
+  setWatch({ found: p[0] === '1', posMs: pos, durMs: dur,
+             playing: p[3] === '1', allow: p[4] === '1',
+             title: p.slice(5).join('|') });
+  watchAt = Date.now();
+  ensureWatchTimer();
+}
+
+function setWatch(s){
+  watch = s;
+  const bar = $('watchBar');
+  if (!s) { bar.classList.add('hide'); return; }
+  bar.classList.remove('hide');
+  $('wTitle').textContent = s.title || '一起看';
+  const perm = $('wPerm');
+  perm.textContent = s.allow ? '可控制' : '仅观看';
+  perm.className = 'chip' + (s.allow ? ' ok' : '');
+  // found=0（页面上没有 <video>）时说清"没找到播放器"，比摆三个按不动的键有用
+  $('wKeys').classList.toggle('hide', !s.found);
+  $('wMissing').classList.toggle('hide', !!s.found);
+  $('wTime').textContent = fmtClock(s.posMs) + ' / ' + fmtClock(s.durMs);
+  $('wPlay').textContent = s.playing ? '❚❚' : '▶';
+  const dead = !s.allow || !s.found;
+  $('wBack').disabled = dead; $('wPlay').disabled = dead; $('wFwd').disabled = dead;
+}
+
+function ensureWatchTimer(){
+  if (watchTimer || document.hidden) return;
+  watchTimer = setInterval(watchTick, 1000);
+}
+function stopWatchTimer(){ if (watchTimer) { clearInterval(watchTimer); watchTimer = null; } }
+function watchTick(){
+  if (!watchAt) return;
+  if (Date.now() - watchAt > WATCH_STALE_MS) { watchAt = 0; stopWatchTimer(); setWatch(null); }
+}
+/** 分享结束时要一起收：否则留下一条控制条，指着的是一个已经不存在的播放器。 */
+function stopWatch(){ watchAt = 0; lastWatchCmdAt = 0; stopWatchTimer(); setWatch(null); }
+
+/* 切到后台就把定时器摘掉（移动端网页在后台本来就跑不动，留着只是白耗电），
+   回到前台第一件事是**重新判一次陈旧** —— 被冻住的这几秒里房主早可能不播了。
+   注意顺序：判完可能已经清零 watchAt，这时就别再把定时器挂回去（挂回去是个永不发作的空转）。 */
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { stopWatchTimer(); return; }
+  if (!watchAt) return;
+  watchTick();
+  if (watchAt) ensureWatchTimer();
+});
+
+function watchCmd(act, arg){
+  const now = Date.now();
+  if (now - lastWatchCmdAt < WATCH_GAP_MS) return false;
+  lastWatchCmdAt = now;
+  send({ t: 'wcmd', f: act + '|' + arg });
+  return true;
+}
+
+/** 发指令 + 给一点"按到了"的回执。回执只落在按钮自己身上，进度一格都不本地改。 */
+function watchPress(el, act, arg){
+  if (!watch || !watch.allow || !watch.found) return;   // 注定被房主丢掉，别占掉那 250ms 窗口
+  if (!watchCmd(act, arg)) return;                      // 被限流：什么都不闪，别装作动了
+  el.classList.add('hit');
+  clearTimeout(el._h);
+  el._h = setTimeout(() => el.classList.remove('hit'), 300);
+}
+
+$('wBack').onclick = () => watchPress($('wBack'), 'step', -WATCH_STEP_MS);
+$('wFwd').onclick  = () => watchPress($('wFwd'),  'step',  WATCH_STEP_MS);
+// 读的是镜像里的 playing，而不是本地一个 toggle 变量：按下去之后图标也归房主下次广播翻。
+$('wPlay').onclick = () => watchPress($('wPlay'), (watch && watch.playing) ? 'pause' : 'play', 0);
+// seek（arg = 绝对毫秒）留着没接：这条上只有三个键，没有可拖的进度轨。
+// 房主侧对 step 还会再夹一次（±120 秒、且夹在 [0, 时长] 内），所以这里不用自己算边界。
 
 /* 让画面严格对齐"人眼看得见的那一块"。
    移动端有三套视口：布局视口（viewport meta 定的）、可见视口（visualViewport）、
