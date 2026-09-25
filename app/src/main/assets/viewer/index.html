@@ -564,6 +564,7 @@ function fmtClock(ms){
    也不再有两层 UI。取不到（跨域/签名过期/要会员）就撤掉这一层，
    退回看屏幕流，绝不留一个黑屏给观众。 */
 let cine = null, cineHls = null, cineApplyUntil = 0, cineTimer = null;
+let cineReady = false, cineWatch = null;
 const lv = document.getElementById('lv'), lvBadge = document.getElementById('lvBadge'),
       cineBar = document.getElementById('cineBar');
 
@@ -602,8 +603,9 @@ function onCinema(f) {
 
 function loadLocal(st) {
   stopLocalPlayer();
+  cineReady = false;
   lv.classList.remove('hide'); lvBadge.classList.remove('hide');
-  lvBadge.innerHTML = '本地播放 · <b>连接中…</b>';
+  lvBadge.innerHTML = '本地播放 · <b>准备中…</b>';
   const isHls = /\.m3u8([?#]|$)/i.test(st.url) || st.kind === 'master';
   try {
     if (isHls) {
@@ -623,9 +625,18 @@ function loadLocal(st) {
   } catch (t) { cineDown('起播失败'); return; }
   lv.play().catch(() => {});
   if (!cineTimer) cineTimer = setInterval(syncLocal, 1000);
+  /* 看门狗：光等 `error` 事件不够 —— 签名过期、被 CDN 静默限速、需要会员的站点，
+     往往是不报错、就是不出画面。8 秒没首帧就自己退回屏幕流，
+     否则观众对着一块黑以为是自己网卡。 */
+  if (cineWatch) clearTimeout(cineWatch);
+  cineWatch = setTimeout(() => {
+    if (cine && !cineReady) cineDown('这条流 8 秒没出画面');
+  }, 8000);
 }
 
 function stopLocalPlayer() {
+  if (cineWatch) { clearTimeout(cineWatch); cineWatch = null; }
+  cineReady = false;
   if (cineHls) { runCute(() => cineHls.destroy()); cineHls = null; }
   runCute(() => { lv.pause(); lv.removeAttribute('src'); lv.load(); });
   lv.classList.add('hide'); lvBadge.classList.add('hide');
@@ -665,12 +676,17 @@ function paintCine(drift) {
   perm.textContent = cine.allow ? '可控制' : '仅观看';
   perm.className = 'chip' + (cine.allow ? ' g' : '');
   document.getElementById('cPlay').textContent = cine.playing ? '❚❚' : '▶';
-  document.getElementById('cTime').textContent =
-    fmtMs(lv.currentTime * 1000) + ' / ' + fmtMs(cine.dur || (lv.duration || 0) * 1000);
-  document.getElementById('cDrift').textContent =
-    typeof drift === 'number' ? 'Δ' + Math.round(drift) + 'ms' : '';
+  /* 没出画面之前不报时间：显示一个"0:00 / 10:34"会让人以为进度坏了，
+     其实只是还没接上；Δ 也一样 —— 没同步过时它是个几千毫秒的假数字。 */
+  document.getElementById('cTime').textContent = cineReady
+    ? fmtMs(lv.currentTime * 1000) + ' / ' + fmtMs(cine.dur || (lv.duration || 0) * 1000)
+    : '正在接上这条片源…';
+  const d = document.getElementById('cDrift');
+  if (!cineReady) d.textContent = '';
+  else if (typeof drift !== 'number' || Math.abs(drift) > 5000) d.textContent = '同步中';
+  else d.textContent = 'Δ' + Math.round(drift) + 'ms';
   lvBadge.innerHTML = '本地播放 · <b>' +
-    (lv.videoWidth ? lv.videoWidth + '×' + lv.videoHeight : '…') + '</b>';
+    (lv.videoWidth ? lv.videoWidth + '×' + lv.videoHeight : '准备中…') + '</b>';
 }
 
 function sendCine(act) {
@@ -683,7 +699,10 @@ document.getElementById('cFwd').onclick = () => sendCine('step|10000');
 document.getElementById('cPlay').onclick = () => sendCine(cine && cine.playing ? 'pause' : 'play');
 lv.addEventListener('loadedmetadata', () => {
   // 首帧出来才敢说"原生画质"：这一行是 S 档成没成的直接证据
-  if (lv.videoWidth) console.log('CINEMA_LOCAL', lv.videoWidth + 'x' + lv.videoHeight, lv.duration);
+  if (!lv.videoWidth) return;
+  cineReady = true;
+  console.log('CINEMA_LOCAL', lv.videoWidth + 'x' + lv.videoHeight, lv.duration);
+  paintCine();
 });
 lv.addEventListener('error', () => { if (cine) cineDown('这条地址在观众这边取不到'); });
 
@@ -912,6 +931,16 @@ if (_q.get('report') === '1') {
 
 /* 演示模式不启动信令：没有 ?k= 本来也连不上，一路报错的卡片会盖住要检查的画面 */
 if (!DEMO) boot();
+
+/* 放映厅演示：?demo=canvas&cinema=1 —— 没有房主的情况下演一遍"已经按下开始放映"。
+   它存在的唯一理由：观众端这一屏的层级（是不是真的只剩一层 UI）必须能在本地看到，
+   而不是等一条隧道、一个会话、一次点击都齐了才发现压在一起。生产链接不带参数就不触发。 */
+if (DEMO && new URLSearchParams(location.search).get('cinema')) {
+  setTimeout(() => onCinema([
+    1, 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8', 'master',
+    '《漫长的季节》第 3 集', 252_000, 634_000, 1, 1, Date.now(), 1,
+  ].join('|')), 900);
+}
 </script>
 </body>
 </html>
