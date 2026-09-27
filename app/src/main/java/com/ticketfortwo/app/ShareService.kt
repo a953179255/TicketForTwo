@@ -158,6 +158,11 @@ class ShareService : Service() {
         viewerJob?.cancel()
         uiScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
         _foregroundReady.value = false
+        /* 撤通知不能只指望框架：实测「停止分享」后出现过 id=1001 的孤儿 ONGOING
+           （ServiceRecord=0、通知还在，force-stop 才被系统清掉）—— 疑似
+           watchViewer 的 repost 与 onDestroy 的竞态。服务已死，通知必须跟着死，
+           这里显式 cancel 兜底（正常路径框架已经撤过，重复 cancel 无害）。 */
+        runCatching { getSystemService(NotificationManager::class.java).cancel(NOTIF_ID) }
         if (!CallSession.isActive) CallSession.stop(applicationContext)
         super.onDestroy()
     }
