@@ -1,5 +1,6 @@
 package com.ticketfortwo.app.ui.app
 
+import android.os.SystemClock
 import android.util.Log
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.background
@@ -13,7 +14,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
@@ -164,6 +167,9 @@ fun CallScreen(
     onToggleMic: () -> Unit,
     latencyMs: Int?,
     netLabel: String,
+    /** ICE 正在抖但**没掉线**：state 不降级（见 ViewerSession.jitter），
+        只在画面上亮一条提示，说明"卡一下，正在自愈"（REVIEW-2026-09-27 P2）。 */
+    jitter: Boolean = false,
     /** 只给观众侧用：帧尺寸变化上报，用来做"跟随对方横竖屏"。 */
     onContentResolution: (Int, Int) -> Unit = { _, _ -> },
     /** 非空才画那颗方向按钮（房主侧没有"跟随对方"这回事）。 */
@@ -332,6 +338,16 @@ fun CallScreen(
                 // 而不是"再等 3 秒才消失"——那样用户会觉得点了没反应。
                 onToggleChrome = { if (chromeVisible) chromeVisible = false else chromeTick++ },
                 onVolume = onViewerVolume,
+                // 横滑 ±10（与网页端同阈值 96、同语义）：只在"有条可按、且对方允许"时
+                // 生效 —— 权限收回头时手势和镜像条按钮同一标准（REVIEW P3-15）。
+                onStep = { delta ->
+                    when {
+                        cinema != null ->
+                            if (cinemaAllowed) onCinemaCmd(com.ticketfortwo.app.cinema.CinemaSync.Cmd.Step(delta))
+                        watch != null ->
+                            if (watchAllowed) onWatchCmd("step", delta)
+                    }
+                },
             )
         }
 
@@ -358,7 +374,10 @@ fun CallScreen(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .padding(top = 36.dp, start = 12.dp, end = 12.dp),
+                // 状态栏安全区：原来固定 top=36dp 是按普通状态栏猜的，
+                // 大状态栏/挖孔屏上顶栏会顶进图标堆里（REVIEW-2026-09-27 P3）
+                .statusBarsPadding()
+                .padding(top = 6.dp, start = 12.dp, end = 12.dp),
             radius = GlassDimens.radiusIsland,
             surfaceAlpha = 0.72f,
             refract = isHost,
@@ -400,6 +419,8 @@ fun CallScreen(
                 onCmd = onWatchCmd,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
+                    // 三键导航时岛整体上移，横条必须跟着加同样的 inset，层间距才不变
+                    .navigationBarsPadding()
                     .padding(bottom = GlassDimens.islandBottom + 84.dp),
             )
         }
@@ -416,6 +437,7 @@ fun CallScreen(
                 onCmd = onCinemaCmd,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
                     .padding(bottom = GlassDimens.islandBottom + 84.dp),
             )
         }
@@ -433,18 +455,30 @@ fun CallScreen(
             refract = isHost,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                // 三键导航（48dp）会把整颗岛压进导航栏里点不到（REVIEW-2026-09-27 P3）
+                .navigationBarsPadding()
                 .padding(bottom = GlassDimens.islandBottom),
         )
+
+        /* ICE 抖动提示：state 不降级，用这条药丸说明"卡一下，正在自愈"——
+           放在顶栏下方、和收厅浮条（屏幕中部）错开，两条同时出现也不叠字。 */
+        if (!isHost && jitter && !pipMode) {
+            Box(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 96.dp)
+                    .background(
+                        androidx.compose.ui.graphics.Color(0xCC000000),
+                        RoundedCornerShape(percent = 50),
+                    )
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
+            ) {
+                Text("连接抖动，正在自愈…", fontSize = 13.sp, color = Ink.TextHi)
+            }
+        }
     }
 }
 
-/**
- * 房主舞台：不画视频，只说清"现在正在播什么"。
- *
- * 卡片文案只留用户用得上的事实：**分享跟着你跨应用**。这是这类工具最容易
- * 翻车的地方 —— 有人以为"退出 App 就停了"，结果相册、聊天窗口全被对方看到了。
- * 至于"为什么不放实时预览"，那是我们内部的设计取舍，不该出现在用户界面上。
- */
 /**
  * 观众侧的放映厅条。
  *
@@ -465,6 +499,22 @@ private fun CinemaMirrorBar(
     modifier: Modifier = Modifier,
 ) {
     val cs = com.ticketfortwo.app.cinema.CinemaSync
+    /* 走秒与投影（REVIEW-2026-09-27 P2-8）：广播 2 秒一条，按下 ±10 后数字最长
+       2 秒纹丝不动，看着像没生效。记住收包时刻，播放中显示 pos + 已流逝 ——
+       projectedPos（协议里现成的、全仓原本零调用）就是干这个的；暂停时冻结。 */
+    val receivedAt = remember(state) { SystemClock.elapsedRealtime() }
+    var shownPosMs by remember(state) { mutableStateOf(state.posMs) }
+    LaunchedEffect(state) {
+        while (true) {
+            shownPosMs = if (state.playing) {
+                cs.projectedPos(state, (SystemClock.elapsedRealtime() - receivedAt).coerceAtLeast(0L))
+                    .let { if (state.durMs > 0) it.coerceAtMost(state.durMs) else it }
+            } else {
+                state.posMs
+            }
+            delay(500)
+        }
+    }
     Box(
         modifier
             // 横屏实测（2400x1080，.dev/viewer-cinebar-land3.png）：不封顶时这张条被
@@ -497,7 +547,7 @@ private fun CinemaMirrorBar(
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    cs.formatTime(state.posMs) + " / " + cs.formatTime(state.durMs),
+                    cs.formatTime(shownPosMs) + " / " + cs.formatTime(state.durMs),
                     fontSize = 11.sp,
                     color = Ink.TextMid,
                     modifier = Modifier.weight(1f),
@@ -538,6 +588,13 @@ private fun CinemaMirrorBar(
     }
 }
 
+/**
+ * 房主舞台：不画视频，只说清"现在正在播什么"。
+ *
+ * 卡片文案只留用户用得上的事实：**分享跟着你跨应用**。这是这类工具最容易
+ * 翻车的地方 —— 有人以为"退出 App 就停了"，结果相册、聊天窗口全被对方看到了。
+ * 至于"为什么不放实时预览"，那是我们内部的设计取舍，不该出现在用户界面上。
+ */
 @Composable
 private fun HostStage(
     backdrop: LayerBackdrop,

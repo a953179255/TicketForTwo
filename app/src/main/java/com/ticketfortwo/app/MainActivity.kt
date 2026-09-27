@@ -239,6 +239,9 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     val inPip by PipState.inPip.collectAsState()
     val viewerMicPending by ViewerSession.micPending.collectAsState()
     val viewerMicLive by ViewerSession.micLive.collectAsState()
+    // ICE 抖动提示 + 控制岛延迟格的真实 RTT（都是观众侧，见 ViewerSession）
+    val viewerJitter by ViewerSession.jitter.collectAsState()
+    val viewerRtt by ViewerSession.netRtt.collectAsState()
 
     // 观众侧的麦克风权限。以前整条观众链路从没申请过它 —— 于是 ensureMicTrack
     // 永远返回 null，点「开麦」只翻图标。默认不申请是对的（只看画面不该开麦），
@@ -751,8 +754,9 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                         if (!viewerMicLive) context.toast("开麦中，约一秒…")
                     }
                 },
-                latencyMs = null,
+                latencyMs = viewerRtt,
                 netLabel = "直连",
+                jitter = viewerJitter,
                 onContentResolution = { w, h -> ViewerSession.onContentResolution(w, h) },
                 orientationLabel = when (viewerOrient) {
                     OrientationMode.Follow -> "跟随"

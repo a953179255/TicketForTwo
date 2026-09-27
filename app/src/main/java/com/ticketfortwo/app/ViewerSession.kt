@@ -206,6 +206,28 @@ object ViewerSession {
      */
     private var rescueJob: kotlinx.coroutines.Job? = null
 
+    /**
+     * ICE 正在抖（DISCONNECTED→自愈中）。**不改 state**：路由只认 state，
+     * 一旦打回 Connecting，观众会被从 CallScreen 踢回"正在连接"页
+     * （渲染层整个重建），恢复后再切回 —— 网络抖一下页面闪两轮
+     * （REVIEW-2026-09-27 P2）。留在 CallScreen，用这条提示说明发生了什么。
+     */
+    private val _jitter = MutableStateFlow(false)
+    val jitter: StateFlow<Boolean> = _jitter.asStateFlow()
+
+    /** 观众端实测 RTT：控制岛那格原来写死 null 永远画"—"（REVIEW-2026-09-27 P3）。 */
+    private val _netRtt = MutableStateFlow<Int?>(null)
+    val netRtt: StateFlow<Int?> = _netRtt.asStateFlow()
+    private var statsJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * 本次观看的会话 id（每次 [start] 重新生成，随 hello 上报）。
+     * 房主靠它区分"同一条会话的信令重连"（走画面不断的捷径）和
+     * "页面刷新/第二台设备"（必须拆掉重建重发 offer）——
+     * 没有它，刷新后的页面会拿着旧 peer 永远等不到 offer（REVIEW-2026-09-27 P1）。
+     */
+    private var sessionId: String = ""
+
     /** 镜像条陈旧判定：房主不再广播多久之后把条收起来（对齐网页端 WATCH_STALE_MS）。 */
     private var staleJob: kotlinx.coroutines.Job? = null
     private var lastWatchAt = 0L
@@ -224,6 +246,7 @@ object ViewerSession {
     fun start(context: Context, inviteUrl: String) {
         stop()
         everOpened = false
+        sessionId = java.util.UUID.randomUUID().toString()
         appContext = context.applicationContext
         RtcEngine.init(context)
 
@@ -254,6 +277,20 @@ object ViewerSession {
                 }
             }
         }
+        /* 控制岛延迟格的 RTT：观众侧本来就有 Peer（collectStats 走同一条 stats 通道），
+           每 3 秒取一次即可 —— 卡顿时那格终于不再是写死的"—"。 */
+        statsJob?.cancel()
+        statsJob = scope.launch {
+            while (true) {
+                delay(3_000)
+                val p = peer
+                if (p == null) {
+                    _netRtt.value = null
+                    continue
+                }
+                p.collectStats { s -> _netRtt.value = s.rttMs }
+            }
+        }
         openSocket()
     }
 
@@ -271,7 +308,11 @@ object ViewerSession {
                 wsOpen = true
                 everOpened = true
                 note("通道已建立，正在向房主打招呼")
-                send(JSONObject().apply { put("t", "hello"); put("role", "viewer") }.toString())
+                send(JSONObject().apply {
+                    put("t", "hello")
+                    put("role", "viewer")
+                    put("sid", sessionId)
+                }.toString())
             },
             onText = { text ->
                 val c = appContext
@@ -361,6 +402,9 @@ object ViewerSession {
         reconnecting = false
         rescueJob?.cancel(); rescueJob = null
         staleJob?.cancel(); staleJob = null
+        statsJob?.cancel(); statsJob = null
+        _netRtt.value = null
+        _jitter.value = false
         lastWatchAt = 0L
         lastCinemaAt = 0L
         runCatching { peer?.close() }
@@ -588,8 +632,10 @@ object ViewerSession {
                     note("ice=$s")
                     when (s) {
                         PeerConnection.IceConnectionState.CONNECTED,
-                        PeerConnection.IceConnectionState.COMPLETED ->
+                        PeerConnection.IceConnectionState.COMPLETED -> {
+                            _jitter.value = false
                             _state.value = State.Connected
+                        }
 
                         PeerConnection.IceConnectionState.FAILED -> {
                             val v = peer?.probe?.verdict()
@@ -602,7 +648,12 @@ object ViewerSession {
                         }
 
                         PeerConnection.IceConnectionState.DISCONNECTED ->
-                            _state.value = State.Connecting("连接抖动，正在自愈…")
+                            if (_state.value is State.Connected) {
+                                // 已连上过的抖动留在 CallScreen（见 jitter 注释），只亮提示
+                                _jitter.value = true
+                            } else {
+                                _state.value = State.Connecting("连接抖动，正在自愈…")
+                            }
 
                         else -> Unit
                     }
@@ -758,6 +809,11 @@ object ViewerSession {
     private fun note(msg: String) {
         Log.i(TAG, msg)
         _log.value = (_log.value + msg).takeLast(40)
+        /* 「正在连接」页的 note 原来只在 start() 写一次，之后"通道已建立 /
+           收到画面信息 / ice=…"全进了没人读的 _log —— 十几秒里页面一动不动
+           （REVIEW-2026-09-27 P2）。路由按 Connecting.note 重组，这里顺手刷新。 */
+        val s = _state.value
+        if (s is State.Connecting) _state.value = s.copy(note = msg)
     }
 
     /**

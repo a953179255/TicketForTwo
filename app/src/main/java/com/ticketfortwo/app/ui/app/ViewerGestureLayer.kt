@@ -8,6 +8,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Box
@@ -57,6 +58,11 @@ fun ViewerGestureLayer(
     onToggleChrome: () -> Unit,
     /** 观众侧音量，0f..1f。 */
     onVolume: (Float) -> Unit,
+    /**
+     * 横滑 ±10 秒（±10_000ms）。阈值 96 与网页端 `Math.abs(dx) > 96` 对齐；
+     * 调用方负责门禁（无条/没权限时不生效）。一划只触发一次。
+     */
+    onStep: (Long) -> Unit = { },
 ) {
     val context = LocalContext.current
     val screenH = LocalConfiguration.current.screenHeightDp.toFloat()
@@ -90,7 +96,7 @@ fun ViewerGestureLayer(
         )
     }
 
-    var hudKind by remember { mutableIntStateOf(0) }      // 0=亮度 1=音量
+    var hudKind by remember { mutableIntStateOf(0) }      // 0=亮度 1=音量 2=快进退
     var hudValue by remember { mutableFloatStateOf(0f) }
     // 用自增 tick 驱动淡出：直接拿 nanoTime 比大小不会触发重组，HUD 会永远停在那儿
     var hudTick by remember { mutableIntStateOf(0) }
@@ -147,6 +153,29 @@ fun ViewerGestureLayer(
             .pointerInput(Unit) {
                 detectTapGestures(onTap = { onToggleChrome() })
             }
+            // 横滑 ±10（REVIEW P3-15）：横屏看片时不必先唤出控件再找小按钮。
+            // 阈值与网页端同为 96；一划一档，触发后本次手势不再重复触发。
+            // 注册在竖滑/点击之后：竖向主导归竖滑、无位移归点击，纯横滑才轮到它。
+            .pointerInput(Unit) {
+                var accX = 0f
+                var fired = false
+                detectHorizontalDragGestures(
+                    onDragStart = { accX = 0f; fired = false },
+                ) { change, dragAmount ->
+                    accX += dragAmount
+                    if (!fired && kotlin.math.abs(accX) > 96.dp.toPx()) {
+                        fired = true
+                        val delta = if (accX > 0) 10_000L else -10_000L
+                        onStep(delta)
+                        hudKind = 2
+                        hudValue = if (accX > 0) 1f else -1f
+                        hudTick++
+                        change.consume()
+                    } else if (fired) {
+                        change.consume()
+                    }
+                }
+            }
     ) {
         AnimatedVisibility(
             visible = hudVisible,
@@ -161,7 +190,11 @@ fun ViewerGestureLayer(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
-                    (if (hudKind == 0) "亮度 " else "音量 ") + "${(hudValue * 100).toInt()}%",
+                    when (hudKind) {
+                        0 -> "亮度 ${(hudValue * 100).toInt()}%"
+                        1 -> "音量 ${(hudValue * 100).toInt()}%"
+                        else -> if (hudValue > 0) "快进 10 秒" else "快退 10 秒"
+                    },
                     fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White,
                 )
             }

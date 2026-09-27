@@ -2,6 +2,7 @@ package com.ticketfortwo.app.ui.app
 
 import android.annotation.SuppressLint
 import android.view.View
+import android.os.SystemClock
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -254,6 +255,7 @@ fun WatchTogetherScreen(
                 },
                 backdrop = backdrop,
                 height = 44.dp,
+                enabled = inputUrl.isNotBlank(),
             )
         }
         Row(
@@ -408,6 +410,21 @@ fun WatchMirrorBar(
     modifier: Modifier = Modifier,
 ) {
     val s = state ?: return
+    /* 走秒（REVIEW-2026-09-27 P2-8）：广播 1 秒一条但按下 ±10 后数字最长 1 秒不动。
+       记收包时刻、播放中显示 pos + 已流逝；同看没有 rate 字段，按 1 倍估算即可。 */
+    val receivedAt = remember(state) { SystemClock.elapsedRealtime() }
+    var shownPosMs by remember(state) { mutableStateOf(s.posMs) }
+    LaunchedEffect(state) {
+        while (true) {
+            shownPosMs = if (s.playing) {
+                (s.posMs + (SystemClock.elapsedRealtime() - receivedAt).coerceAtLeast(0L))
+                    .let { if (s.durMs > 0) it.coerceAtMost(s.durMs) else it }
+            } else {
+                s.posMs
+            }
+            delay(500)
+        }
+    }
     GlassPanel(
         backdrop = backdrop,
         modifier = modifier
@@ -446,7 +463,7 @@ fun WatchMirrorBar(
                         }
                         WatchKey("+10", enabled = allowed) { onCmd("step", 10_000) }
                         Text(
-                            "${WatchSync.formatTime(s.posMs)} / ${WatchSync.formatTime(s.durMs)}",
+                            "${WatchSync.formatTime(shownPosMs)} / ${WatchSync.formatTime(s.durMs)}",
                             fontSize = 11.sp, color = Ink.TextMid,
                         )
                     }
