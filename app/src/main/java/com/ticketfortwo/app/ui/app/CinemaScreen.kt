@@ -136,6 +136,8 @@ fun CinemaScreen(
        的话系统默认返回 false = 直接杀掉整个 App 进程 —— 正在分享的会话会一起没掉
        （REVIEW-2026-09-27 P1）。 */
     var webGen by remember { mutableStateOf(0) }
+    /** 动作行「后退」按钮的可用性。WebView 内部导航不触发重组，由 onPageStarted 显式刷新。 */
+    var canGoBack by remember { mutableStateOf(false) }
     /** 放映状态（会话里那份的本地镜像，只为画 UI）。 */
     val cinema by CallSession.cinema.collectAsState()
     /** 对方那边到底播出来了没有 —— 没有这条回执时，"正在放映"三个字是半真半假的。 */
@@ -163,6 +165,24 @@ fun CinemaScreen(
                     view: WebView?,
                     request: WebResourceRequest?,
                 ): Boolean = false
+
+                /* 站内跳转/广告跳转也算导航，这里统一复位：
+                   ① 地址栏跟着走（只动 inputUrl —— pageUrl 是加载 effect 的 key，
+                      改它会触发"换页 → 再加载"的死循环）；
+                   ② 后退按钮可用性；
+                   ③ 嗅探表清掉 —— 原来只在 pageUrl 变化时清，站内跳转永远不清，
+                      上一页的候选和新页混在一起（REVIEW-2026-09-27 P2，随本次一并修）；
+                   ④ 上一页的探针读数（player/eme/probe）不留着冒充新页的。 */
+                override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                    super.onPageStarted(view, url, favicon)
+                    canGoBack = view?.canGoBack() == true
+                    if (!url.isNullOrBlank() && url != "about:blank") inputUrl = url
+                    sniffer.clear()
+                    hits = emptyList()
+                    probe = null
+                    player = null
+                    eme = null
+                }
 
                 /**
                  * 渲染进程崩了：返回 true 系统才不杀整个 App 进程；回主线程整只重建
@@ -226,12 +246,21 @@ fun CinemaScreen(
         }
     }
 
-    // 网页全屏时返回键先退全屏（提示语"按返回键回到放映厅"才成立），否则落到
-    // MainActivity 的 showCinema 处理把整屏关掉 —— 按提示操作反而丢了厅。
-    BackHandler(enabled = fullScreenView != null) {
-        fullScreenView = null
-        fullScreenCallback?.onCustomViewHidden()
-        fullScreenCallback = null
+    /* 系统返回 = 浏览器后退，全屏永远优先，历史到头才离开放映厅
+       （MainActivity 的 showCinema handler 在本屏之后注册不上，由 else 分支的
+       onBack() 直接离场，行为等价）。用户反馈的场景：网页被广告/自动跳转带走后
+       只能重新打开原链接 —— 现在按返回一步步退回看电影那一页，
+       动作行另有常驻「后退」按钮，两种走法都有。 */
+    BackHandler {
+        when {
+            fullScreenView != null -> {
+                fullScreenView = null
+                fullScreenCallback?.onCustomViewHidden()
+                fullScreenCallback = null
+            }
+            webView.canGoBack() -> webView.goBack()
+            else -> onBack()
+        }
     }
 
     LaunchedEffect(pageUrl, webGen) {
@@ -474,6 +503,9 @@ fun CinemaScreen(
                 }
             }
         }, backdrop)
+        // 浏览器后退：广告/自动跳转后一步步退回上一页（与系统返回键同一行为，
+        // 没有这颗按钮时用户只能重开链接 —— 2026-09-28 用户反馈）
+        GlassTextButton("后退", onClick = { webView.goBack() }, backdrop, enabled = canGoBack)
         GlassTextButton(if (showPanel) "收起嗅探" else "展开嗅探", onClick = {
             showPanel = !showPanel
         }, backdrop)

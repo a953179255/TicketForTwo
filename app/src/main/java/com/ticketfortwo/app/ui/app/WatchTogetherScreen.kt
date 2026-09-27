@@ -98,6 +98,8 @@ fun WatchTogetherScreen(
     /* 渲染进程崩了要整只重建（WebView 此后不可复用）；而 onRenderProcessGone 不
        override 的话系统默认返回 false = 直接杀掉整个 App 进程（REVIEW-2026-09-27 P1）。 */
     var webGen by remember { mutableStateOf(0) }
+    /** 「后退」按钮可用性，由 onPageStarted 刷新（见 webViewClient）。 */
+    var canGoBack by remember { mutableStateOf(false) }
 
     val webView = remember(webGen) {
         WebView(context).apply {
@@ -118,6 +120,15 @@ fun WatchTogetherScreen(
                     view: WebView?,
                     request: WebResourceRequest?,
                 ): Boolean = false // 一律在内部打开，不给外部浏览器接手
+
+                // 站内/广告跳转：地址栏跟着走（只动 inputUrl，pageUrl 是加载 effect 的
+                // key 不能动），后退按钮可用性在这里刷新；探针读数同放映厅一并复位。
+                override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                    super.onPageStarted(view, url, favicon)
+                    canGoBack = view?.canGoBack() == true
+                    if (!url.isNullOrBlank() && url != "about:blank") inputUrl = url
+                    state = null
+                }
 
                 override fun onRenderProcessGone(
                     view: WebView?,
@@ -148,12 +159,18 @@ fun WatchTogetherScreen(
         }
     }
 
-    // 网页全屏时返回键先退全屏（提示语"按返回键回到同看房间"才成立），
-    // 不加这条的话返回落到 onClose 把整屏关掉 —— 按提示操作反而丢了房间。
-    BackHandler(enabled = fullScreenView != null) {
-        fullScreenView = null
-        fullScreenCallback?.onCustomViewHidden()
-        fullScreenCallback = null
+    // 系统返回 = 浏览器后退（全屏优先，历史到头才离屏），与放映厅同一套行为：
+    // 广告/自动跳转后按返回一步步退回原页，不用重开链接（2026-09-28 用户反馈）。
+    BackHandler {
+        when {
+            fullScreenView != null -> {
+                fullScreenView = null
+                fullScreenCallback?.onCustomViewHidden()
+                fullScreenCallback = null
+            }
+            webView.canGoBack() -> webView.goBack()
+            else -> onClose()
+        }
     }
 
     LaunchedEffect(pageUrl, webGen) { webView.loadUrl(pageUrl) }
@@ -238,6 +255,7 @@ fun WatchTogetherScreen(
             Modifier.fillMaxWidth().padding(start = GlassDimens.screenH, bottom = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            GlassTextButton("后退", onClick = { webView.goBack() }, backdrop, enabled = canGoBack)
             GlassTextButton("测试片", onClick = { inputUrl = WATCH_TEST_URL; pageUrl = WATCH_TEST_URL }, backdrop)
         }
 
