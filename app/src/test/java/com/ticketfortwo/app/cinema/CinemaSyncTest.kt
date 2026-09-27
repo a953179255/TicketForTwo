@@ -128,25 +128,15 @@ class CinemaSyncTest {
     }
 
     @Test
-    fun `步进换算成绝对位置时钳在片头片尾之间`() {
-        assertEquals(20_000L, CinemaSync.stepTarget(10_000L, 60_000L, 10_000L))
-        assertEquals(0L, CinemaSync.stepTarget(5_000L, 60_000L, -10_000L))
-        assertEquals(60_000L, CinemaSync.stepTarget(55_000L, 60_000L, 10_000L))
-        // 时长未知（直播/还没读到 metadata）时不做上限，但也不能为负
-        assertEquals(0L, CinemaSync.stepTarget(0L, 0L, -10_000L))
-    }
-
-    @Test
-    fun `回声窗口内拒绝重复处理，窗口过了自动失效`() {
-        val g = CinemaSync.EchoGuard(windowMs = 800L)
-        assertFalse(g.inEcho(1_000L))
-        g.markApplied(1_000L)
-        assertTrue(g.inEcho(1_500L))
-        assertTrue(g.inEcho(1_799L))
-        assertFalse(g.inEcho(1_800L))
-        assertEquals(1, g.appliedCount())
-        g.resetIfStale(2_000L)
-        assertEquals(0, g.appliedCount())
+    fun `权限闸门与步进上限仍在协议入口起效`() {
+        // 步进落点已改为页面内相对位移（stepTarget 删除，见 SyncProto 注释）；
+        // 这里守住还活着的两道闸：MAX_STEP_MS 钳位与 accept 门禁。
+        assertEquals(120_000L, CinemaSync.MAX_STEP_MS)
+        assertNull(CinemaSync.accept(false, CinemaSync.Cmd.Step(10_000)))
+        assertEquals(
+            "step|120000",
+            CinemaSync.cmdFields(CinemaSync.Cmd.Step(999_999_999)),
+        )
     }
 
     @Test

@@ -103,10 +103,6 @@ object WatchSync {
     fun accept(allowViewerControl: Boolean, cmd: WatchCmd?): WatchCmd? =
         SyncProto.accept(allowViewerControl, cmd)
 
-    /** 快进/快退的落点：夹在 [0, 时长] 之间。时长未知（直播）时只保证不为负。 */
-    fun stepTarget(posMs: Long, durMs: Long, deltaMs: Long): Long =
-        SyncProto.stepTarget(posMs, durMs, deltaMs)
-
     // ---- 注入给 WebView 的 JS ---------------------------------------------
     //
     // 只走 evaluateJavascript（Kotlin 主动问 / 主动下命令），**不用 addJavascriptInterface**：
@@ -165,11 +161,16 @@ object WatchSync {
                 "var d=isFinite(v.duration)?v.duration:0;" +
                 "var t=${cmd.posMs / 1000.0};if(d>0&&t>d)t=d;if(t<0)t=0;" +
                 "v.currentTime=t;v.play();})()"
-        is WatchCmd.Step -> {
-            val to = stepTarget(posMs, durMs, cmd.deltaMs) / 1000.0
+        /* Step 用**相对位移**，落点在页面里算：Kotlin 手里的 posMs 是 2 秒前的
+           探针/广播快照，拿它换算绝对位置会让连点两次 +10 第二次落在同一处
+           （REVIEW-2026-09-27 P2）。夹紧 [0, dur] 与原 stepTarget 换算语义一致；
+           时长未知（直播）时只防负。 */
+        is WatchCmd.Step ->
             "(function(){var v=$FIND;if(!v)return;" +
-                "v.currentTime=$to;v.play();})()"
-        }
+                "var d=isFinite(v.duration)?v.duration:0;" +
+                "var t=v.currentTime+${cmd.deltaMs / 1000.0};" +
+                "if(d>0&&t>d)t=d;if(t<0)t=0;" +
+                "v.currentTime=t;v.play();})()"
     }
 
     /** mm:ss / h:mm:ss —— 两端进度显示共用，避免同一秒在两边写成不同样子。 */

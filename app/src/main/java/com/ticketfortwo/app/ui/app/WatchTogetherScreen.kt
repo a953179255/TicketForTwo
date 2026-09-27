@@ -85,6 +85,8 @@ fun WatchTogetherScreen(
     val context = LocalContext.current
     var pageUrl by remember { mutableStateOf(WATCH_TEST_URL) }
     var inputUrl by remember { mutableStateOf(WATCH_TEST_URL) }
+    /** 同址重复打开 = 真刷新（见 CinemaScreen 同名字段的注释）。 */
+    var reloadSeq by remember { mutableStateOf(0) }
     var state by remember { mutableStateOf(CallSession.watch.value) }
     var allowControl by remember { mutableStateOf(CallSession.viewerMayControl.value) }
     var lastCmdAt by remember { mutableLongStateOf(0L) }
@@ -173,7 +175,7 @@ fun WatchTogetherScreen(
         }
     }
 
-    LaunchedEffect(pageUrl, webGen) { webView.loadUrl(pageUrl) }
+    LaunchedEffect(pageUrl, webGen, reloadSeq) { webView.loadUrl(pageUrl) }
 
     // 每秒问一次页面。太密会跟网页自己的渲染抢主线程，太疏观众那边的进度条会跳。
     // webGen 进 key：渲染进程重建后旧 effect 里抓的还是已 destroy 的实例。
@@ -246,7 +248,10 @@ fun WatchTogetherScreen(
             )
             PrimaryPill(
                 text = "打开",
-                onClick = { pageUrl = normalizeUrl(inputUrl) },
+                onClick = {
+                    val u = normalizeUrl(inputUrl)
+                    if (u == pageUrl) reloadSeq++ else pageUrl = u
+                },
                 backdrop = backdrop,
                 height = 44.dp,
             )
@@ -256,7 +261,10 @@ fun WatchTogetherScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             GlassTextButton("后退", onClick = { webView.goBack() }, backdrop, enabled = canGoBack)
-            GlassTextButton("测试片", onClick = { inputUrl = WATCH_TEST_URL; pageUrl = WATCH_TEST_URL }, backdrop)
+            GlassTextButton("测试片", onClick = {
+                inputUrl = WATCH_TEST_URL
+                if (WATCH_TEST_URL == pageUrl) reloadSeq++ else pageUrl = WATCH_TEST_URL
+            }, backdrop)
         }
 
         Box(

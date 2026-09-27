@@ -184,7 +184,6 @@ object CallSession {
     val cinema: StateFlow<CinemaSync.State?> = _cinema.asStateFlow()
 
     private var cinemaVersion = 0L
-    private val cinemaEcho = CinemaSync.EchoGuard()
 
     /**
      * 最近一条"观众那边到底播出来了没有"的回执；null = 还没收到。
@@ -266,21 +265,15 @@ object CallSession {
             note("收到播放请求，但厅里还没选片")
             return
         }
-        // 步进要在房主这边换算成绝对位置：观众报的是意图，权威值只有房主有
-        val real: CinemaSync.Cmd = when (cmd) {
-            is CinemaSync.Cmd.Step ->
-                CinemaSync.Cmd.Seek(CinemaSync.stepTarget(st.posMs, st.durMs, cmd.deltaMs))
-            else -> cmd
-        }
-        val now = System.currentTimeMillis()
-        if (cinemaEcho.inEcho(now)) {
-            note("（回声）刚动过，先不重复处理：${real.label()}")
-        } else {
-            cinemaEcho.markApplied(now)
-            note("对方在控制放映：${real.label()}")
-        }
+        // 不在这里换算绝对落点：st.posMs 是 2 秒前的广播快照，按它算会让连点两次
+        // +10 第二次落在同一处（REVIEW-2026-09-27 P2）。Step 原样传下去，
+        // 由注入的 JS 在页面里做相对位移 —— 权威的 currentTime 只在页面里。
+        // 也不做"回声抑制"：指令只有 viewer→host 一个方向、WS 有序可靠，
+        // 800ms 窗口吞掉的只会是用户手快的第二次真按键，日志却写着"先不重复处理"
+        // （原来是只改文案的空壳）。协议入口 cmdFields 已钳过 |delta| ≤ MAX_STEP_MS。
+        note("对方在控制放映：${cmd.label()}")
         val cb = onCinemaCommand
-        if (cb == null) note("收到播放请求，但放映厅页面已经关了") else cb(real)
+        if (cb == null) note("收到播放请求，但放映厅页面已经关了") else cb(cmd)
     }
 
     /**

@@ -70,9 +70,6 @@ object CinemaSync {
     const val MIN_RATE = 0.94
     const val MAX_RATE = 1.06
 
-    /** 回声抑制窗口：执行完一条指令后这么久之内，不把由它引起的状态变化当新事实。 */
-    const val ECHO_WINDOW_MS = 800L
-
     private const val SEP = "|"
 
     /** 标题是网页里抓的，可能带换行、竖线、引号，必须先洗再拼（实现见 [SyncProto.sanitize]）。 */
@@ -158,10 +155,6 @@ object CinemaSync {
      */
     fun accept(allow: Boolean, cmd: Cmd?): Cmd? = SyncProto.accept(allow, cmd)
 
-    /** 步进的目标位置，钳在 [0, dur] 里（实现见 [SyncProto.stepTarget]）。 */
-    fun stepTarget(posMs: Long, durMs: Long, deltaMs: Long): Long =
-        SyncProto.stepTarget(posMs, durMs, deltaMs)
-
     /**
      * 把房主那一刻的状态投影到"观众此刻应该在的第几毫秒"。
      *
@@ -190,34 +183,6 @@ object CinemaSync {
     fun rateWarp(driftMs: Long): Double {
         if (kotlin.math.abs(driftMs) <= DEADBAND_MS) return 1.0
         return (1.0 + driftMs / 1000.0 * 0.07).coerceIn(MIN_RATE, MAX_RATE)
-    }
-
-    /**
-     * 回声抑制器。
-     *
-     * 问题场景：观众按 +10 → 房主执行 → 房主把新位置广播回来 → 观众 seek →
-     * 观众的 seek 又触发一条"我动了"的上报 → 房主以为有新事实……
-     * couple-cinema 用一个 `applying` 计数器 + 700ms 衰减，synctv 用 `_isSyncing` 800ms
-     * 加 `clientOperationId`。这里取前者那种最小实现：**窗口内的一律当回声**。
-     */
-    class EchoGuard(private val windowMs: Long = ECHO_WINDOW_MS) {
-        private var untilMs = 0L
-        private var applied = 0
-
-        /** 刚执行了一条由对端引起的动作，开一个窗口。 */
-        fun markApplied(nowMs: Long) {
-            untilMs = nowMs + windowMs
-            applied++
-        }
-
-        fun inEcho(nowMs: Long): Boolean = nowMs < untilMs
-
-        /** 窗口过期就归零计数，免得"我一共抑制过多少次"变成只增不减的误导数字。 */
-        fun resetIfStale(nowMs: Long) {
-            if (nowMs >= untilMs) applied = 0
-        }
-
-        fun appliedCount(): Int = applied
     }
 
     /**

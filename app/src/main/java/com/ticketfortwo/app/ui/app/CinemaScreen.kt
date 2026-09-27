@@ -115,6 +115,12 @@ fun CinemaScreen(
     val context = LocalContext.current
     var pageUrl by remember { mutableStateOf(initialUrl?.takeIf { it.isNotBlank() } ?: CINEMA_TEST_LOCAL) }
     var inputUrl by remember { mutableStateOf(pageUrl) }
+    /**
+     * 同一地址重复点「打开」= 真刷新。pageUrl 是加载 effect 的 key，值不变 effect
+     * 不重跑 —— 页内跳走后想"回到这条链接"点了没反应（同 MainActivity「同一条链接
+     * 第二次递进来」的坑，REVIEW-2026-09-27 P2）。自增计数并进 key 把原地刷新补上。
+     */
+    var reloadSeq by remember { mutableStateOf(0) }
     var hits by remember { mutableStateOf<List<MediaSniffer.Hit>>(emptyList()) }
     var probe by remember { mutableStateOf<MediaSniffer.PageProbe?>(null) }
     var eme by remember { mutableStateOf<CinemaProbe.EmeReport?>(null) }
@@ -263,7 +269,7 @@ fun CinemaScreen(
         }
     }
 
-    LaunchedEffect(pageUrl, webGen) {
+    LaunchedEffect(pageUrl, webGen, reloadSeq) {
         sniffer.clear()
         hits = emptyList()
         probe = null
@@ -454,7 +460,8 @@ fun CinemaScreen(
             boxHeight = 44.dp,
         )
         PrimaryPill(text = "打开", onClick = {
-            pageUrl = normalizeUrl(inputUrl)
+            val u = normalizeUrl(inputUrl)
+            if (u == pageUrl) reloadSeq++ else pageUrl = u
             note = "正在打开，嗅探中…"
         }, backdrop = backdrop, height = 44.dp)
     }
@@ -520,6 +527,11 @@ fun CinemaScreen(
         }
     }
 
+    /** 系统分享面板发邀请（放映中拉人进厅的直达通道，与复制并列）。 */
+    val shareInviteAction: () -> Unit = {
+        inviteUrl?.let { context.shareInvite(it) }
+    }
+
     val panel: @Composable (Modifier) -> Unit = { panelModifier -> CinemaPanel(
         modifier = panelModifier,
         wide = wide,
@@ -541,8 +553,12 @@ fun CinemaScreen(
         playback = playback,
         voiceLine = VoiceMode.label(voiceMode),
         onCopyInvite = copyInvite,
+        onShare = shareInviteAction,
         onPick = { h -> screen(h) },
-        onTestUrl = { u -> inputUrl = u; pageUrl = u },
+        onTestUrl = { u ->
+            inputUrl = u
+            if (u == pageUrl) reloadSeq++ else pageUrl = u
+        },
     )
     }
 
@@ -646,6 +662,8 @@ private fun CinemaPanel(
     /** 这一场的声音档（"只有视频声"时要说明麦克风为什么是关的）。 */
     voiceLine: String?,
     onCopyInvite: () -> Unit,
+    /** 系统分享面板（与复制并列的第二条邀请通道）。 */
+    onShare: () -> Unit,
     onPick: (MediaSniffer.Hit) -> Unit,
     /** 三颗测试用胶囊的目标地址。它们从主操作行挪进「展开嗅探」，见 CinemaScreen 的排布注释。 */
     onTestUrl: (String) -> Unit,
@@ -731,6 +749,8 @@ private fun CinemaPanel(
                         )
                         Box(Modifier.width(8.dp))
                         GlassTextButton("复制邀请", onClick = onCopyInvite, backdrop = backdrop)
+                        Box(Modifier.width(6.dp))
+                        GlassTextButton("分享", onClick = onShare, backdrop = backdrop)
                     }
                 }
                 if (cinema != null) {

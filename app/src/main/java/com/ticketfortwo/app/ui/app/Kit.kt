@@ -1,5 +1,8 @@
 package com.ticketfortwo.app.ui.app
 
+import android.content.Context
+import android.content.Intent
+import android.widget.Toast
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -128,6 +131,23 @@ fun PrimaryPill(
             color = if (filled) Color.White else Ink.TextHi,
         )
     }
+}
+
+/**
+ * 系统分享面板发邀请（参考 couple-cinema「复制邀请链接」之外再给一条直达通道）。
+ *
+ * 只放**裸 URL**、不拼"来一起看吧"之类的文案：观众端粘贴框按 https 开头校验，
+ * 整段文案粘进去会被当非法链接拒掉（要富文案得先让两端学会从文本里抽 URL，另做）。
+ */
+fun Context.shareInvite(url: String) {
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, url)
+    }
+    runCatching { startActivity(Intent.createChooser(send, "发给朋友")) }
+        .onFailure {
+            Toast.makeText(this, "没有可用来分享的应用", Toast.LENGTH_SHORT).show()
+        }
 }
 
 /** 圆形图标按钮：44dp 是 Apple 的 button-icon-circular，同时也是触控命中下限。 */

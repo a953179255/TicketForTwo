@@ -71,16 +71,6 @@ class WatchSyncTest {
     }
 
     @Test
-    fun `快进落点夹在零与时长之间`() {
-        assertEquals(20_000L, WatchSync.stepTarget(10_000, 600_000, 10_000))
-        assertEquals(0L, WatchSync.stepTarget(5_000, 600_000, -10_000))
-        assertEquals(600_000L, WatchSync.stepTarget(595_000, 600_000, 10_000))
-        // 直播没有时长：只保证不回到负数
-        assertEquals(0L, WatchSync.stepTarget(0, 0, -10_000))
-        assertEquals(10_000L, WatchSync.stepTarget(0, 0, 10_000))
-    }
-
-    @Test
     fun `探针返回值解析`() {
         val s = WatchSync.parseProbe("\"1|1500|60000|1|Big Buck Bunny\"", url = "file://x")!!
         assertTrue(s.found)
@@ -105,8 +95,12 @@ class WatchSyncTest {
         assertTrue(seek, seek.contains(".play()"))
 
         val step = WatchSync.jsFor(WatchCmd.Step(10_000), 20_000, 60_000)
-        // 20s + 10s = 30s
-        assertTrue(step, step.contains("currentTime=30"))
+        // 相对位移：落点在页面里算（currentTime + 10s），不再拿 Kotlin 侧 2 秒前的
+        // posMs 换算绝对位置 —— 所以入参的 20_000/60_000 不该出现在结果里
+        assertTrue(step, step.contains("v.currentTime+10.0"))
+        assertFalse(step, step.contains("currentTime=30"))
+        // 上下界夹紧仍在 JS 里（时长未知时只防负）
+        assertTrue(step, step.contains("if(t<0)t=0"))
 
         val pause = WatchSync.jsFor(WatchCmd.Pause, 0, 0)
         assertTrue(pause, pause.contains(".pause()"))

@@ -51,9 +51,26 @@ fun extractSharedUrl(intent: Intent?): String? {
     val raw = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim() ?: return null
     firstUrlIn(raw)?.let { return it }
     // 没有 http 开头的就整段交给用户自己判断：可能是"bilibili.com/video/BV…"这种省了协议的
-    return raw.takeIf { it.contains(".") && !it.contains(" ") }
+    return raw.trimUrlTail().takeIf { it.contains(".") && !it.contains(" ") }
 }
 
-private val URL_IN_TEXT = Regex("""https?://[^\s"'<>]+""", RegexOption.IGNORE_CASE)
+/**
+ * 只认 http(s)。字符集**直接排除中文标点**：它们不可能合法地出现在未编码的 URL 里，
+ * 而聊天文案习惯贴着链接写（`…abc123，快`、`…/v）`）—— 不在正则里截断，
+ * 光靠事后 trim 只救得了"标点在末尾"的情况（REVIEW-2026-09-27 P2）。
+ * ASCII 的 `)` **不排除** —— 它是合法 URL 字符（`/wiki/Foo_(bar)`）。
+ */
+private val URL_IN_TEXT = Regex(
+    """https?://[^\s"'<>。，；：！？、）】》」』]+""",
+    RegexOption.IGNORE_CASE,
+)
 
-fun firstUrlIn(text: String): String? = URL_IN_TEXT.find(text)?.value?.trimEnd('.', ',', ';')
+/**
+ * 再剥一层尾巴标点（正则没截到的末尾 ASCII 标点：`. , ;` 等）。
+ * 全角与中文标点通常已被上面的字符集挡掉，留着是双保险。
+ */
+private fun String.trimUrlTail(): String =
+    trimEnd { it in ".,;:!?，。；：！？、）】》」』\"'" }
+
+fun firstUrlIn(text: String): String? =
+    URL_IN_TEXT.find(text)?.value?.trimUrlTail()

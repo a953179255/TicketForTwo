@@ -932,6 +932,7 @@ fun InviteScreen(
      */
     screenSharing: Boolean = false,
 ) {
+    val context = LocalContext.current
     /* 滚动 + 按钮钉底（同 ConsentGuideScreen）：横屏内容约 560dp > 可用 359dp，
        不可滚时底部这颗唯一的停止入口在屏幕外（REVIEW-2026-09-27 P1）。 */
     PageScaffold {
@@ -953,6 +954,14 @@ fun InviteScreen(
                     )
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
                         PrimaryPill("复制邀请", onCopy, backdrop, Modifier.weight(1f))
+                        // 直达微信/QQ 等的第二条通道：复制给会粘的人，分享给要直接发的人
+                        PrimaryPill(
+                            "分享",
+                            { context.shareInvite(inviteUrl) },
+                            backdrop,
+                            Modifier.weight(1f),
+                            filled = false,
+                        )
                     }
                 }
             }
