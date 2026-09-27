@@ -313,6 +313,15 @@ object CallSession {
     private var viewerGoneJob: Job? = null
 
     /**
+     * 当前观众的会话 id（hello.sid，每次开页面/开 App 各生成一次）。
+     * 只有**同 sid** 的 hello 才允许走"信令重连、画面不断"捷径；换了 sid
+     * （页面刷新、同链接被第二台设备打开）必须拆掉旧 peer 重新发 offer ——
+     * 否则新页面永远等不到 offer 卡在等待，而旧 peer 还"健康"着
+     * （REVIEW-2026-09-27 P1：互踢循环与刷新卡死同根）。
+     */
+    private var viewerSid: String? = null
+
+    /**
      * startHost 的启动协程（信令 → 隧道 → 出链接那几秒）。
      * 不存 Job 的后果：用户在"申请临时地址"这几秒里点了停止，stop() 完成后
      * 旧协程照常醒来，把 Idle 改成 WaitingViewer（链接其实是死的）或误报失败
@@ -431,9 +440,17 @@ object CallSession {
 
         val cap = if (permissionIntent != null) {
             ScreenShareController(context.applicationContext, permissionIntent).also {
+                /* 系统中途收回授权（锁屏、通知栏点停止）：与 attachScreenCapture
+                   **同一条策略** —— 厅还在、语音还在，把整通电话拆掉比退回
+                   "只有语音"严重得多。原来初次路径直接 stop(整个会话)、厅后接
+                   路径只停画面，同一个系统动作两种结局（REVIEW-2026-09-27 P2），
+                   现已统一为"只停画面、会话继续"。 */
                 it.onStoppedBySystem = { reason ->
-                    note("系统停止：$reason")
-                    stop(context)
+                    note("系统停止画面：$reason（厅里继续语音）")
+                    runCatching { it.stopCapture() }
+                    if (capture === it) capture = null
+                    localVideoTrack = null
+                    _localVideo.value = null
                 }
                 capture = it
             }
@@ -578,7 +595,7 @@ object CallSession {
                 // 现场出问题时，这一行是唯一能区分"流坏了"和"对方内核没播放器"的证据。
                 val env = obj.optString("env")
                 if (env.isNotEmpty()) Log.i(TAG, "VIEWER_ENV $env")
-                onViewerJoined()
+                onViewerJoined(obj.optString("sid").ifEmpty { null })
             }
 
             // 观众开麦克风时会主动发一轮 offer（谁改媒体谁发起）。
@@ -678,16 +695,18 @@ object CallSession {
         }
     }
 
-    private fun onViewerJoined() {
+    private fun onViewerJoined(sid: String?) {
         if (_role.value != Role.Host) return
         val context = sessionContext ?: return
 
-        // 信令重连：观众那边只是经隧道的 WS 断了，P2P 通道还活着。
-        // 这里若无条件重建 peer，等于把一通正在放画面的通话拆掉重来 —— 观众会看到
-        // 画面黑一下甚至直接失败。所以先问一句"手上这条还健康吗"，健康就只把新 socket 接上
-        // （SignalHub 会把 viewer 换成新连接，消息通道立刻恢复）。
+        // 同一条会话的信令重连（hello 带同一个 sid）才走"画面不断"捷径。
+        // 换 sid（观众刷新页面/第二台设备）必须拆掉重建重发 offer：旧 peer
+        // "健康"恰恰是陷阱，新页面拿不到 offer 会永远停在等待（REVIEW-2026-09-27 P1）。
+        // sid 缺失（旧版网页）一律按新会话处理 —— 多做一次 offer 无害，卡死才要命。
+        val sameSession = sid != null && sid == viewerSid
+        viewerSid = sid ?: viewerSid
         val live = peer
-        if (live != null &&
+        if (live != null && sameSession &&
             live.connectionState == org.webrtc.PeerConnection.IceConnectionState.CONNECTED
         ) {
             note("观众信令重连，画面不断")
@@ -828,6 +847,7 @@ object CallSession {
         stopStatsPump()
         runCatching { peer?.close() }
         peer = null
+        viewerSid = null
         _remoteVideo.value = null
     }
 

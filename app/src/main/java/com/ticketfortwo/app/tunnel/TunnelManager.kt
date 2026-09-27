@@ -178,11 +178,18 @@ object TunnelManager {
         process = null
         if (p != null) {
             runCatching { p.destroy() }
-            // 给它 1.5 秒走完有序退出；超时就强杀，别让一个坏进程拖着分享不放。
+            /* 等待与强杀整体挪进守护线程（REVIEW-2026-09-27 P2）：stop() 常从
+               主线程进来（停止按钮、通知停止），原来这里同步 join 1.5 秒 ——
+               点一次"停止"整屏冻结近 2 秒。destroy 已发出，1 秒不退就强杀，
+               调用方不需要等着看结果。 */
             runCatching {
-                val done = thread(name = "t2-tunnel-wait", isDaemon = true) { p.waitFor() }
-                done.join(1_500)
-                if (p.isAlive) p.destroyForcibly()
+                thread(name = "t2-tunnel-wait", isDaemon = true) {
+                    runCatching {
+                        if (!p.waitFor(1, java.util.concurrent.TimeUnit.SECONDS)) {
+                            p.destroyForcibly()
+                        }
+                    }
+                }
             }
         }
         if (_state.value !is State.Failed) _state.value = State.Idle

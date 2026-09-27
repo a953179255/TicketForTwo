@@ -188,6 +188,9 @@ class WsClient(
             val raw = Socket()
             raw.tcpNoDelay = true
             raw.connect(InetSocketAddress(target.host, target.port), 12_000)
+            // 握手阶段（TLS + HTTP 头）给短超时：隧道黑洞时原来会在这里无限阻塞，
+            // onClosed 永不触发 → 观众卡在"正在连接"没有任何兜底（REVIEW-2026-09-27 P2）
+            raw.soTimeout = HANDSHAKE_TIMEOUT_MS
 
             val s: Socket = if (target.secure) {
                 // SSLSocketFactory.getDefault() 的返回类型是 SocketFactory，
@@ -204,6 +207,7 @@ class WsClient(
                 raw
             }
             socket = s
+            s.soTimeout = HANDSHAKE_TIMEOUT_MS   // TLS 层单独设一次（层叠 socket 不继承）
 
             val input = BufferedInputStream(s.getInputStream())
             val output = BufferedOutputStream(s.getOutputStream())
@@ -214,6 +218,9 @@ class WsClient(
                 return
             }
             out = output
+            // 握手完成后放宽：房主 writeLoop 每 25s 发心跳，PONG 即重置此计时 ——
+            // 90 秒连一帧都收不到才判死，走 onClosed → 既有 rescue 兜底。
+            s.soTimeout = WS_READ_TIMEOUT_MS
             onOpen()
 
             readLoop(input)
@@ -413,6 +420,14 @@ class WsClient(
 
         /** 一条 answer ≈ 4 KB、一条候选 ≈ 150 B，128 格够一次完整握手用满。 */
         private const val OUTBOX_CAPACITY = 128
+        /** 握手（连接/TLS/HTTP 头）的读超时；宽限后的读超时见 WS_READ_TIMEOUT_MS。 */
+        private const val HANDSHAKE_TIMEOUT_MS = 15_000
+        /**
+         * 读超时：靠房主 writeLoop 每 25s 的心跳（我们回 PONG 即重置计时）保活，
+         * 90 秒连一帧都收不到才判死 —— 隧道黑洞/半开连接由此从"无限转圈"
+         * 变成有界失败并进入既有 rescue 路径（REVIEW-2026-09-27 P2）。
+         */
+        private const val WS_READ_TIMEOUT_MS = 90_000
         private const val CR = 13
         private const val LF = 10
         private const val OP_CONT = 0x0

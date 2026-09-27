@@ -63,8 +63,18 @@ object SignalHub {
      * 实测隧道在 100~120 秒之间回收空闲连接，取 25s 是四倍余量 ——
      * 心跳本身只有 2 字节，25 秒一次对流量可以忽略（一小时不到 30KB）。
      */
-    private const val KEEPALIVE_IDLE_MS = 25_000L
+    private const val KEEPALIVE_INTERVAL_MS = 25_000L
     private val EMPTY_FRAME = ByteArray(0)
+    /** HTTP 头阶段的读超时：/health 等免凭证路径经隧道公网可达，只连上不发请求会钉死线程。 */
+    private const val HEADER_TIMEOUT_MS = 15_000
+    /**
+     * WebSocket 阶段的读超时：靠 writeLoop 每 25s 的心跳（PONG 会重置它）保活，
+     * 90 秒收不到任何帧才判死 —— 半开连接、NAT 断链的线程由此有界回收
+     * （REVIEW-2026-09-27 P2：这里原来是无超时的无限阻塞）。
+     */
+    private const val WS_READ_TIMEOUT_MS = 90_000
+    /** 分片累积上限：单帧已在 readFrame 里限过 1MB，恶意 CONT 流不能把堆撑爆。 */
+    private const val MAX_FRAGMENT_BYTES = 1024 * 1024
 
     // ---- 房主侧接口（同进程，不走 socket）--------------------------------
 
@@ -148,6 +158,11 @@ object SignalHub {
         running = false
         runCatching { server?.close() }
         server = null
+        // 有界回收线程（REVIEW-2026-09-27 P2）：不 join 的话快速 stop→start
+        // 会留下旧写线程和新写线程抢同一个队列，出站顺序不再有 FIFO 保证。
+        // accept 线程随 server.close 立刻退出；写线程 interrupt 唤醒 poll 后即退。
+        runCatching { acceptThread?.join(500) }
+        writeThread?.let { runCatching { it.interrupt(); it.join(300) } }
         acceptThread = null
         writeThread = null
         outbox.clear()
@@ -232,27 +247,30 @@ object SignalHub {
      * 我们自己的观众端 [WsClient] 也回 pong。且 ping 不占消息语义，老版本观众看不懂也不会坏。
      */
     private fun writeLoop() {
-        var idleMs = 0L
+        var sincePingMs = 0L
         while (running) {
+            // poll 1 秒：循环至少每秒醒一次，拿它当心跳时钟。
             val msg = try {
                 outbox.poll(1, TimeUnit.SECONDS)
             } catch (e: InterruptedException) {
                 break
             }
-            if (msg == null) {
-                idleMs += 1_000
-                if (idleMs >= KEEPALIVE_IDLE_MS) {
-                    idleMs = 0
-                    val c0 = synchronized(lock) { viewer }
-                    if (c0 != null) {
-                        runCatching {
-                            synchronized(c0.writeLock) { writeFrame(c0.out, OP_PING, EMPTY_FRAME) }
-                        }.onFailure { Log.w(TAG, "心跳没发出去：${it.javaClass.name}") }
-                    }
+            /* 心跳按**时间**发、不按空闲发（REVIEW-2026-09-27 P2 改）：
+               原来是"队列空闲 ≥25s 才 ping"，可放映中每 1–2 秒就有广播、
+               idleMs 永远攒不到阈值 —— 给连接设了读超时之后，被动看片的观众
+               会被当成死连接踢掉。客户端（App/浏览器）的 PONG 会重置我们的读超时，
+               反过来这条 PING 也重置对方的 —— 双向保活只需要这一条心跳。 */
+            sincePingMs += 1_000
+            if (sincePingMs >= KEEPALIVE_INTERVAL_MS) {
+                sincePingMs = 0
+                val c0 = synchronized(lock) { viewer }
+                if (c0 != null) {
+                    runCatching {
+                        synchronized(c0.writeLock) { writeFrame(c0.out, OP_PING, EMPTY_FRAME) }
+                    }.onFailure { Log.w(TAG, "心跳没发出去：${it.javaClass.name}") }
                 }
-                continue
             }
-            idleMs = 0
+            if (msg == null) continue
             val c = synchronized(lock) { viewer }
             if (c == null) {
                 // 观众走了就丢弃，不阻塞队列。也算"处理完"——否则 sayGoodbye 会白等到超时。
@@ -291,6 +309,9 @@ object SignalHub {
         var attached: Client? = null
         try {
             socket.tcpNoDelay = true
+            // HTTP 头阶段短超时（/health、脚本页都是免凭证公网路径，
+            // "只连上不发请求"的对端不再允许钉死这条线程，REVIEW-2026-09-27 P2）
+            socket.soTimeout = HEADER_TIMEOUT_MS
             val input = BufferedInputStream(socket.getInputStream())
             val output = BufferedOutputStream(socket.getOutputStream())
 
@@ -314,6 +335,8 @@ object SignalHub {
                     val client = Client(socket, output)
                     attached = client
                     attach(client)
+                    // WS 阶段放宽到 90s：心跳 PONG 会不断重置它，只有真死连接才超时
+                    socket.soTimeout = WS_READ_TIMEOUT_MS
                     readWebSocket(client, input)
                 }
 
@@ -440,6 +463,10 @@ object SignalHub {
                 OP_CONT -> {
                     val acc = fragment ?: continue
                     acc.write(frame.payload)
+                    if (acc.size() > MAX_FRAGMENT_BYTES) {
+                        Log.w(TAG, "分片累积超 ${MAX_FRAGMENT_BYTES} 字节，断开这条连接")
+                        break
+                    }
                     if (frame.fin) {
                         deliver(acc.toByteArray())
                         fragment = null

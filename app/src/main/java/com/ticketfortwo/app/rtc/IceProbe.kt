@@ -15,25 +15,35 @@ package com.ticketfortwo.app.rtc
  */
 class IceProbe {
 
-    private val startedAt = System.nanoTime()
+    // 写入方是 libwebrtc 的观察者线程，读取方（verdict/summary）常在主线程 ——
+    // 三个裸 ArrayList 无同步时并发迭代会 CME（REVIEW-2026-09-27 P2）。
+    // 统一挂在这把对象锁上；classify/format 是纯函数，在锁里调用即可。
+    private var startedAt = System.nanoTime()
     private val localTypes = ArrayList<String>()
     private val remoteTypes = ArrayList<String>()
     private val states = ArrayList<Pair<String, Long>>()
 
+    @Synchronized
     fun onLocalCandidate(sdp: String?) { candidateTypeOf(sdp)?.let { localTypes += it } }
 
+    @Synchronized
     fun onRemoteCandidate(sdp: String?) { candidateTypeOf(sdp)?.let { remoteTypes += it } }
 
+    @Synchronized
     fun onIceState(state: String) { states += state to elapsedMs() }
 
-    /** 一次新的分享要清空，否则上一次的候选会污染这一次的判定。 */
+    /** 一次新的分享要清空，否则上一次的候选会污染这一次的判定；时间轴一起重置。 */
+    @Synchronized
     fun reset() {
         localTypes.clear(); remoteTypes.clear(); states.clear()
+        startedAt = System.nanoTime()
     }
 
+    @Synchronized
     fun verdict(): Verdict = classify(localTypes, remoteTypes, states)
 
     /** 给 logcat 用的紧凑摘要（同样不含 IP）。 */
+    @Synchronized
     fun summary(): String =
         "本地[${format(localTypes)}] 远端[${format(remoteTypes)}] 轨迹[" +
             states.joinToString(">") { it.first } + "]"

@@ -66,7 +66,14 @@ class ShareService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
+        /* START_STICKY 的 null-intent 重启只会在进程死后发生 —— 而 CallSession 与
+           本服务同进程，那时会话也没了，继续跑只会立着一条没人认领的前台通知
+           （实测出现过 id=1001 孤儿通知，REVIEW-2026-09-27 P2）。直接退出。 */
+        if (intent == null) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        if (intent.action == ACTION_STOP) {
             CallSession.stop(applicationContext)
             stopSelf()
             return START_NOT_STICKY
@@ -88,7 +95,9 @@ class ShareService : Service() {
         // 所以上层必须 awaitReady() 之后才能开始采集。
         _foregroundReady.value = true
         watchViewer()
-        return START_STICKY
+        // NOT_STICKY：唯一会走到这里的"重启"是进程死后的 null intent（上面已拦）。
+        // 会话与本服务同进程，进程死了会话也没了 —— 没有任何值得重启后继续的状态。
+        return START_NOT_STICKY
     }
 
     private fun buildNotification(type: Int): Notification {
