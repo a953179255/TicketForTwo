@@ -232,20 +232,24 @@ fun CallScreen(
         }
     }
     if (!isHost) {
-        LaunchedEffect(chromeTick) {
-            if (chromeTick == 0) return@LaunchedEffect
-            chromeVisible = true
-            delay(3_000)
-            chromeVisible = false
-        }
-        // 首帧到达 = 用户最想看"对方那屏长什么样"的时刻，此时控件必须在；
-        // 停留 4 秒后收起，让画面独占屏幕。
-        LaunchedEffect(remoteTrack) {
-            if (remoteTrack != null) {
+        /* 单一收起倒计时 —— 原来是两个 effect（chromeTick / remoteTrack）各写
+           chromeVisible，互相抢写、时机重叠（审查已知项第 1 条）。合并后三条规则：
+           ① 远端轨首次到达 → 显示 4 秒（最想看清画面的时刻）；
+           ② 用户唤出（chromeTick 变化）→ 显示 3 秒；
+           ③ **暂停期间不收**：放映/同看暂停后所有控件一起消失，满屏只剩一帧静止
+              画面，极易被读成"卡死了"——网页端同一条判据（pl.paused 就不收），
+              这里用 paused 进 key：暂停立刻常驻，恢复后重新计时。
+              纯屏幕分享没有"暂停"概念，行为不变（审查 P1-3）。 */
+        val paused = cinema?.playing == false || watch?.playing == false
+        LaunchedEffect(chromeTick, remoteTrack, paused) {
+            if (paused) {
                 chromeVisible = true
-                delay(4_000)
-                chromeVisible = false
+                return@LaunchedEffect
             }
+            if (chromeTick == 0 && remoteTrack == null) return@LaunchedEffect
+            chromeVisible = true
+            delay(if (chromeTick == 0 && remoteTrack != null) 4_000L else 3_000L)
+            chromeVisible = false
         }
     }
     // 画中画里只留画面：小窗拢共几百像素宽，两条玻璃横幅压上去就把画面糊成一团，
@@ -295,7 +299,9 @@ fun CallScreen(
             // 压在同一个带上（.dev/cinebar-capped.png："正在放映…"那行和"他在放片…"
             // 那行直接重叠）。但控件收起时条也没了，那时中间这句必须回来当唯一的说明。
             when {
-                voiceMode && !(cinema != null && chromeShown) ->
+                // && !pipMode：小窗里 chrome 和手势层都已经让路，这两句居中大字
+                // 也不该往几百像素的小窗上压（审查 P3：浮条统一让路）。
+                voiceMode && !pipMode && !(cinema != null && chromeShown) ->
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
                         /* 厅先开 + 观众用 App：他这边一块黑，底部条却写着"正在放映"，
@@ -313,7 +319,7 @@ fun CallScreen(
                 // 只有**真的有视频轨**才谈得上"等画面"。厅先开那条路房主根本不投屏
                 // （remoteTrack 为 null），这句却会永远挂在屏幕正中 —— 实测它还压在
                 // 放映条那行字上（.dev/cinebar-final.png："…的那条"与"等待对方画面…"重叠）。
-                !firstFrame && remoteTrack != null ->
+                !firstFrame && remoteTrack != null && !pipMode ->
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text("等待对方画面…", fontSize = 13.sp, color = Ink.TextMid)
                     }
@@ -332,7 +338,7 @@ fun CallScreen(
         // 顶部状态条（观众侧随控件一起收起 —— 全屏看画面时不留横幅）
         // remoteTrack != null：厅先开全程没投屏，收厅后这句"现在看的是他的屏幕"
         // 是假话，还和正中"语音对话中（对方未分享画面）"直接打架（REVIEW-2026-09-27 P1）。
-        if (!isHost && cinemaGoneNote && remoteTrack != null) {
+        if (!isHost && cinemaGoneNote && remoteTrack != null && !pipMode) {
             Box(
                 Modifier
                     .align(Alignment.Center)
@@ -496,19 +502,23 @@ private fun CinemaMirrorBar(
                     color = Ink.TextMid,
                     modifier = Modifier.weight(1f),
                 )
-                CircleControl(onClick = { onCmd(com.ticketfortwo.app.cinema.CinemaSync.Cmd.Step(-10_000)) }, backdrop = backdrop) {
-                    Text("-10", fontSize = 13.sp, color = Ink.TextHi)
+                // allowed（房主的"方向盘"开关）没开时三颗键置灰 —— 原来全亮着，
+                // 按下去被 ViewerSession 的门禁静默吞掉，零反馈（审查 P1）。
+                // 同看条早就有 enabled = allowed，两端标准在这里对齐。
+                CircleControl(onClick = { onCmd(com.ticketfortwo.app.cinema.CinemaSync.Cmd.Step(-10_000)) }, backdrop = backdrop, enabled = allowed) {
+                    Text("-10", fontSize = 13.sp, color = if (allowed) Ink.TextHi else Ink.TextLow)
                 }
                 Spacer(Modifier.width(8.dp))
                 CircleControl(
                     onClick = { onCmd(if (state.playing) com.ticketfortwo.app.cinema.CinemaSync.Cmd.Pause else com.ticketfortwo.app.cinema.CinemaSync.Cmd.Play) },
                     backdrop = backdrop,
+                    enabled = allowed,
                 ) {
-                    Text(if (state.playing) "❚❚" else "▶", fontSize = 12.sp, color = Ink.TextHi)
+                    Text(if (state.playing) "❚❚" else "▶", fontSize = 12.sp, color = if (allowed) Ink.TextHi else Ink.TextLow)
                 }
                 Spacer(Modifier.width(8.dp))
-                CircleControl(onClick = { onCmd(com.ticketfortwo.app.cinema.CinemaSync.Cmd.Step(10_000)) }, backdrop = backdrop) {
-                    Text("+10", fontSize = 13.sp, color = Ink.TextHi)
+                CircleControl(onClick = { onCmd(com.ticketfortwo.app.cinema.CinemaSync.Cmd.Step(10_000)) }, backdrop = backdrop, enabled = allowed) {
+                    Text("+10", fontSize = 13.sp, color = if (allowed) Ink.TextHi else Ink.TextLow)
                 }
             }
             Spacer(Modifier.height(6.dp))

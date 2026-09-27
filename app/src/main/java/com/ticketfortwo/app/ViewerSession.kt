@@ -3,6 +3,7 @@ package com.ticketfortwo.app
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.SystemClock
 import android.util.Log
 import com.ticketfortwo.app.rtc.Peer
 import com.ticketfortwo.app.rtc.RtcEngine
@@ -100,6 +101,9 @@ object ViewerSession {
     }
 
     private const val TAG = "ViewerSession"
+
+    /** 观众端镜像条的陈旧阈值：与网页端 `WATCH_STALE_MS` 同值（广播节奏 1~2 秒一条）。 */
+    private const val VIEW_STALE_MS = 5_000L
 
     private val _state = MutableStateFlow<State>(State.Idle)
     val state: StateFlow<State> = _state.asStateFlow()
@@ -202,6 +206,11 @@ object ViewerSession {
      */
     private var rescueJob: kotlinx.coroutines.Job? = null
 
+    /** 镜像条陈旧判定：房主不再广播多久之后把条收起来（对齐网页端 WATCH_STALE_MS）。 */
+    private var staleJob: kotlinx.coroutines.Job? = null
+    private var lastWatchAt = 0L
+    private var lastCinemaAt = 0L
+
     /** 信令重连的次数上限。房主真停了就不该无限重连下去。 */
     private val reconnectTries = 4
 
@@ -226,6 +235,25 @@ object ViewerSession {
         lastWsUrl = wsUrl
 
         _state.value = State.Connecting("正在连接房主的手机…")
+        /* 房主退出「一起看」页/放映映厅后不再有任何广播（厅"还开着"是设计），
+           观众端的进度和按钮会永远冻结在最后一帧 —— 冻结的条比没有条更误导，
+           按下去还零反馈（审查 P1）。5 秒无广播判陈旧、收条；房主回来自然恢复。
+           网页端同看条已有 WATCH_STALE_MS=5000，同阈值对齐。 */
+        staleJob?.cancel()
+        staleJob = scope.launch {
+            while (true) {
+                delay(1_000)
+                val now = SystemClock.elapsedRealtime()
+                if (_watch.value != null && now - lastWatchAt > VIEW_STALE_MS) {
+                    _watch.value = null
+                    _watchAllowed.value = false
+                }
+                if (_cinema.value != null && now - lastCinemaAt > VIEW_STALE_MS) {
+                    _cinema.value = null
+                    _cinemaAllowed.value = false
+                }
+            }
+        }
         openSocket()
     }
 
@@ -332,6 +360,9 @@ object ViewerSession {
         lastWsUrl = null
         reconnecting = false
         rescueJob?.cancel(); rescueJob = null
+        staleJob?.cancel(); staleJob = null
+        lastWatchAt = 0L
+        lastCinemaAt = 0L
         runCatching { peer?.close() }
         peer = null
         runCatching { audioTrack?.dispose() }
@@ -469,6 +500,7 @@ object ViewerSession {
 
             // 同看：房主那边播放器的状态镜像。房主每秒广播一次，这里只覆盖不判断。
             "watch" -> {
+                lastWatchAt = SystemClock.elapsedRealtime()
                 val parsed = WatchSync.parseState(obj.optString("f").ifEmpty { null })
                 if (parsed == null) {
                     _watch.value = null
@@ -482,6 +514,7 @@ object ViewerSession {
             // 而且这里没有 hls.js），所以这一屏只做两件事：告诉他"房主开始放片了"，
             // 以及把他的 ±10/暂停 转成 ccmd 发回去 —— 方向盘在房主那个播放器上。
             "cinema" -> {
+                lastCinemaAt = SystemClock.elapsedRealtime()
                 val f = obj.optString("f")
                 val st = com.ticketfortwo.app.cinema.CinemaSync.parseState(f)
                 _cinema.value = st

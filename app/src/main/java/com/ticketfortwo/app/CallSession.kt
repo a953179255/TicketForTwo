@@ -153,6 +153,10 @@ object CallSession {
     fun setViewerMayControl(on: Boolean) {
         _viewerMayControl.value = on
         broadcastWatch()
+        /* 放映条的权限位也要**立刻**到：现在它只搭下一条进度广播的车，而房主
+           探不到 <video> 时那条广播根本不发 —— 权限收回可能永远到不了观众端，
+           他那边三颗键还是"可按"的样子（审查 P1）。 */
+        broadcastCinema()
         note(if (on) "已允许对方控制播放" else "已收回播放控制")
     }
 

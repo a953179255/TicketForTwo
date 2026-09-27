@@ -136,6 +136,8 @@ fun CircleControl(
     onClick: () -> Unit,
     backdrop: LayerBackdrop,
     modifier: Modifier = Modifier,
+    /** 没权限时置灰：亮着但按下去被静默吞掉的按钮比没有按钮更伤信任。 */
+    enabled: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     LiquidGlassButton(
@@ -143,6 +145,7 @@ fun CircleControl(
         backdrop = backdrop,
         modifier = modifier.size(GlassDimens.controlSize),
         shape = CircleShape,
+        enabled = enabled,
         content = { content() },
     )
 }

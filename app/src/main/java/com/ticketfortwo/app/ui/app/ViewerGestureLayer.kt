@@ -35,6 +35,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.ticketfortwo.app.ViewerSession
 import com.ticketfortwo.app.ui.theme.Ink
 import kotlinx.coroutines.delay
 
@@ -68,13 +69,23 @@ fun ViewerGestureLayer(
         onDispose { resetActivityBrightness(context as? Activity) }
     }
 
-    var volume by remember { mutableFloatStateOf(1f) }
-    // 系统没给覆盖值时 screenBrightness 是 -1，从 0.5 起步，避免第一次滑动就跳变
+    // 初始值回读**真实状态**，不能拍脑袋：看片中途回一次消息（PiP 往返）手势层会
+    // 重建，音量若从 1f 重来，而会话里实际是 0.2 —— 下一次滑动直接跳回 ~100%
+    // （审查已知项第 2 条，必现场景：onViewerVolume 的真值就在 ViewerSession 里）。
+    var volume by remember { mutableFloatStateOf(ViewerSession.volume.value) }
+    // 窗口没有覆盖值（screenBrightness = -1，刚被 resetActivityBrightness 还原过）
+    // 时读**系统真实档位**，别再拿 0.5 猜 —— 系统在 80% 时第一次左滑会砸到 50%。
     var brightness by remember {
         mutableFloatStateOf(
             runCatching {
-                (context as? Activity)?.window?.attributes?.screenBrightness
-                    ?.takeIf { it > 0.01f } ?: 0.5f
+                val act = context as? Activity
+                val windowValue = act?.window?.attributes?.screenBrightness ?: -1f
+                if (windowValue > 0.01f) windowValue else {
+                    val raw = runCatching {
+                        Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, 127)
+                    }.getOrDefault(127)
+                    (raw / 255f).coerceIn(0.05f, 1f)
+                }
             }.getOrDefault(0.5f)
         )
     }
@@ -92,10 +103,14 @@ fun ViewerGestureLayer(
         delay(800)
         hudVisible = false
     }
-    // 首次提示只出现一次，不打扰第二次
-    LaunchedEffect(Unit) {
-        delay(3_000)
-        hintVisible = false
+    // 提示的 3 秒计时挂在"控件第一次收起"上。老实现是挂载就起表：提示 3 秒消失、
+    // 而控件 4 秒才收起，可见条件 `hintVisible && !chromeVisible` 在正常路径上
+    // 一次都不成立 —— 最该出现"点一下屏幕唤出控件"的时刻它从没出现过（审查 P2）。
+    LaunchedEffect(chromeVisible) {
+        if (!chromeVisible) {
+            delay(3_000)
+            hintVisible = false
+        }
     }
 
     fun applyBrightness(v: Float) {
