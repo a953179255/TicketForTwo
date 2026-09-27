@@ -803,7 +803,7 @@ function fmtClock(ms){
    房主只递"哪条流 + 第几毫秒"，画面由观众自己取 —— 画质是原生的，
    也不再有两层 UI。取不到（跨域/签名过期/要会员）就撤掉这一层，
    退回看屏幕流，绝不留一个黑屏给观众。 */
-let cine = null, cineHls = null, cineApplyUntil = 0, cineTimer = null;
+let cine = null, cineHls = null, cineApplyUntil = 0, cineTimer = null, cineLastAt = 0;
 let cineReady = false, cineWatch = null, cineAwaitTap = false, cineNeedSound = false, cineLastErr = '';
 /* 与房主的时钟偏移（本机 − 房主），NTP 式取历史最小样本（见 syncLocal）。换厅时清零。 */
 let cineSkew = null;
@@ -838,6 +838,7 @@ function onCinema(f) {
   const switched = !cine || cine.url !== st.url;
   const prevVer = cine ? cine.ver : -1;
   cine = st;
+  cineLastAt = Date.now();
   // 放映已经开始，等候期那个定时器就没用了，撤掉免得它晚一步把卡片盖回来
   if (voiceTimer) { clearTimeout(voiceTimer); voiceTimer = null; }
   cineBar.classList.remove('hide');
@@ -1005,6 +1006,17 @@ function cineDown(reason, failed, code, ver) {
 /** 每秒一次：把房主那条轴投影到本地，小偏差倍速追，大偏差才 seek。 */
 function syncLocal() {
   if (!cine || lv.readyState < 2) return;
+  /* 陈旧判定（REVIEW观看端 P1-2 网页半边）：房主退出放映厅/离开页面后就不再有
+     广播（厅"还开着"是设计），冻结的 cine.pos 还会按 age 继续投影 —— 进度越带
+     越偏，房主回来时又被猛拽回去。5 秒无广播（App 端同阈值）就停止校正并收条，
+     房主的下一条广播会把条子放回来（onCinema 里 remove hide）。 */
+  if (Date.now() - cineLastAt > 5000) {
+    if (cineBar && !cineBar.classList.contains('hide')) {
+      cineBar.classList.add('hide');
+      cineNote('房主已离开放映厅，进度不再跟随');
+    }
+    return;
+  }
   const now = Date.now();
   /* 对钟：hostWall 是**房主的墙钟**，直接相减会把两台手机的时钟差全额算进 age ——
      观众快 3 秒就恒定超前 3 秒播，慢 3 秒则 age 被 Math.max 夹成 0、want 冻在
