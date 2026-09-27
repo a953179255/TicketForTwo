@@ -29,7 +29,6 @@ import org.json.JSONObject
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
 import org.webrtc.IceCandidate
-import org.webrtc.MediaConstraints
 import org.webrtc.PeerConnection
 import org.webrtc.RtpParameters
 import org.webrtc.RtpSender
@@ -56,7 +55,7 @@ import org.webrtc.VideoTrack
  */
 object CallSession {
 
-    enum class Role { Host, Viewer }
+    enum class Role { Host }
 
     sealed interface State {
         data object Idle : State
@@ -315,6 +314,14 @@ object CallSession {
     private var statsJob: Job? = null
     /** 观众信令断了之后的"最多等你这么久"兜底。 */
     private var viewerGoneJob: Job? = null
+
+    /**
+     * startHost 的启动协程（信令 → 隧道 → 出链接那几秒）。
+     * 不存 Job 的后果：用户在"申请临时地址"这几秒里点了停止，stop() 完成后
+     * 旧协程照常醒来，把 Idle 改成 WaitingViewer（链接其实是死的）或误报失败
+     * （REVIEW-2026-09-27 P1）。stop() 第一时间取消它。
+     */
+    private var hostJob: Job? = null
     private var peer: Peer? = null
     /**
      * 这条 PeerConnection **有没有真的连上过**。
@@ -362,6 +369,30 @@ object CallSession {
                     _viewerPlayback.value = null
                     broadcastCinema()
                     broadcastWatch()
+                }
+            }
+        }
+        /* 门牌（隧道）中途断了必须有人听：pump 的 finally 会写
+           `State.Failed("门牌失效…")`，但全仓没有 collect —— 房主界面毫无反应，
+           发出去的链接悄悄 502（REVIEW-2026-09-27 P1）。只认 **Ready→Failed**：
+           启动阶段的 Failed 由 startHost 按返回值自己处理（failAndStop），
+           这里再插手会双写同一场失败。 */
+        scope.launch {
+            var wasReady = false
+            TunnelManager.state.collect { st ->
+                when (st) {
+                    is TunnelManager.State.Starting -> wasReady = false
+                    is TunnelManager.State.Ready -> wasReady = true
+                    is TunnelManager.State.Failed -> {
+                        if (wasReady) {
+                            wasReady = false
+                            val live = _role.value == Role.Host &&
+                                _state.value !is State.Idle &&
+                                _state.value !is State.Failed
+                            if (live) sessionContext?.let { failAndStop(it, st.reason) }
+                        }
+                    }
+                    TunnelManager.State.Idle -> Unit
                 }
             }
         }
@@ -426,7 +457,7 @@ object CallSession {
         if (permissionIntent == null) note("只连麦：不采集画面")
 
         // 传话员与门牌都不需要用户操作，但都不是瞬间完成，所以状态机要把这几秒画出来。
-        scope.launch {
+        hostJob = scope.launch {
             _state.value = State.Preparing("正在准备接入口")
             if (!SignalHub.start(context.applicationContext)) {
                 failAndStop(context, "接入口启动失败，请重试")
@@ -711,7 +742,11 @@ object CallSession {
      */
     fun toggleMic() {
         micOverride = !_micLive.value
-        _micMuted.value = !_micLive.value
+        /* 用"当前实际开着"置位，**不能**写 `!_micLive.value`（原实现）：
+           代入 applyVoicePolicy 的 `micOn = (override || needed) && !muted` 是个不动点 ——
+           默认档点静音写进去的还是 false（关不掉），被声音档自动关麦后点开麦反而写死 true
+           （永远开不了，还照样 note"已开麦"）。用户报的就是这个（REVIEW-2026-09-27 P1）。 */
+        _micMuted.value = _micLive.value
         applyVoicePolicy("用户切麦")
         if (micOverride && quality.voiceMode == VoiceMode.VideoOnly) {
             note("已开麦。对方在本地播原声，你出声会和他那份叠在一起 —— 想只留视频声就再点一次")
@@ -740,20 +775,6 @@ object CallSession {
             "覆盖=$micOverride → 麦克风=$micOn 房主听对方=$hears")
     }
 
-    /**
-     * 设置视频码率上限。用"读出现有参数、只改 maxBitrateBps、再写回"的方式，
-     * 避免从零构造 RtpParameters（那样会丢掉 codec 与 ssrc，直接断流）。
-     */
-    fun setMaxVideoBitrate(bps: Int) {
-        val sender = videoSender ?: return
-        runCatching {
-            val params = sender.parameters ?: return
-            params.encodings.forEach { it.maxBitrateBps = bps }
-            sender.parameters = params
-            note("码率上限 -> ${bps / 1000} kbps")
-        }.onFailure { note("设置码率失败：${it.message}") }
-    }
-
     fun stop(context: Context) {
         // 第一件事必须是道别，而且必须在拆 peer / 拆隧道 / 拆传话员之前做完：
         // SignalHub.stop() 会清掉待发队列，TunnelManager.stop() 直接杀 cloudflared 进程，
@@ -764,6 +785,12 @@ object CallSession {
         // ScreenShareController.onStoppedBySystem 最终也调这里，所以那一类也会被通知到。
         SignalHub.sayGoodbye()
         stopStatsPump()
+        /* 先取消两个"会迟到"的协程，再拆会话：
+           - hostJob：启动流程还没走完就停止，别让它醒来把 Idle 改成 WaitingViewer/Failed；
+           - viewerGoneJob：20 秒宽限到期会 teardownPeer + backToWaiting，把新会话的状态踩掉
+             （REVIEW-2026-09-27 P1/P2）。bye/gone 分支里已有取消，这里补的是 stop 这条路。 */
+        hostJob?.cancel(); hostJob = null
+        viewerGoneJob?.cancel(); viewerGoneJob = null
         teardownPeer()
         runCatching { capture?.release() }
         capture = null

@@ -330,7 +330,9 @@ fun CallScreen(
         }
 
         // 顶部状态条（观众侧随控件一起收起 —— 全屏看画面时不留横幅）
-        if (!isHost && cinemaGoneNote) {
+        // remoteTrack != null：厅先开全程没投屏，收厅后这句"现在看的是他的屏幕"
+        // 是假话，还和正中"语音对话中（对方未分享画面）"直接打架（REVIEW-2026-09-27 P1）。
+        if (!isHost && cinemaGoneNote && remoteTrack != null) {
             Box(
                 Modifier
                     .align(Alignment.Center)
@@ -546,7 +548,11 @@ private fun HostStage(
     val voiceLine = voiceLabel?.let { v ->
         when {
             !canHearViewer && !micOn -> "$v · 你的麦克风已关，你也听不到他"
-            !canHearViewer -> "$v · 你出声他听不到，要双向就改成连麦"
+            /* canHearViewer 管的是**下行**（房主听不听得到观众）。原句写成
+               "你出声他听不到"方向反了 —— 这一档房主麦克风多半是开着的，
+               观众听得见他说话（外放灌麦就是那条通道）。默认档最常见，
+               一行假话顶着警示色挂在卡片上（REVIEW-2026-09-27 P1）。 */
+            !canHearViewer -> "$v · 你听不到他说话，要双向就改成连麦"
             else -> v
         }
     }

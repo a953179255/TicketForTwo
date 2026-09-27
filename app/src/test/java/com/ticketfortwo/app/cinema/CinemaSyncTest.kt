@@ -48,6 +48,23 @@ class CinemaSyncTest {
     }
 
     @Test
+    fun `URL 里的竖线先转义，字段就不会错位`() {
+        // 2026-09-25 在模拟器上真抓到的地址形状：签名参数里带 `|`（见 MediaSnifferTest）
+        val raw = "https://data.example.com/log/web?0011|16.mp4|quit"
+        val st = state().copy(track = CinemaSync.Track(raw, "progressive", "标题"))
+        val f = CinemaSync.fields(st, true)
+        assertEquals(10, f.split("|").size)
+        val back = CinemaSync.parseState(f)
+        assertNotNull(back)
+        // 不在解析端解码：%7C 本身就是合法 URL，播放端等价；解码反而会破坏原本就含 %7C 的地址
+        assertEquals(raw.replace("|", "%7C"), back!!.track.url)
+        assertEquals(st.posMs, back.posMs)
+        assertEquals(st.version, back.version)
+        // 老版本房主没转义 → 11 段：整条拒收，不能把标题当进度
+        assertNull(CinemaSync.parseState("7|$raw|progressive|标题|10000|60000|1|1.0|1000000|1"))
+    }
+
+    @Test
     fun `脏数据一律拒收而不是半信半疑`() {
         assertNull(CinemaSync.parseState(""))
         assertNull(CinemaSync.parseState("1|javascript:alert(1)|mp4|t|0|0|1|1.0|0|1"))

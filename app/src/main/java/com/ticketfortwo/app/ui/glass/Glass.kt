@@ -1,45 +1,31 @@
 package com.ticketfortwo.app.ui.glass
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
-import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
@@ -72,9 +58,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
@@ -93,10 +77,9 @@ import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.lens
 import com.kyant.backdrop.effects.vibrancy
-import androidx.compose.ui.graphics.asImageBitmap
+import com.ticketfortwo.app.ui.theme.isDarkTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
-import kotlin.math.tanh
 
 /**
  * 位于玻璃采样层（appLayer/layerBackdrop）内的内容层应设为 false，使内部玻璃组件
@@ -111,7 +94,7 @@ val LocalGlassRefract = compositionLocalOf { true }
  */
 @Composable
 internal fun glassSurfaceColor(alpha: Float): Color {
-    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val dark = isDarkTheme()
     return if (dark) Color(0xFF0A0D12).copy(alpha = (alpha * 1.8f).coerceAtMost(0.94f))
     else Color.White.copy(alpha = alpha)
 }
@@ -132,57 +115,32 @@ internal fun glassSurfaceColor(alpha: Float): Color {
  */
 @Composable
 internal fun glassBorderColor(alpha: Float): Color {
-    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val dark = isDarkTheme()
     return if (dark) Color.White.copy(alpha = alpha * 0.35f) else Color.White.copy(alpha = alpha)
 }
 
 /** 退化路径（不采样 backdrop、拿不到库阴影）的兜底投影色：环境光。 */
 @Composable
 private fun glassFallbackShadowAmbient(): Color {
-    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val dark = isDarkTheme()
     return if (dark) Color.Black.copy(alpha = 0.30f) else Color(0xFF262E36).copy(alpha = 0.10f)
 }
 
 /** 退化路径的兜底投影色：主光（决定投影"落点"浓淡）。 */
 @Composable
 private fun glassFallbackShadowSpot(): Color {
-    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val dark = isDarkTheme()
     return if (dark) Color.Black.copy(alpha = 0.42f) else Color(0xFF262E36).copy(alpha = 0.16f)
 }
 
 @Composable
-fun rememberAppBackdrop(
-    wallpaper: android.graphics.Bitmap? = null,
-    dark: Boolean = false,
-    baseTop: androidx.compose.ui.graphics.Color = androidx.compose.ui.graphics.Color(0xFFEDF4EF),
-    baseBottom: androidx.compose.ui.graphics.Color = androidx.compose.ui.graphics.Color(0xFFD9E8DF)
-): LayerBackdrop {
-    // v0.18.1：ImageBitmap 包装提前到组合期——draw 块每帧执行，裸调 asImageBitmap()
-    // 每帧每画布分配一次包装对象（3 个 backdrop × 60fps），白增 GC 压力
-    val wpImage = remember(wallpaper) { wallpaper?.asImageBitmap() }
+fun rememberAppBackdrop(dark: Boolean = false): LayerBackdrop {
     return rememberLayerBackdrop {
-        if (wpImage != null) {
-            // 壁纸 cover-fit 铺满，给玻璃提供可折射的真实纹理（不加压层，保持通透）
-            val canvasW = size.width
-            val canvasH = size.height
-            val scale = maxOf(canvasW / wpImage.width, canvasH / wpImage.height)
-            val dw = wpImage.width * scale
-            val dh = wpImage.height * scale
-            drawImage(
-                wpImage,
-                dstOffset = androidx.compose.ui.unit.IntOffset(
-                    ((canvasW - dw) / 2f).toInt().coerceAtMost(0),
-                    ((canvasH - dh) / 2f).toInt().coerceAtMost(0)
-                ),
-                dstSize = androidx.compose.ui.unit.IntSize(dw.toInt(), dh.toInt())
-            )
-        } else if (dark) {
-            // 默认暗色渐变（近黑深蓝，与暗色主题背景一致）
+        if (dark) {
+            // 默认暗色渐变（近黑深蓝，与暗色主题背景一致）。
+            // 唯一调用点恒传 dark=true；壁纸不再在这里画，由 AmbientBackground
+            // 画在采样层（appLayer）里给玻璃提供可折射内容。
             drawRect(Brush.verticalGradient(listOf(Color(0xFF07090D), Color(0xFF0E131B))))
-        } else {
-            // 素色底：颜色由调用方按主题（支持动态取色）传入，
-            // 玻璃透过的是主题背景色，而非固定的绿调
-            drawRect(Brush.verticalGradient(listOf(baseTop, baseBottom)))
         }
         drawContent()
     }
@@ -202,20 +160,10 @@ fun GlassPanel(
     lensRadius: Dp = radius,
     blurRadius: Dp = radius / 3f,
     chromaticAberration: Boolean = false,
-    /** 折射覆盖**整个表面**（折射高度=短边一半，四边环带在中心汇合）。
-     *  关闭时折射只在边缘一圈（宽度=lensRadius）——通栏大卡上那一条太窄，等于没有。 */
-    lensFull: Boolean = false,
     /** 折射强度倍数：位移量 = 折射高度 × 此值（演示 App 的比例是 2） */
     lensAmountMul: Float = 2f,
     refract: Boolean? = null,
-    redrawKey: (() -> Any?)? = null,
-    /** 把本玻璃的最终表面（磨砂+折射+表面色）导出成一层，供其它玻璃
-     *  （如抽屉）经 CombinedBackdrop 合成采样 —— 解决"玻璃磨砂不到玻璃"：
-     *  玻璃不能进采样宿主（RenderNode 成环），但可以导出自己。 */
-    exportedBackdrop: com.kyant.backdrop.backdrops.LayerBackdrop? = null,
     border: Boolean = true,
-    /** 表面附加绘制（画在磨砂与着色之上、内容之下）：如顶栏状态栏带的渐变补强。仅折射路径生效。 */
-    surfaceOverlay: (androidx.compose.ui.graphics.drawscope.DrawScope.() -> Unit)? = null,
     /**
      * **浮层强化**（2026-09-21 定案）：用于"悬浮在内容之上"的面板（任务面板 / 上下文面板 / 弹层）。
      *
@@ -236,7 +184,7 @@ fun GlassPanel(
 ) {
     val r = refract ?: LocalGlassRefract.current
     val surface = glassSurfaceColor(surfaceAlpha)
-    val darkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val darkTheme = isDarkTheme()
     val border2 = glassBorderColor(0.45f)
 
     // ── 分层元素（库原生三件套）──────────────────────────────────────────────
@@ -309,45 +257,26 @@ fun GlassPanel(
                 backdrop = backdrop,
                 shape = { shape ?: RoundedCornerShape(radius) },
                 effects = {
-                    // 绘制期调用 redrawKey lambda 读取其中的 State：值变化 →
-                    // ObserverModifierNode 回调失效重绘 → 采样 offset 用最新布局
-                    // 坐标重算。直接传值无效（读参数不注册快照订阅）——必须传
-                    // 「读取 State 的 lambda」
-                    redrawKey?.invoke()
                     vibrancy()
                     blur(blurRadius.toPx())
                     // lens 折射按统一内边距从每条边向内采样，在方角处会产生弧形高光"伪圆角"。
                     // 方角玻璃（如侧栏左缘）传 lensRadius = 0.dp 关闭它，保证角部利落。
                     if (lensRadius > 0.dp) {
-                        if (lensFull) {
-                            // 折射高度 = 短边一半 ⇒ 四边环带在中心汇合，整面都有折射。
-                            // 演示 App 里"折射高度"滑杆拉高就是这个效果；通栏大卡必须
-                            // 这样才看得见 —— 边缘一圈 24dp 只占卡面极小比例。
-                            val md = size.minDimension
-                            lens(
-                                refractionHeight = md * 0.5f,
-                                refractionAmount = md * 0.5f * lensAmountMul,
-                                depthEffect = true,
-                                chromaticAberration = chromaticAberration
-                            )
-                        } else {
-                            // 窄环带：强度 = 高度 × 倍数（位移大 ⇒ 边缘弯折锐利）
-                            // 对齐 Kyant0 演示 App（GlassPlayground/sheet）的配方：
-                            // 折射强度 = 2 × 折射高度（demo: 16/32 与 25.6/51.2），并开 depthEffect。
-                            lens(
-                                refractionHeight = lensRadius.toPx(),
-                                refractionAmount = (lensRadius * lensAmountMul).toPx(),
-                                depthEffect = true,
-                                chromaticAberration = chromaticAberration
-                            )
-                        }
+                        // 窄环带：强度 = 高度 × 倍数（位移大 ⇒ 边缘弯折锐利）
+                        // 对齐 Kyant0 演示 App（GlassPlayground/sheet）的配方：
+                        // 折射强度 = 2 × 折射高度（demo: 16/32 与 25.6/51.2），并开 depthEffect。
+                        lens(
+                            refractionHeight = lensRadius.toPx(),
+                            refractionAmount = (lensRadius * lensAmountMul).toPx(),
+                            depthEffect = true,
+                            chromaticAberration = chromaticAberration
+                        )
                     }
                 },
                 // 库原生分层三件套：边缘高光 + 外阴影（层级）+ 内阴影（厚度）
                 highlight = highlightLambda,
                 shadow = shadowLambda,
                 innerShadow = innerShadowLambda,
-                exportedBackdrop = exportedBackdrop,
                 onDrawSurface = {
                     if (!floating) {
                         drawRect(surface)
@@ -373,16 +302,15 @@ fun GlassPanel(
                             drawPath(p, tint.copy(alpha = 0.35f))
                         }
                     }
-                    surfaceOverlay?.invoke(this)
                 }
             )
             // 发丝描边画在玻璃表面之上（后置 modifier 后绘制），与退化分支观感对齐
             .then(if (drawBorder) Modifier.border(1.5.dp, border2, shape ?: RoundedCornerShape(radius)) else Modifier)
     } else {
-        // 位于玻璃采样层内时禁止 drawBackdrop（否则渲染自引用递归崩溃），退化为本地磨砂：
-        // Modifier.blur 对自身内容做高斯模糊 + 着色底，观感接近真玻璃（非死板白底）。
-        // 实现手法：外包一个离屏 Box 画 backdrop 的内容色近似（用 surface 深色版），
-        // 内容层加 blur——这里用「背景模糊层+表面」两层组合
+        // 位于玻璃采样层内时禁止 drawBackdrop（否则渲染自引用递归崩溃），退化为本地绘制：
+        // 本分支实际只有 clip + 表面色 background + 描边 border + 可选 tint 四层叠加，
+        // **没有** blur/lens —— blurRadius、lensRadius、chromaticAberration 在此分支不生效
+        // （视频上方的调用点本来也采样不到内容，只需要一层 scrim）。
         modifier
             .then(fallbackShadowMod)
             .clip(shape ?: RoundedCornerShape(radius))
@@ -528,7 +456,7 @@ fun LiquidGlassButton(
 
     Box(
         modifier
-            // 禁用态整体降透明（0.45）：与 GlassAlertDialog 禁用文字的观感一致。
+            // 禁用态整体降透明（0.45），而不是只压 surfaceColor 的 alpha：
             // 原先只把 surfaceColor alpha 降到 40%，内容文字仍是全亮，读不出不可点
             .graphicsLayer { alpha = if (enabled) 1f else 0.45f }
             .then(bgModifier)
@@ -660,7 +588,7 @@ fun GlassCard(
  */
 private fun DrawScope.drawCapsule(fraction: Float, press: Float, accent: Color) {
     val pad = 2.dp.toPx()
-    // 胶囊圆角：磨砂回退路径（对话框内 refract=false）与折射路径同形，杜绝直角矩形开关
+    // 胶囊圆角：磨砂回退路径（refract=false）与折射路径同形，杜绝直角矩形开关
     val corner = CornerRadius(size.height / 2f, size.height / 2f)
 
     // 轨道：关=雾白磨砂，开=主题色浸染（近实心，与按钮主绿饱和度一致）
@@ -884,326 +812,11 @@ fun GlassPageBar(
 }
 
 /**
- * 液态玻璃弹层壳：Popup + 进入/退出动画（淡入 + 缩放 0.92→1 + 轻微上滑）。
- * 退出先播动画，onDismiss 延迟到动画结束才真正卸载弹层；
- * content 的 close 参数供内容项点击后触发带动画的关闭。
- */
-@Composable
-fun GlassPopup(
-    backdrop: LayerBackdrop,
-    onDismiss: () -> Unit,
-    modifier: Modifier = Modifier,
-    alignment: Alignment = Alignment.BottomEnd,
-    offset: androidx.compose.ui.unit.IntOffset = androidx.compose.ui.unit.IntOffset.Zero,
-    surfaceAlpha: Float = 0.52f,
-    radius: Dp = 20.dp,
-    content: @Composable (close: () -> Unit) -> Unit
-) {
-    var leaving by remember { mutableStateOf(false) }
-    val progress by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = if (leaving) 0f else 1f,
-        animationSpec = com.ticketfortwo.app.ui.theme.MotionTheme.popupSpec,
-        label = "glassPopupProgress"
-    )
-    LaunchedEffect(leaving) {
-        if (leaving) {
-            kotlinx.coroutines.delay(200)
-            onDismiss()
-        }
-    }
-    val slidePx = with(LocalDensity.current) { com.ticketfortwo.app.ui.theme.MotionTheme.popupSlideDp.dp.toPx() }
-    val fromScale = com.ticketfortwo.app.ui.theme.MotionTheme.popupFromScale
-    androidx.compose.ui.window.Popup(
-        alignment = alignment,
-        offset = offset,
-        onDismissRequest = { leaving = true },
-        properties = androidx.compose.ui.window.PopupProperties(focusable = true)
-    ) {
-        GlassPanel(
-            backdrop = backdrop,
-            modifier = modifier.graphicsLayer {
-                alpha = progress
-                val s = fromScale + (1f - fromScale) * progress
-                scaleX = s
-                scaleY = s
-                translationY = (1f - progress) * slidePx
-                // 变换原点取右上角：从来源控件（顶栏右侧）展开更自然
-                transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 0f)
-            },
-            radius = radius,
-            surfaceAlpha = surfaceAlpha
-        ) {
-            content { leaving = true }
-        }
-    }
-}
-
-/**
- * 液态玻璃底部弹层（v8 思维链弹层通用壳，2026-09-15）：
- * 必须在 **appLayer 之外的主窗口组合树内**渲染（独立 Popup/Dialog 窗口采样不到
- * backdrop，只能死灰/磨砂）。行为对齐 ModalBottomSheet：
- * - 进场：自下而上滑入（240ms）+ 遮罩渐显；
- * - 顶部横杠可拖：跟手下滑，超阈值或快速甩动松手 → 滑出收起（退出动画播完才回调
- *   onDismiss）；未达阈值回弹；
- * - 点遮罩 / 系统返回：同样走滑出动画后关闭。
- * 内容放在 content（ColumnScope），横杠由本组件提供，调用方不要再画。
- */
-@Composable
-fun GlassBottomSheet(
-    backdrop: LayerBackdrop,
-    onDismiss: () -> Unit,
-    modifier: Modifier = Modifier,
-    surfaceAlpha: Float = 0.72f,
-    blurRadius: Dp = 24.dp,
-    content: @Composable ColumnScope.() -> Unit
-) {
-    val scope = rememberCoroutineScope()
-    var dismissed by remember { mutableStateOf(false) }
-    var panelH by remember { mutableFloatStateOf(0f) }
-    // 滑移量（px）：slide 为进场/退场动画值，dragY 为拖横杠跟手值，eff 叠加生效
-    val slide = remember { Animatable(2200f) }
-    val dragY = remember { mutableFloatStateOf(0f) }
-    // 关闭：把退场起点定格在当前位移，滑出屏幕后（动画播完）才真正卸载
-    fun requestClose() {
-        if (dismissed) return
-        dismissed = true
-        scope.launch {
-            slide.snapTo(slide.value + dragY.floatValue)
-            dragY.floatValue = 0f
-            slide.animateTo(
-                if (panelH > 0f) panelH + 60f else 2200f,
-                tween(190, easing = LinearOutSlowInEasing)
-            )
-            onDismiss()
-        }
-    }
-    androidx.activity.compose.BackHandler(onBack = { requestClose() })
-    LaunchedEffect(Unit) {
-        slide.animateTo(0f, tween(240, easing = FastOutSlowInEasing))
-    }
-    val eff = slide.value + dragY.floatValue
-    Box(
-        modifier
-            .fillMaxSize()
-            .background(
-                Color.Black.copy(
-                    alpha = 0.30f * (1f - eff / panelH.coerceAtLeast(1f)).coerceIn(0f, 1f)
-                )
-            )
-            .clickable(interactionSource = null, indication = null) { requestClose() },
-        contentAlignment = Alignment.BottomCenter
-    ) {
-        GlassPanel(
-            backdrop = backdrop,
-            modifier = Modifier
-                .fillMaxWidth()
-                .graphicsLayer { translationY = eff }
-                .clickable(interactionSource = null, indication = null) {},
-            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-            surfaceAlpha = surfaceAlpha,
-            blurRadius = blurRadius
-        ) {
-            Column(Modifier.onSizeChanged { panelH = it.height.toFloat() }) {
-                // 拖拽横杠（跟手下滑；超 120px 或甩速 > 900 收起，否则回弹）
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(26.dp)
-                        .pointerInput(Unit) {
-                            detectVerticalDragGestures(
-                                onDragEnd = {
-                                    if (dragY.floatValue > 120f) requestClose()
-                                    else dragY.floatValue = 0f
-                                },
-                                onDragCancel = { dragY.floatValue = 0f }
-                            ) { _, dy ->
-                                dragY.floatValue = (dragY.floatValue + dy).coerceAtLeast(0f)
-                            }
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Box(
-                        Modifier
-                            .size(width = 34.dp, height = 4.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f))
-                    )
-                }
-                content()
-            }
-        }
-    }
-}
-
-/**
- * 液态玻璃弹窗壳：独立 Dialog 窗口采样不到 LayerBackdrop，
- * 用全屏半透明遮罩 + GlassPanel 承载（点遮罩关闭，内容区点击不穿透）。
- */
-@Composable
-fun GlassAlertDialog(
-    backdrop: LayerBackdrop,
-    title: String,
-    onDismiss: () -> Unit,
-    confirmLabel: String? = null,
-    onConfirm: (() -> Unit)? = null,
-    confirmEnabled: Boolean = true,
-    dismissLabel: String? = null,
-    danger: Boolean = false,
-    contentMaxHeight: Dp = 420.dp,
-    refract: Boolean? = null,
-    /** 确认键通栏全宽（设计稿场景：单主操作弹窗，如「完成」） */
-    fullWidthConfirm: Boolean = false,
-    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
-) {
-    // 系统返回手势先关弹窗：后注册的 handler 优先，覆盖屏幕级的返回导航
-    androidx.activity.compose.BackHandler(onBack = onDismiss)
-    // 弹窗是独立于采样层的全屏遮罩：折射采样到的是弹窗「底下」的页面而非弹窗自身，
-    // 按钮会显得「穿透背板 + 边缘光晕」。弹窗内统一退化为本地磨砂绘制。
-    androidx.compose.runtime.CompositionLocalProvider(LocalGlassRefract provides false) {
-    // 入场过渡：条件组合进入时 AnimatedVisibility 会从初始态播放 enter 动画
-    androidx.compose.animation.AnimatedVisibility(
-        visible = true,
-        enter = androidx.compose.animation.fadeIn(
-            androidx.compose.animation.core.tween(com.ticketfortwo.app.ui.theme.MotionTheme.fadeMs)) +
-            androidx.compose.animation.scaleIn(
-                initialScale = com.ticketfortwo.app.ui.theme.MotionTheme.popupFromScale,
-                animationSpec = androidx.compose.animation.core.tween(180, easing = androidx.compose.animation.core.FastOutSlowInEasing)
-            )
-    ) {
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.30f))
-            .clickable(interactionSource = null, indication = null, onClick = onDismiss),
-        contentAlignment = Alignment.Center
-    ) {
-        GlassPanel(
-            backdrop = backdrop,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp),
-            radius = 28.dp,
-            surfaceAlpha = 0.92f,
-            blurRadius = 28.dp,
-            chromaticAberration = true,
-            refract = refract
-        ) {
-            Column(
-                Modifier
-                    .clickable(interactionSource = null, indication = null, onClick = {})
-                    .padding(20.dp)
-            ) {
-                Text(
-                    title,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                androidx.compose.runtime.CompositionLocalProvider(
-                    LocalCompactFieldOnSolidPanel provides true
-                ) {
-                    Column(
-                        Modifier
-                            .padding(top = 12.dp)
-                            .heightIn(max = contentMaxHeight)
-                            .verticalScroll(rememberScrollState()),
-                        content = content
-                    )
-                }
-                if (onConfirm != null || dismissLabel != null) {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(top = 16.dp),
-                        horizontalArrangement = if (fullWidthConfirm) Arrangement.Center
-                        else Arrangement.spacedBy(12.dp, Alignment.End),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (dismissLabel != null) {
-                            // 取消=表面液态按钮（无着色）；确认=着色液态按钮（下方），Catalog LiquidButton 两款
-                            LiquidGlassButton(
-                                onClick = onDismiss,
-                                backdrop = backdrop,
-                                shape = RoundedCornerShape(percent = 50),
-                                enabled = true,
-                                refract = refract
-                            ) {
-                                Text(
-                                    dismissLabel,
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-                                )
-                            }
-                        }
-                        if (onConfirm != null) {
-                            LiquidGlassButton(
-                                onClick = onConfirm,
-                                backdrop = backdrop,
-                                shape = RoundedCornerShape(percent = 50),
-                                enabled = confirmEnabled,
-                                // 全宽模式：确认键铺满操作栏（单主操作弹窗）
-                                modifier = if (fullWidthConfirm) Modifier.fillMaxWidth() else Modifier,
-                                surfaceColor = when {
-                                    !confirmEnabled -> MaterialTheme.colorScheme.primary.copy(alpha = 0.40f)
-                                    danger -> MaterialTheme.colorScheme.error.copy(alpha = 1f)
-                                    // 按钮铁律：实底 + 白字（此前 0.85 玻璃观感发白发虚）
-                                    else -> MaterialTheme.colorScheme.primary.copy(alpha = 1f)
-                                },
-                                refract = refract
-                            ) {
-                                Text(
-                                    confirmLabel.orEmpty(),
-                                    color = when {
-                                        !confirmEnabled -> MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f)
-                                        danger -> MaterialTheme.colorScheme.onError
-                                        else -> MaterialTheme.colorScheme.onPrimary
-                                    },
-                                    fontWeight = FontWeight.SemiBold,
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    }
-    }
-}
-
-/** 玻璃弹层里的输入框配色（半透明白容器，与 Onboarding 一致）。 */
-@Composable
-fun glassFieldColors() = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-    focusedTextColor = MaterialTheme.colorScheme.onBackground,
-    unfocusedTextColor = MaterialTheme.colorScheme.onBackground,
-    cursorColor = MaterialTheme.colorScheme.primary,
-    focusedBorderColor = MaterialTheme.colorScheme.primary,
-    unfocusedBorderColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f),
-    // 壁纸上必须加实：输入框里是要读要写的文字，0.20/0.32 的容器
-    // 会让"搜索标题与消息内容"这类占位文字直接糊进壁纸（用户实测指出）
-    focusedContainerColor = glassSurfaceColor(
-        if (com.ticketfortwo.app.ui.theme.LocalOnWallpaper.current) 0.88f else 0.32f
-    ),
-    unfocusedContainerColor = glassSurfaceColor(
-        if (com.ticketfortwo.app.ui.theme.LocalOnWallpaper.current) 0.80f else 0.20f
-    ),
-    focusedLabelColor = MaterialTheme.colorScheme.primary,
-    unfocusedLabelColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
-)
-
-/**
- * 弹窗内的紧凑输入框：48dp 定高（Material 默认 56dp，浮动标签上下留白占掉一大截）。
+ * 紧凑输入框：48dp 定高（Material 默认 56dp，浮动标签上下留白占掉一大截）。
  * label 固定渲染在框内左侧（不浮动），值与标签并排——纵向密度优先：
  * 同一屏能多看一两个字段。直接基于 Foundation BasicTextField 自绘边框，
  * 不碰 Material 内部 API（版本间签名不稳）。
  */
-/** 弹窗/底部弹窗内的紧凑输入框走"白面板"配色（压暗容器在白玻璃上是突兀的深灰块）。
- *  GlassAlertDialog/GlassBottomSheet 的 content 外层会 provide true。 */
-val LocalCompactFieldOnSolidPanel = androidx.compose.runtime.staticCompositionLocalOf { false }
-
 @Composable
 fun CompactGlassField(
     value: String,
@@ -1218,8 +831,6 @@ fun CompactGlassField(
         androidx.compose.foundation.text.KeyboardOptions.Default,
     keyboardActions: androidx.compose.foundation.text.KeyboardActions =
         androidx.compose.foundation.text.KeyboardActions.Default,
-    /** 框下方的辅助说明文字（替代 Material supportingText） */
-    supportingText: String? = null,
     /**
      * 框自身高度。**默认 40dp 不要改**（那是弹窗密度调定值，见下面 Row 的注释）。
      * 只有一种情况需要传：这一行里还有一个更高的兄弟控件（如「打开」按钮），
@@ -1227,7 +838,6 @@ fun CompactGlassField(
      * 放映厅地址栏实测就是这样（框 40 / 按钮 52）。
      */
     boxHeight: androidx.compose.ui.unit.Dp = 40.dp,
-    trailing: @Composable (() -> Unit)? = null
 ) {
     val interaction = androidx.compose.runtime.remember {
         androidx.compose.foundation.interaction.MutableInteractionSource()
@@ -1236,16 +846,10 @@ fun CompactGlassField(
     val shape = RoundedCornerShape(11.dp)
     val borderColor = if (focused) MaterialTheme.colorScheme.primary
     else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.30f)
-    // 降明度而非提白度：弹窗面板本身已是 0.92 白（浅色主题），再叠白色容器就是
-    // 「白叠白」，边界全靠描边硬撑。改用 onBackground 叠加（浅色下=压暗、
-    // 深色下=提亮），容器与面板有真实明度差；聚焦时再加深一档
-    // 壁纸上同样加实：0.07/0.04 的容器压在花壁纸上等于没有框
-    // 三种环境：①弹窗/白面板（Local=true）→ 极浅压暗（面板本身 0.92 白，深灰块突兀）；
-    // ②花壁纸上的页面 → 中度压暗（0.20/0.30，太浅会被花纹吃掉边框）；③净色页 → 极浅
-    val container = if (LocalCompactFieldOnSolidPanel.current) {
-        if (focused) MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f)
-        else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.05f)
-    } else if (com.ticketfortwo.app.ui.theme.LocalOnWallpaper.current) {
+    // 用 onBackground 叠加做容器差（浅色下=压暗、深色下=提亮）而非提白度，聚焦时加深一档。
+    // 两种环境：①花壁纸上的页面 → 中度压暗（0.20/0.30，0.04/0.07 那档压在花壁纸上
+    // 等于没有框、花纹会吃掉边框）；②净色页 → 极浅压暗（0.04/0.07）
+    val container = if (com.ticketfortwo.app.ui.theme.LocalOnWallpaper.current) {
         if (focused) MaterialTheme.colorScheme.onBackground.copy(alpha = 0.30f)
         else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.20f)
     } else if (focused) MaterialTheme.colorScheme.onBackground.copy(alpha = 0.07f)
@@ -1297,16 +901,7 @@ fun CompactGlassField(
                 cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary)
             )
         }
-        }
-    if (supportingText != null) {
-        Text(
-            supportingText,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f),
-            modifier = Modifier.padding(start = 4.dp, top = 3.dp)
-        )
     }
-    trailing?.invoke()
 }
 
 /**
@@ -1422,101 +1017,4 @@ fun rememberPressFeedback(
         }
     }
     return PressFeedback(flash, raw || flash.value)
-}
-
-/**
- * 玻璃分段选项卡（对齐 Kyant0/AndroidLiquidGlass Catalog 的 LiquidBottomTabs）：
- * 玻璃胶囊容器 + 着色液态滑动指示器 + 弹性动画。替代 Material3 SegmentedButton。
- * tabs/selectedIndex 由调用方受控；切换时指示器以轻微果冻的 spring 滑过去。
- */
-@Composable
-fun LiquidTabRow(
-    tabs: List<String>,
-    selectedIndex: Int,
-    onSelected: (Int) -> Unit,
-    backdrop: LayerBackdrop,
-    modifier: Modifier = Modifier,
-    tint: Color = MaterialTheme.colorScheme.primary
-) {
-    androidx.compose.foundation.layout.BoxWithConstraints(modifier.fillMaxWidth().height(44.dp)) {
-        val tabWidth = maxWidth / tabs.size
-        // 指示器位置：0..tabs.size-1 的连续值，spring 弹性滑动
-        val pos = androidx.compose.animation.core.animateFloatAsState(
-            targetValue = selectedIndex.toFloat(),
-            animationSpec = androidx.compose.animation.core.spring(
-                dampingRatio = 0.85f,
-                stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow
-            ),
-            label = "tabIndicator"
-        )
-        // 容器：玻璃胶囊（细 lens 环）
-        // 容器：玻璃胶囊 —— 壁纸上 0.30 会让整条切换器糊进壁纸（用户实测指出）
-        val containerSurface = glassSurfaceColor(com.ticketfortwo.app.ui.theme.cardSurfaceAlpha())
-        Box(
-            Modifier
-                .fillMaxSize()
-                .drawBackdrop(
-                    backdrop = backdrop,
-                    shape = { RoundedCornerShape(50) },
-                    effects = {
-                        vibrancy()
-                        blur(6.dp.toPx())
-                        lens(12.dp.toPx(), 12.dp.toPx())
-                    },
-                    onDrawSurface = {
-                        drawRect(containerSurface)
-                    }
-                )
-                .clickable(interactionSource = null, indication = null) { }
-        )
-        // 着色液态指示器：Hue 混合把背景折射染成主题色（demo 同款双 drawRect）
-        Box(
-            Modifier
-                .offset { androidx.compose.ui.unit.IntOffset((tabWidth.toPx() * pos.value).toInt(), 0) }
-                .width(tabWidth)
-                .fillMaxHeight()
-                .padding(4.dp)
-                .drawBackdrop(
-                    backdrop = backdrop,
-                    shape = { RoundedCornerShape(50) },
-                    effects = {
-                        vibrancy()
-                        blur(4.dp.toPx())
-                        lens(10.dp.toPx(), 12.dp.toPx())
-                    },
-                    onDrawSurface = {
-                        drawRect(tint, blendMode = BlendMode.Hue)
-                        drawRect(tint.copy(alpha = 0.75f))
-                    }
-                )
-        )
-        // 标签内容层（最后组合=绘制在最上）
-        Row(Modifier.fillMaxSize()) {
-            tabs.forEachIndexed { i, label ->
-                val selected = i == selectedIndex
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .clickable(
-                            interactionSource = null,
-                            indication = null,
-                            role = Role.Button
-                        ) { onSelected(i) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        label,
-                        style = MaterialTheme.typography.labelLarge,
-                        // 两态同字重：选中态只靠着色胶囊 + onPrimary 区分。
-                        // 此前 SemiBold/Medium 切换会让文字看起来忽大忽小
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        color = if (selected) MaterialTheme.colorScheme.onPrimary
-                        else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.72f)
-                    )
-                }
-            }
-        }
-    }
 }

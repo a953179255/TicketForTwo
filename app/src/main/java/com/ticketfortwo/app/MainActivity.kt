@@ -55,9 +55,7 @@ import android.os.Build
 import android.util.Rational
 import androidx.annotation.RequiresApi
 import kotlinx.coroutines.flow.MutableStateFlow
-import com.ticketfortwo.app.ui.app.ColorLabScreen
 import com.ticketfortwo.app.ui.app.WatchTogetherScreen
-import com.ticketfortwo.app.ui.app.GlassLabScreen
 import com.ticketfortwo.app.ui.app.ConsentGuideScreen
 import com.ticketfortwo.app.rtc.Verdict
 import com.ticketfortwo.app.signaling.SignalHub
@@ -165,6 +163,17 @@ private object PipState {
     val inPip = MutableStateFlow(false)
 }
 
+/**
+ * 「已从放映厅退回首页」这个 UI 意图，**进程级**（见 AppRouter 里 leftCinema 的用法）。
+ *
+ * 为什么不放 rememberSaveable：会话（CallSession）是进程级单例，而 rememberSaveable
+ * 随 Activity finish 一起没 —— 用户在首页按返回退出 App、再点图标进来，标志丢了、
+ * 会话还在，路由又会掉进 WaitingViewer 那条分支，把人扔回「把这条发给朋友」，
+ * 正是这次修掉的那个体验（实测复现）。跟会话同生命周期才是一致的；
+ * 进程真死了会话也死了，标志自然作废。
+ */
+private val leftCinemaFlag = MutableStateFlow(false)
+
 private enum class UiRole { None, Host, Viewer }
 
 /**
@@ -178,8 +187,6 @@ private enum class UiRole { None, Host, Viewer }
 private sealed interface Page {
     object Home : Page
     object Settings : Page
-    object ColorLab : Page
-    object GlassLab : Page
     object Watch : Page
 
     /** 放映厅：厅先开、人先进来、片子后选。从「分享画面」那一屏进来。 */
@@ -257,8 +264,6 @@ private fun AppRouter(backdrop: LayerBackdrop) {
 
     var showConsent by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
-    var showColorLab by remember { mutableStateOf(false) }
-    var showGlassLab by remember { mutableStateOf(false) }
     var viewerIntent by remember { mutableStateOf(false) }
     /** 房主打开内置浏览器"一起看"。分享期间的一个覆盖层，不是独立会话。 */
     var showWatch by rememberSaveable { mutableStateOf(false) }
@@ -267,6 +272,19 @@ private fun AppRouter(backdrop: LayerBackdrop) {
      *  会重建 Activity，`remember` 一丢就把人从厅里踢回首页（实测：`wm density`
      *  一改，正在放映的厅就没了，而会话其实还活着）。 */
     var showCinema by rememberSaveable { mutableStateOf(false) }
+    /**
+     * 从放映厅按了返回、但厅（会话）还开着。
+     *
+     * 为什么要有这个意图：路由是**从会话状态推导**的，而厅开起来就必然停在
+     * `WaitingViewer` —— 于是"放映厅返回"会掉进房主等人那条分支，画出「把这条发给朋友」，
+     * 底下还挂着一颗"结束"钮（用户实测反馈：没选连麦却看到"结束连麦"，
+     * 而且"在放映厅点返回以后，不应该结束分享"）。那一屏属于"发链接等人"的流程，
+     * 不属于"我在厅里逛了一圈要出去"。置上这个标志，WaitingViewer + 已离开放映厅
+     * 就改画首页（顶上带一张"厅还开着"的卡），分享照常进行。
+     * 会话散场或新会话开起来时清掉（见下面 LaunchedEffect(state)）。
+     */
+    /** 进程级（见 [leftCinemaFlag]）：不能用 rememberSaveable —— Activity finish 后重进会丢。 */
+    val leftCinema by leftCinemaFlag.collectAsState()
     /** 首页绿色那颗圆点开的"给什么"选择页。用 saveable：配置变化不该把它甩回首页。 */
     var showShareKind by rememberSaveable { mutableStateOf(false) }
     /** 从「分享 → 双人票」递进来的链接；非空就直接开厅放这一页。 */
@@ -299,6 +317,13 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     LaunchedEffect(state) {
         if (state is CallSession.State.Connected) {
             withContext(Dispatchers.IO) { context.prefs().markConnected() }
+        }
+        /* 「已离开放映厅」只属于**开厅那一次**：会话散场、或者新会话开起来
+           （Preparing = 只连麦/分享屏幕那两条流程的开头），这个意图就作废。
+           不清的后果：下一场等人时也会绕过「把这条发给朋友」——而那一屏在
+           那些流程里是对的（尤其"只连麦"，它的停止钮就该叫「结束连麦」）。 */
+        if (state is CallSession.State.Idle || state is CallSession.State.Preparing) {
+            leftCinemaFlag.value = false
         }
     }
 
@@ -387,6 +412,12 @@ private fun AppRouter(backdrop: LayerBackdrop) {
         }
         startAudioOnlyHost()
         showCinema = true
+    }
+
+    /** 离开放映厅。**只关这一屏，不动会话** —— 返回是"人出去了"，不是"厅关了"。 */
+    fun leaveCinema() {
+        showCinema = false
+        leftCinemaFlag.value = true
     }
 
     /**
@@ -519,12 +550,14 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     // ── 路由 ──────────────────────────────────────────────────────────────
     val role = when {
         sessionRole == CallSession.Role.Host -> UiRole.Host
-        sessionRole == CallSession.Role.Viewer -> UiRole.Viewer
         viewerIntent -> UiRole.Viewer
         else -> UiRole.None
     }
     val isHost = role == UiRole.Host
     val stop = { CallSession.stop(context); viewerIntent = false; paste = "" }
+
+    /** 从放映厅回来了、厅还开着、正停在"等人加入" —— 这一格该回首页，见 [leftCinema]。 */
+    val roomBehind = leftCinema && isHost && state is CallSession.State.WaitingViewer
 
     // 系统返回键：二级页面返回上一级，而不是把 App 整个退出去。
     // BackHandler 后注册的优先级更高，所以从最深的页面向浅注册。
@@ -534,11 +567,9 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     }
     BackHandler(enabled = showConsent) { showConsent = false }
     BackHandler(enabled = showSettings) { showSettings = false }
-    BackHandler(enabled = showGlassLab) { showGlassLab = false; showSettings = true }
     BackHandler(enabled = showWatch) { showWatch = false }
-    BackHandler(enabled = showCinema) { showCinema = false }
+    BackHandler(enabled = showCinema) { leaveCinema() }
     BackHandler(enabled = showShareKind) { showShareKind = false }
-    BackHandler(enabled = showColorLab) { showColorLab = false; showSettings = true }
 
     // 首页在两个分支里都要画（角色未定 / 兜底）。写成一处，避免以后改了其一忘了其二。
     // 房主此刻有没有视频轨（= 真的在投屏）。停止投屏时 CallSession 会把它置回 null，
@@ -573,15 +604,19 @@ private fun AppRouter(backdrop: LayerBackdrop) {
             onSettings = { showSettings = true },
             quality = quality,
             lastSummary = lastConnected,
+            // 厅还开着（从放映厅返回落到首页）：卡上给"回去"和"关掉"两条路。
+            roomLabel = if (roomBehind) (if (viewerOnline) "对方已在厅里" else "等对方进来") else null,
+            roomLive = viewerOnline,
+            onEnterRoom = { openCinema() },
+            // 直接传引用。写成 `{ stop }` 是个空壳：stop 本身就是 () -> Unit，
+            // 花括号里只是求值一下它、不会调用 —— 按钮点下去什么都不会发生。
+            onCloseRoom = stop,
         )
     }
 
     // ── 当前该画哪一屏 ────────────────────────────────────────────────────
     // 这个 when 的**顺序就是优先级**（越靠前的意图越"临时"，越该盖在上面），别重排。
     val page: Page = when {
-        showColorLab -> Page.ColorLab
-        showGlassLab -> Page.GlassLab
-
         // 分享设置：纯 UI 意图，和授权指引一样排在最前面。
         showSettings -> Page.Settings
 
@@ -620,6 +655,10 @@ private fun AppRouter(backdrop: LayerBackdrop) {
             (state as CallSession.State.Failed).verdict,
         )
 
+        // 从放映厅退回首页、厅还开着（见 leftCinema）：不落「把这条发给朋友」，
+        // 更不在"返回"这个动作里结束分享 —— 首页顶上那张卡管"厅还活着、怎么回去"。
+        roomBehind -> Page.Home
+
         // 门牌就绪：把这条链接发出去就完事，剩下的双方自己会走完。
         state is CallSession.State.WaitingViewer ->
             Page.Invite((state as CallSession.State.WaitingViewer).inviteUrl)
@@ -654,9 +693,6 @@ private fun AppRouter(backdrop: LayerBackdrop) {
         label = "page",
     ) { p ->
         when (p) {
-            Page.ColorLab -> ColorLabScreen(backdrop = backdrop, onBack = { showColorLab = false })
-            Page.GlassLab -> GlassLabScreen(backdrop = backdrop, onBack = { showGlassLab = false })
-
             Page.Cinema -> CinemaScreen(
                 backdrop = backdrop,
                 initialUrl = cinemaUrl,
@@ -664,7 +700,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 inviteUrl = sessionInvite,
                 viewerOnline = viewerOnline,
                 voiceMode = quality.voiceMode,
-                onBack = { showCinema = false },
+                onBack = { leaveCinema() },
             )
 
             Page.Watch -> WatchTogetherScreen(
@@ -680,8 +716,6 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                     quality = q
                     scope.launch(Dispatchers.IO) { ShareQuality.save(context, q) }
                 },
-                onOpenColorLab = { showSettings = false; showColorLab = true },
-                onOpenGlassLab = { showSettings = false; showGlassLab = true },
                 onBack = { showSettings = false },
             )
 
@@ -697,7 +731,10 @@ private fun AppRouter(backdrop: LayerBackdrop) {
             Page.Consent -> ConsentGuideScreen(
                 backdrop = backdrop,
                 onBack = { showConsent = false },
-                onContinue = { showConsent = false; startHostFlow() },
+                /* 投屏这条路一提交，"已离开放映厅"就作废：厅先开的会话此时会**就地接上投屏**
+                   （CallSession.startHost 的 isActive 分支），状态仍在 WaitingViewer ——
+                   不清这个标志，用户按流程走到的还是首页那张厅卡，而不是"发链接"屏。 */
+                onContinue = { showConsent = false; leftCinemaFlag.value = false; startHostFlow() },
             )
 
             Page.ViewerCall -> CallScreen(

@@ -74,7 +74,7 @@ import com.kyant.backdrop.backdrops.LayerBackdrop
  */
 @Composable
 fun TicketForTwoAppRoot(content: @Composable (LayerBackdrop) -> Unit) {
-    // 自定义壁纸的持久化加载（App 启动时读一次；玻璃实验室里更换壁纸会写入）
+    // 自定义壁纸的持久化加载（App 启动时读一次；写入方是早先的调参工具，已下线，这里只读保留）
     val rootContext = LocalContext.current
     LaunchedEffect(Unit) { AppWallpaper.load(rootContext) }
     TicketForTwoTheme(darkTheme = true) {
@@ -274,7 +274,7 @@ private const val SEGMENT_VELOCITY_SCALE = 44f
  *
  *  · **形变是有方向的**：`velocity` 带符号，所以向左切换时 scaleX 变小（横向收紧、纵向变高），
  *    向右切换才横向拉长。看着不对称，但这**是库自己的行为** ——
- *    `LiquidBottomTabs` / `LiquidSlider` / `LiquidToggle` 三个组件写的都是同一个不带 abs 的公式，
+ *    `LiquidBottomTabs` / 液态滑杆 / `LiquidToggle` 三个组件写的都是同一个不带 abs 的公式，
  *    所以这里照抄，不做"自作聪明"的取绝对值。哪天想改成双向都拉长，改这一行即可。
  *
  * 有意略去的一项：库里指示器按下会鼓到 `78/56 ≈ 1.39` 倍（"液滴鼓出栏外"）。

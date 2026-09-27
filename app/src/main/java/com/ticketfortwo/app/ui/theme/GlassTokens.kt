@@ -2,7 +2,6 @@ package com.ticketfortwo.app.ui.theme
 
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -74,15 +73,6 @@ object GlassDimens {
 object MotionTheme {
     /** 弹性按压：damping 0.55 / stiffness 600 —— 压下去有回弹但不晃。 */
     val pressSpec: AnimationSpec<Float> = spring(dampingRatio = 0.55f, stiffness = 600f)
-
-    /** 弹层进出场。 */
-    val popupSpec: AnimationSpec<Float> = spring(dampingRatio = 0.8f, stiffness = 340f)
-    val popupFromScale: Float = 0.92f
-    val popupSlideDp: Float = 10f
-    val fadeMs: Int = 160
-
-    /** 淡入淡出用，和 fadeMs 同一口径。 */
-    fun fade(): AnimationSpec<Float> = tween(fadeMs)
 }
 
 /**

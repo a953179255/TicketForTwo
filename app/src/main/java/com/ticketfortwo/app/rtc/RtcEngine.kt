@@ -160,13 +160,4 @@ object RtcEngine {
         Log.i(TAG, "平台音频处理[$from] ${s.topology} AEC{${d(s.echoCancellation)}} " +
             "NS{${d(s.noiseSuppression)}} AGC{${d(s.autoGainControl)}}")
     }
-
-    @Synchronized
-    fun shutdown() {
-        if (!initialized) return
-        runCatching { audioDeviceModule.release() }
-        runCatching { factory.dispose() }
-        runCatching { eglBase.release() }
-        initialized = false
-    }
 }

@@ -59,6 +59,19 @@ class Peer(
     private var pc: PeerConnection? = null
     private var controlChannel: DataChannel? = null
 
+    /**
+     * 远端描述（setRemote）落地**之前**收到的候选，自己缓冲，落地后补交。
+     *
+     * 原来注释以为"libwebrtc 会自行排队"——错了：AddIceCandidateInternal 在没有
+     * remote_description 时直接返回 kAddIceCandidateFailNoRemoteDescription，候选被
+     * **静默丢弃**，Java 层连异常都不抛（本项目依赖 150.7871.01 源码核对过）。
+     * 首连时 offer/answer 与其后毫秒级到达的候选在同一条 WS 上 FIFO，接受方
+     * setRemote 还是异步的，这个窗口必然存在；首批里的 srflx 丢了，GATHER_CONTINUALLY
+     * 不会重发同一批，跨网直连可能就再也敲不通（见 REVIEW-2026-09-27）。
+     * 提交可能来自信令线程、flush 来自 setRemote 回调线程，所以要加锁。
+     */
+    private val pendingRemoteCandidates = mutableListOf<IceCandidate>()
+
     /** 全程取证，失败时由上层取 [IceProbe.verdict] 拼出"根据什么判断"。 */
     val probe = IceProbe()
 
@@ -91,6 +104,7 @@ class Peer(
 
     fun close() {
         cancelGrace()
+        synchronized(pendingRemoteCandidates) { pendingRemoteCandidates.clear() }
         runCatching { controlChannel?.close() }
         runCatching { controlChannel?.dispose() }
         controlChannel = null
@@ -155,6 +169,7 @@ class Peer(
         val p = pc ?: return
         p.setRemoteDescription(object : SimpleSdpObserver("setRemote($type)") {
             override fun onSetSuccess() {
+                flushPendingRemoteCandidates(p)
                 if (type != SessionDescription.Type.OFFER) {
                     Log.i(TAG, "remote answer applied; handshake complete, waiting for ICE")
                     return
@@ -178,12 +193,32 @@ class Peer(
         }, SessionDescription(type, sdp))
     }
 
-    /** 收到对方的 ICE 候选。远端描述可能还没设好，libwebrtc 会自行排队，这里直接转交。 */
+    /** 收到对方的 ICE 候选。远端描述还没设好时先自己排上，见 [pendingRemoteCandidates]。 */
     fun addRemoteCandidate(candidate: IceCandidate) {
         val p = pc ?: return
         probe.onRemoteCandidate(candidate.sdp)
-        runCatching { p.addIceCandidate(candidate) }
-            .onFailure { Log.w(TAG, "addIceCandidate 失败：${it.message}") }
+        if (p.remoteDescription == null) {
+            synchronized(pendingRemoteCandidates) { pendingRemoteCandidates.add(candidate) }
+            return
+        }
+        submitRemoteCandidate(p, candidate)
+    }
+
+    /** setRemote 成功后补交排队中的候选。 */
+    private fun flushPendingRemoteCandidates(p: PeerConnection) {
+        val queued = synchronized(pendingRemoteCandidates) {
+            pendingRemoteCandidates.toList().also { pendingRemoteCandidates.clear() }
+        }
+        queued.forEach { submitRemoteCandidate(p, it) }
+    }
+
+    private fun submitRemoteCandidate(p: PeerConnection, candidate: IceCandidate) {
+        val ok = runCatching { p.addIceCandidate(candidate) }.getOrElse {
+            Log.w(TAG, "addIceCandidate 异常：${it.message}")
+            false
+        }
+        // 返回 false 也是丢弃（无远端描述之外也可能发生）——只接异常的老写法对它毫无反应。
+        if (!ok) Log.w(TAG, "addIceCandidate 被拒：${candidate.sdp?.take(60)}")
     }
 
     fun sendControl(text: String) {

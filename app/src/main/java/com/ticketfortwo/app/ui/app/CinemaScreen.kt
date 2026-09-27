@@ -6,12 +6,14 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.util.Log
 import android.view.View
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,7 +21,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -33,6 +34,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -116,7 +118,6 @@ fun CinemaScreen(
     var hits by remember { mutableStateOf<List<MediaSniffer.Hit>>(emptyList()) }
     var probe by remember { mutableStateOf<MediaSniffer.PageProbe?>(null) }
     var eme by remember { mutableStateOf<CinemaProbe.EmeReport?>(null) }
-    var seenRequests by remember { mutableStateOf(0) }
     /**
      * 量具（嗅探候选 / 页面读数 / EME）默认**收着**。
      *
@@ -128,6 +129,13 @@ fun CinemaScreen(
     var showPanel by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf("把这一页当成浏览器用；嗅到的地址在「展开嗅探」里面") }
     var fullScreenView by remember { mutableStateOf<View?>(null) }
+    /* callback 必须存下来并调用：WebView 文档要求 App 主动退出全屏时调
+       onCustomViewHidden()，丢了它页面侧的全屏状态出不来（REVIEW-2026-09-27 P1）。 */
+    var fullScreenCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
+    /* 渲染进程崩了要整只重建（WebView 此后不可复用）；onRenderProcessGone 不 override
+       的话系统默认返回 false = 直接杀掉整个 App 进程 —— 正在分享的会话会一起没掉
+       （REVIEW-2026-09-27 P1）。 */
+    var webGen by remember { mutableStateOf(0) }
     /** 放映状态（会话里那份的本地镜像，只为画 UI）。 */
     val cinema by CallSession.cinema.collectAsState()
     /** 对方那边到底播出来了没有 —— 没有这条回执时，"正在放映"三个字是半真半假的。 */
@@ -141,7 +149,7 @@ fun CinemaScreen(
 
     val sniffer = remember { SnifferState() }
 
-    val webView = remember {
+    val webView = remember(webGen) {
         WebView(context).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
@@ -155,6 +163,23 @@ fun CinemaScreen(
                     view: WebView?,
                     request: WebResourceRequest?,
                 ): Boolean = false
+
+                /**
+                 * 渲染进程崩了：返回 true 系统才不杀整个 App 进程；回主线程整只重建
+                 * （webGen 变化 → 新 WebView + keyed effect 重新加载当前页）。
+                 */
+                override fun onRenderProcessGone(
+                    view: WebView?,
+                    rendererProcess: RenderProcessGoneDetail?,
+                ): Boolean {
+                    view?.post {
+                        fullScreenView = null
+                        fullScreenCallback = null
+                        note = "这个网页崩了，已重新打开"
+                        webGen += 1
+                    }
+                    return true
+                }
 
                 /**
                  * 只看不拦：记完就返回 null，让 WebView 照常去网络取。
@@ -190,16 +215,26 @@ fun CinemaScreen(
             webChromeClient = object : WebChromeClient() {
                 override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
                     fullScreenView = view
+                    fullScreenCallback = callback
                 }
 
                 override fun onHideCustomView() {
                     fullScreenView = null
+                    fullScreenCallback = null
                 }
             }
         }
     }
 
-    LaunchedEffect(pageUrl) {
+    // 网页全屏时返回键先退全屏（提示语"按返回键回到放映厅"才成立），否则落到
+    // MainActivity 的 showCinema 处理把整屏关掉 —— 按提示操作反而丢了厅。
+    BackHandler(enabled = fullScreenView != null) {
+        fullScreenView = null
+        fullScreenCallback?.onCustomViewHidden()
+        fullScreenCallback = null
+    }
+
+    LaunchedEffect(pageUrl, webGen) {
         sniffer.clear()
         hits = emptyList()
         probe = null
@@ -219,8 +254,17 @@ fun CinemaScreen(
         val norm = normalizeUrl(u)
         when {
             handledShare == u -> {
-                webView.loadUrl(pageUrl)
-                note = "又是这一条，重新加载这一页"
+                /* 地址栏/测试胶囊翻去过别的页时，pageUrl 已经不等于这条分享 ——
+                   原来无条件 `loadUrl(pageUrl)` 重载的是**当前页**，分享的那条被
+                   静默吞掉（REVIEW-2026-09-27 P1）。pageUrl 对得上才是"真的再来一遍"。 */
+                if (pageUrl != norm) {
+                    inputUrl = u
+                    pageUrl = norm   // 换页 effect 负责清表 + 加载
+                    note = "又是这一条，回到这一页"
+                } else {
+                    webView.loadUrl(norm)
+                    note = "又是这一条，重新加载这一页"
+                }
             }
             norm != pageUrl -> {
                 inputUrl = u
@@ -232,7 +276,8 @@ fun CinemaScreen(
     }
 
     // EME 探测：先发起（结果写到 window 上），再轮询读 —— 不赌 WebView 会不会 await Promise
-    LaunchedEffect(pageUrl) {
+    // webGen 进 key：渲染进程重建后旧 effect 抓的还是已 destroy 的实例（下两处同）。
+    LaunchedEffect(pageUrl, webGen) {
         webView.post { webView.evaluateJavascript(MediaSniffer.emeStartJs(), null) }
         var tries = 0
         while (tries < 20) {
@@ -256,7 +301,7 @@ fun CinemaScreen(
     }
 
     // 每 2 秒问一次页面：currentSrc / 时长 / 尺寸 + Resource Timing 里的媒体 URL
-    LaunchedEffect(pageUrl) {
+    LaunchedEffect(pageUrl, webGen) {
         while (true) {
             delay(2_000)
             webView.evaluateJavascript(MediaSniffer.probeJs()) { raw ->
@@ -264,7 +309,6 @@ fun CinemaScreen(
                 probe = p
                 sniffer.observePageProbe(p)
                 hits = sniffer.snapshot()
-                seenRequests = sniffer.count()
                 if (p.resources.isNotEmpty() || p.currentSrc.isNotBlank()) {
                     Log.i(
                         "Cinema",
@@ -277,6 +321,11 @@ fun CinemaScreen(
             // 不再另写一份，免得两套探测逻辑以后各改各的。
             webView.evaluateJavascript(WatchSync.probeJs()) { raw ->
                 val w = WatchSync.parseProbe(raw, pageUrl) ?: return@evaluateJavascript
+                /* 找不到 <video> 时探针固定回 (0,0,暂停)（WatchSyncTest 钉过这个形状），
+                   而这不是"权威进度"：直开 .m3u8/.mp4 走 Chromium 内置播放器、放映中
+                   换页、退出再进厅的头几秒都查不到 <video>。照发会把观众的时间轴
+                   拽回 0 并暂停（REVIEW-2026-09-27 P1）；本地 player 也保留上一条好值。 */
+                if (!w.found) return@evaluateJavascript
                 player = w
                 CallSession.publishCinemaProgress(w.posMs, w.durMs, w.playing)
             }
@@ -291,7 +340,18 @@ fun CinemaScreen(
             val d = player?.durMs ?: 0L
             webView.post { webView.evaluateJavascript(WatchSync.jsFor(cmd.toWatchCmd(), p, d), null) }
         }
-        onDispose { CallSession.onCinemaCommand = null }
+        onDispose {
+            CallSession.onCinemaCommand = null
+            /* 退屏/换代时把旧 WebView 收掉：只记得创建、从不 destroy，页面会继续联网、
+               持着 Activity 直到 GC（平台会打 "WebView.destroy() was never called"），
+               autoplay 也没人停。挂在这个 key 上：换代/整屏退出才销毁，横竖屏分支
+               切换是同一个实例、不会误杀（别用 AndroidView onRelease，见 REVIEW-2026-09-27）。 */
+            runCatching {
+                webView.stopLoading()
+                webView.webChromeClient = null
+                webView.destroy()
+            }
+        }
     }
 
     /**
@@ -420,6 +480,14 @@ fun CinemaScreen(
     }
     }
 
+    /** 复制邀请：顶栏按钮和面板邀请行共用这一个动作（含 note 反馈与 Toast）。 */
+    val copyInvite: () -> Unit = {
+        inviteUrl?.let {
+            context.copy("邀请链接", it)
+            note = "邀请链接已复制，发给对方就能进厅"
+        }
+    }
+
     val panel: @Composable (Modifier) -> Unit = { panelModifier -> CinemaPanel(
         modifier = panelModifier,
         wide = wide,
@@ -440,12 +508,7 @@ fun CinemaScreen(
         viewerOnline = viewerOnline,
         playback = playback,
         voiceLine = VoiceMode.label(voiceMode),
-        onCopyInvite = {
-            inviteUrl?.let {
-                context.copy("邀请链接", it)
-                note = "邀请链接已复制，发给对方就能进厅"
-            }
-        },
+        onCopyInvite = copyInvite,
         onPick = { h -> screen(h) },
         onTestUrl = { u -> inputUrl = u; pageUrl = u },
     )
@@ -457,7 +520,15 @@ fun CinemaScreen(
                 if (viewerOnline) "对方已在厅里" else "厅已开 · 等对方进来",
                 fontSize = 11.5.sp,
                 color = if (viewerOnline) Ink.Live else Ink.TextLow,
+                maxLines = 1,
             )
+            /* 顶栏常驻「复制邀请」：放映中面板在横屏是可滚的320dp 窄栏，光靠面板里
+               那一行不够 —— 参考 SyncWatch/couple-cinema/star-syncplayer 三家的共同做法：
+               播放中邀请入口放常驻顶栏，任何状态下一键可复制。 */
+            if (!inviteUrl.isNullOrBlank()) {
+                Box(Modifier.width(6.dp))
+                GlassTextButton("复制邀请", onClick = copyInvite, backdrop = backdrop)
+            }
         }
 
         if (wide) {
@@ -468,7 +539,11 @@ fun CinemaScreen(
                         .fillMaxHeight()
                         .padding(start = GlassDimens.screenH, bottom = 6.dp),
                 ) {
-                    AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
+                    // key(webGen)：AndroidView 的 factory 只在节点入组合时跑一次，
+                    // 换代后不换 key 的话它抓着的还是旧（已 destroy）实例。
+                    key(webGen) {
+                        AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
+                    }
                 }
                 Column(Modifier.width(320.dp).fillMaxHeight()) {
                     addressRow(Modifier)
@@ -490,7 +565,9 @@ fun CinemaScreen(
                     .fillMaxWidth()
                     .padding(horizontal = GlassDimens.screenH),
             ) {
-                AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
+                key(webGen) {
+                    AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
+                }
             }
             /* 这张卡**一直在**：它是厅的控制面（邀请、放映状态、方向盘开关），
                「收起嗅探」收的只是量具那几行，不是整张卡。
@@ -603,6 +680,27 @@ private fun CinemaPanel(
                     )
                     .padding(horizontal = 16.dp, vertical = 10.dp),
             ) {
+                /* 邀请行放在两个分支**之外**、面板最顶上。原来它写在"还没选片"分支里：
+                   按下「开始放映」后整个分支被换掉，复制入口随之消失 —— 中途拉人
+                   只能先收厅（用户实测反馈）。参考三家开源项目的共同做法：邀请入口
+                   常驻、和播放状态绑在不同的显隐逻辑上。URL 文本也可点（同三家的
+                   "chip 点击即复制"双触发点）。 */
+                if (!inviteUrl.isNullOrBlank()) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            MediaSniffer.shorten(inviteUrl, 44),
+                            fontSize = 10.5.sp,
+                            color = Ink.TextMid,
+                            maxLines = 1,
+                            modifier = Modifier.weight(1f).clickable { onCopyInvite() },
+                        )
+                        Box(Modifier.width(8.dp))
+                        GlassTextButton("复制邀请", onClick = onCopyInvite, backdrop = backdrop)
+                    }
+                }
                 if (cinema != null) {
                     // 放映中
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -675,24 +773,6 @@ private fun CinemaPanel(
                         fontWeight = FontWeight.SemiBold,
                         color = Ink.TextHi,
                     )
-                    // 厅先开、对方先进来 —— 所以"把链接发出去"是这一屏的第一动作，
-                    // 不是分享流程的副产品。
-                    if (!inviteUrl.isNullOrBlank()) {
-                        Row(
-                            Modifier.fillMaxWidth().padding(top = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                MediaSniffer.shorten(inviteUrl, 44),
-                                fontSize = 10.5.sp,
-                                color = Ink.TextMid,
-                                maxLines = 1,
-                                modifier = Modifier.weight(1f),
-                            )
-                            Box(Modifier.width(8.dp))
-                            GlassTextButton("复制邀请", onClick = onCopyInvite, backdrop = backdrop)
-                        }
-                    }
                     Text(
                         /* 这句话原来写死"对方现在看到的是你的屏幕" —— 可厅先开这条路
                            **根本不投屏**（只起信令 + 语音），观众看到的是一块等候屏。
@@ -775,8 +855,6 @@ private fun CinemaPanel(
     )
 }
 
-/** 与 cinema 包里那份是同一个常量，直接 import，不在这里另立一个 2。 */
-
 /**
  * 放映指令最终要落到房主这个 WebView 上，而"怎么往页面里注脚本"只有 watch 那一套（已测）。
  * 这里做一层映射，不再抄第二份 jsFor —— 两处各写一遍"怎么跳 10 秒"，以后一定只改得动一处。
@@ -791,6 +869,9 @@ private fun CinemaSync.Cmd.toWatchCmd(): WatchCmd = when (this) {
 private fun Context.copy(label: String, text: String) {
     val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
     cm.setPrimaryClip(ClipData.newPlainText(label, text))
+    // 即时反馈：面板底部的 note 在横屏窄栏里可能要滚动才看得见，Toast 不挑位置
+    // （参考 couple-cinema 复制成功后的 toast 提示）。
+    android.widget.Toast.makeText(this, "邀请链接已复制", android.widget.Toast.LENGTH_SHORT).show()
 }
 
 /**

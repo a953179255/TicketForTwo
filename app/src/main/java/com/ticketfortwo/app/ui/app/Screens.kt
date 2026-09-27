@@ -3,12 +3,8 @@ package com.ticketfortwo.app.ui.app
 import android.content.Context
 import android.content.pm.PackageManager
 import android.view.WindowManager
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -23,8 +19,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -42,18 +36,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kyant.backdrop.backdrops.LayerBackdrop
-import com.ticketfortwo.app.BuildConfig
 import com.ticketfortwo.app.ShareQuality
 import com.ticketfortwo.app.VoiceMode
 import com.ticketfortwo.app.ui.glass.GlassCard
@@ -81,6 +71,19 @@ fun HomeScreen(
     onSettings: () -> Unit,
     quality: ShareQuality,
     lastSummary: String?,
+    /**
+     * 放映厅还开着、但房主退到了首页时的一行状态（[RoomLabel] 的文案）；null = 没有开着的厅。
+     *
+     * 为什么需要这张卡：用户从放映厅按返回，期望是"离开界面"而不是"结束"（原话：
+     * "在放映厅点返回以后，不应该结束分享"）。返回落到首页，可厅还活着这件事
+     * 必须在首页看得见、也必须有入口回去 —— 否则一个还在跑的会话就只剩通知知道，
+     * 而"分享到底还在不在"恰恰是用户在问的问题。
+     */
+    roomLabel: String? = null,
+    /** 对方是不是已经在厅里 —— 决定状态胶囊的措辞与配色。 */
+    roomLive: Boolean = false,
+    onEnterRoom: () -> Unit = {},
+    onCloseRoom: () -> Unit = {},
 ) {
     // 横屏（含平板、折叠屏展开）单独一套排法，见下面 wideHome 的两处分支。
     // 判据用**屏幕**长宽比，不用某一块容器的：信息卡那边也要同一个结论，
@@ -98,7 +101,7 @@ fun HomeScreen(
         // 圆形双入口（效果图 home-orbs-pastel3.html 方案 2：丁香紫 × 樱花粉）。
         // 按用户要求：只改这两个圆的效果，页面其余部分保持原样。
         //
-        // 尺寸自适应：直径以 160dp（实验室调定值）为上限，但不超过可用高度的 44%。
+        // 尺寸自适应：直径以 160dp（实机调定值）为上限，但不超过可用高度的 44%。
         // 两个 160dp 的圆在矮屏上会把底部"分享设置"挤出屏幕（实测被裁掉半截），
         // 所以这里按可用空间收缩 —— 高屏手机上依然显示完整的 160dp。
         BoxWithConstraints(
@@ -113,7 +116,11 @@ fun HomeScreen(
              * （2400px），高度反而能按可用的 72% 给，标题也装得下了。
              */
             val wide = wideHome
-            val orbSize = minOf(160.dp, maxHeight * if (wide) 0.72f else 0.44f)
+            /* 下限 96dp：「放映厅已开」那张卡会挤掉 weight(1f) 的预算 —— 横屏实测圆塌到
+               ~20dp、图标和标题被 CircleShape 裁没，两个主入口等于消失
+               （REVIEW-2026-09-27 P1，2026-09-27 模拟器截图复现）。低于容器就靠
+               这块自己的滚动看全：圆消失比"圆要滚一下"糟得多。 */
+            val orbSize = minOf(160.dp, (maxHeight * if (wide) 0.72f else 0.44f).coerceAtLeast(96.dp))
             // 圆里装得下三行内容的经验下限（图标 34 + 标题 + 说明 + 间距）；
             // 低于它就把说明改画到圆下面，别让文字溢出圆外压住下一个圆。
             val subOutside = wide || orbSize < 128.dp
@@ -184,6 +191,53 @@ fun HomeScreen(
                     // 而那行小字自己就有 ~19dp 高，会贴着下一个圆的上沿。
                     Spacer(Modifier.height(if (subOutside) 30.dp else 16.dp))
                     joinOrb()
+                }
+            }
+        }
+
+        // 厅还开着的那张卡：放在两颗圆和信息卡之间 —— 它是这一屏唯一的"进行中"状态，
+        // 比画质那些常驻信息更该先被看到。
+        if (roomLabel != null) {
+            GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
+                if (wideHome) {
+                    /* 横屏压成一行：竖屏那种"标题行 + 两颗 52dp 按钮"的两行卡约 100dp+，
+                       横屏首页的总预算经不起这个开销（圆钮会塌，见 orbSize 注释）。 */
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .padding(horizontal = GlassDimens.sp3, vertical = GlassDimens.sp2),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2),
+                    ) {
+                        Text(
+                            "放映厅已开",
+                            fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextHi,
+                            modifier = Modifier.weight(1f),
+                        )
+                        StatusChip(roomLabel, if (roomLive) ChipTone.Ok else ChipTone.Neutral)
+                        PrimaryPill("回到放映厅", onEnterRoom, backdrop, height = 36.dp)
+                        PrimaryPill("关闭放映厅", onCloseRoom, backdrop, height = 36.dp, filled = false)
+                    }
+                } else {
+                    Column(
+                        Modifier.padding(GlassDimens.sp3),
+                        verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2),
+                    ) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "放映厅已开",
+                                fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextHi,
+                                modifier = Modifier.weight(1f),
+                            )
+                            StatusChip(roomLabel, if (roomLive) ChipTone.Ok else ChipTone.Neutral)
+                        }
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2),
+                        ) {
+                            PrimaryPill("回到放映厅", onEnterRoom, backdrop, Modifier.weight(1f))
+                            PrimaryPill("关闭放映厅", onCloseRoom, backdrop, Modifier.weight(1f), filled = false)
+                        }
+                    }
                 }
             }
         }
@@ -292,38 +346,46 @@ fun ShareKindScreen(
      * 170dp 高的空壳、正文只剩 2px —— 这一屏存在的意义就是那句"对方会看到什么"，
      * 它被吃掉等于没做。weight 在矮屏上分给卡片的空间比内容需要的少，
      * 而 Compose 不会因此把页面撑开，只会裁。改成"卡片按内容长、页面不够就滚"。 */
-    PageScaffold(modifier = Modifier.verticalScroll(rememberScrollState())) {
-        Spacer(Modifier.height(GlassDimens.sp4))
-        Headline("分享画面", "先选给对方看什么。两种都可以中途换，不用重来。")
-        if (wide) {
+    PageScaffold {
+        /* 滚动只包内容，「返回」留在滚动列**外面**、由外层 Column 的 weight(1f)
+           吃掉剩余高度 —— 用户反馈"返回按钮太靠上了"就是整页滚动的后果：
+           按钮跟着内容排，内容短时它悬在屏幕半空，下面一大片壁纸。
+           FailedScreen 已是这个结构（滚动列 weight(1f)，按钮钉底），这里对齐它。 */
+        Column(
+            Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(GlassDimens.sp4),
+        ) {
+            Spacer(Modifier.height(GlassDimens.sp4))
+            Headline("分享画面", "先选给对方看什么。两种都可以中途换，不用重来。")
+            if (wide) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp3),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Box(Modifier.weight(1f)) { cinemaCard() }
+                    Box(Modifier.weight(1f)) { screenCard() }
+                }
+            } else {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp3)) {
+                    cinemaCard()
+                    screenCard()
+                }
+            }
+            // 声音档放在这一屏说一次：它决定"对方听不听得到你说话"，
+            // 而多数人是在这里才第一次意识到"原来默认不连麦"。
             Row(
                 Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp3),
-                verticalAlignment = Alignment.Top,
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Box(Modifier.weight(1f)) { cinemaCard() }
-                Box(Modifier.weight(1f)) { screenCard() }
-            }
-        } else {
-            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp3)) {
-                cinemaCard()
-                screenCard()
+                Text(
+                    "声音：${VoiceMode.label(quality.voiceMode)}",
+                    fontSize = 12.sp, color = Ink.TextMid, modifier = Modifier.weight(1f),
+                )
+                GlassTextButton("去改", onClick = onSettings, backdrop = backdrop)
             }
         }
-        // 声音档放在这一屏说一次：它决定"对方听不听得到你说话"，
-        // 而多数人是在这里才第一次意识到"原来默认不连麦"。
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                "声音：${VoiceMode.label(quality.voiceMode)}",
-                fontSize = 12.sp, color = Ink.TextMid, modifier = Modifier.weight(1f),
-            )
-            GlassTextButton("去改", onClick = onSettings, backdrop = backdrop)
-        }
-        Spacer(Modifier.height(GlassDimens.sp2))
         PrimaryPill("返回", onBack, backdrop, Modifier.fillMaxWidth(), filled = false)
         // 底部要留够：横屏时系统那根手势白条正好压在按钮上（实测 .dev/kind-08-land.png
         // 里「返回」和白条重叠），navigationBarsPadding 在这一屏没替我们让开。
@@ -367,8 +429,7 @@ private fun KindCard(
 // ─────────────────────────── 首页 · 圆形磨砂入口 ───────────────────────────
 
 /**
- * 圆钮雾色 —— 用户在「圆钮颜色实验室」实机调定（2026-09-23）。
- * 改色只需改这两行（或在实验室里调完把 hex 发过来）。
+ * 圆钮雾色 —— 用户实机调定（2026-09-23）。改色只需改这两行。
  */
 val OrbTintViolet = Color(0xFF1FE91F)
 val OrbTintPink = Color(0xFFFF62AB)
@@ -403,8 +464,7 @@ fun GlassOrbEntry(
      * 圆内只留图标和标题。
      */
     subOutside: Boolean = false,
-    // 以下默认值 = 用户在玻璃参数实验室实机调定的配方（2026-09-23）。
-    // 实验室里再调出新的，改这里的默认值即可（或把参数发过来）。
+    // 以下默认值 = 用户实机调定的配方（2026-09-23）。要调就直接改这里的默认值。
     diameter: Dp = 160.dp,
     blurRadius: Dp = 10.dp,
     lensRadius: Dp = 22.dp,
@@ -431,7 +491,7 @@ fun GlassOrbEntry(
         blurRadius = blurRadius,
         contentAlignment = Alignment.Center,
     ) {
-        // 白雾提亮层：在通透玻璃上加一层柔白光（浓度由实验室调定）。
+        // 白雾提亮层：在通透玻璃上加一层柔白光（浓度实机调定）。
         // 圆内深字也没有它会更清晰。
         Box(
             Modifier
@@ -466,85 +526,6 @@ fun GlassOrbEntry(
         )
     }
     }   // Column（见上面"自己包一层 Column"的注释）
-}
-
-/**
- * 设置页的入口行。
- *
- * 刻意不用 ripple（在玻璃上是一块方形光晕，视觉脏）—— 按压反馈改成整行轻微内缩，
- * 和玻璃按钮的手感一致。
- */
-@Composable
-internal fun LabEntry(title: String, sub: String, onClick: () -> Unit) {
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.98f else 1f,
-        animationSpec = spring(dampingRatio = 0.62f, stiffness = 520f),
-        label = "labEntryScale",
-    )
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-            }
-            .clickable(
-                interactionSource = interaction,
-                indication = null,
-                onClick = onClick,
-            )
-            .padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column {
-            Text(title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextHi)
-            Text(sub, fontSize = 11.5.sp, color = Ink.TextLow)
-        }
-        Text("›", fontSize = 18.sp, color = Ink.TextLow)
-    }
-}
-
-/**
- * 数字输入行 —— 「自定义码率 / 自定义帧率」共用。
- *
- * 为什么不用 Material 的 TextField：这一页整体是玻璃风格，Material 输入框的
- * 填充/描边/下划线都跟周围的玻璃胶囊对不上，视觉上会像一个外来控件。
- */
-@Composable
-internal fun NumberInputRow(
-    label: String,
-    value: String,
-    suffix: String,
-    placeholder: String,
-    onChange: (String) -> Unit,
-) {
-    Row(
-        Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2),
-    ) {
-        Text(label, fontSize = 12.5.sp, color = Ink.TextMid)
-        BasicTextField(
-            value = value,
-            onValueChange = onChange,
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-            textStyle = TextStyle(color = Ink.TextHi, fontSize = 14.sp),
-            modifier = Modifier
-                .weight(1f)
-                .background(Color.Black.copy(alpha = 0.28f), RoundedCornerShape(percent = 50))
-                .padding(horizontal = 14.dp, vertical = 9.dp),
-        ) { inner ->
-            if (value.isEmpty()) {
-                Text(placeholder, fontSize = 14.sp, color = Ink.TextLow)
-            }
-            inner()
-        }
-        Text(suffix, fontSize = 12.5.sp, color = Ink.TextMid)
-    }
 }
 
 @Composable
@@ -606,8 +587,6 @@ fun QualitySettingsScreen(
     backdrop: LayerBackdrop,
     quality: ShareQuality,
     onChange: (ShareQuality) -> Unit,
-    onOpenColorLab: () -> Unit,
-    onOpenGlassLab: () -> Unit,
     onBack: () -> Unit,
 ) {
     fun indexOfOr(list: List<*>, value: Any?, default: Int): Int =
@@ -618,19 +597,6 @@ fun QualitySettingsScreen(
     PageScaffold(modifier = Modifier.verticalScroll(rememberScrollState())) {
         Spacer(Modifier.height(GlassDimens.sp6))
         Headline("分享设置", "这些是上限不是保证值：网络差或发热时会自动再降。开始分享时生效，本场通话内不可改。")
-
-        // 实验室是**开发期的调参工具**：在 App 里拖滑杆调出满意配方 → 复制参数 → 写回代码。
-        // 它不是给用户的功能，正式版不该出现（用户打开分享设置，要看的是画质，不是磨砂半径）。
-        // 只在 debug 包暴露；正式版连入口都没有 ⇒ 两款滑杆页也就不可能被路由到。
-        if (BuildConfig.DEBUG) {
-            SectionTitle("实验室")
-            GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
-                    LabEntry("圆钮颜色实验室", "调两个圆的雾色，复制参数发给 AI", onOpenColorLab)
-                    LabEntry("玻璃参数实验室", "调磨砂/透镜/透明度，复制参数发给 AI", onOpenGlassLab)
-                }
-            }
-        }
 
         SectionTitle("画质")
         GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
@@ -827,43 +793,49 @@ fun QualitySettingsScreen(
 
 @Composable
 fun ConsentGuideScreen(backdrop: LayerBackdrop, onContinue: () -> Unit, onBack: () -> Unit) {
+    /* 整页可滚 + 按钮钉底（FailedScreen 同款结构）：横屏可用高只有 ~359dp，而本屏内容
+       约 500dp —— 不可滚的话两颗按钮整行在屏幕外，投屏流程走不下去
+       （REVIEW-2026-09-27 P1；同仓 Failed/Ended/ShareKind 三屏修过一模一样的病）。 */
     PageScaffold {
-        Spacer(Modifier.height(GlassDimens.sp4))
-        Headline("接下来系统会问你两件事", "这两步决定朋友能不能看到、能不能听到。")
+        Column(
+            Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(GlassDimens.sp4),
+        ) {
+            Spacer(Modifier.height(GlassDimens.sp4))
+            Headline("接下来系统会问你两件事", "这两步决定朋友能不能看到、能不能听到。")
 
-        GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp3)) {
-                GuideStep(
-                    "1", "选「整个屏幕」",
-                    "Android 14 起弹窗默认落在「单个应用」，而且会先显示 Next。" +
-                        "选错了，朋友就只能看到你当前那一个窗口 —— 这是最常见的「他看不到我画面」原因。" +
-                        "（实测：改成整屏后确认按钮文案会变成「Share screen」）"
-                )
-                Box(Modifier.fillMaxWidth().height(1.dp).background(Ink.TextLow.copy(alpha = 0.25f)))
-                GuideStep(
-                    "2", "允许麦克风",
-                    /* 这句要说清"麦克风在分享屏幕时是干什么的"。以前写"不开麦克风就不能连麦"，
-                       而现在默认档是「只有视频声」—— 连麦本来就是额外开启的，
-                       这句话会让人以为"不开麦克风就白分享了"。真相是：
-                       屏幕分享时影片声唯一的通道就是外放→麦克风，不给就是**有画无声**。 */
-                    "不给也能分享画面，但对方**听不到任何声音** —— 屏幕分享时影片声只能靠你的" +
-                        "外放灌进麦克风传过去。要连麦说话同样靠它。"
-                )
+            GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp3)) {
+                    GuideStep(
+                        "1", "选「整个屏幕」",
+                        "Android 14 起弹窗默认落在「单个应用」，而且会先显示 Next。" +
+                            "选错了，朋友就只能看到你当前那一个窗口 —— 这是最常见的「他看不到我画面」原因。" +
+                            "（实测：改成整屏后确认按钮文案会变成「Share screen」）"
+                    )
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(Ink.TextLow.copy(alpha = 0.25f)))
+                    GuideStep(
+                        "2", "允许麦克风",
+                        /* 这句要说清"麦克风在分享屏幕时是干什么的"。以前写"不开麦克风就不能连麦"，
+                           而现在默认档是「只有视频声」—— 连麦本来就是额外开启的，
+                           这句话会让人以为"不开麦克风就白分享了"。真相是：
+                           屏幕分享时影片声唯一的通道就是外放→麦克风，不给就是**有画无声**。 */
+                        "不给也能分享画面，但对方听不到任何声音 —— 屏幕分享时影片声只能靠你的" +
+                            "外放灌进麦克风传过去。要连麦说话同样靠它。"
+                    )
+                }
+            }
+
+            GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
+                    Text("每次分享都要重新授权一次", fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextHi)
+                    Text(
+                        "这是系统规则，不是本 App 的设置项，也无法绕过。中途锁屏也会自动停止分享（Android 15 QPR1+）。",
+                        fontSize = 12.5.sp, color = Ink.TextMid,
+                    )
+                    StatusChip("请保持亮屏", ChipTone.Warn)
+                }
             }
         }
-
-        GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
-                Text("每次分享都要重新授权一次", fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextHi)
-                Text(
-                    "这是系统规则，不是本 App 的设置项，也无法绕过。中途锁屏也会自动停止分享（Android 15 QPR1+）。",
-                    fontSize = 12.5.sp, color = Ink.TextMid,
-                )
-                StatusChip("请保持亮屏", ChipTone.Warn)
-            }
-        }
-
-        SpacerWeight()
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
             PrimaryPill("返回", onBack, backdrop, Modifier.weight(1f), filled = false)
             PrimaryPill("我知道了，继续", onContinue, backdrop, Modifier.weight(2f))
@@ -960,38 +932,43 @@ fun InviteScreen(
      */
     screenSharing: Boolean = false,
 ) {
+    /* 滚动 + 按钮钉底（同 ConsentGuideScreen）：横屏内容约 560dp > 可用 359dp，
+       不可滚时底部这颗唯一的停止入口在屏幕外（REVIEW-2026-09-27 P1）。 */
     PageScaffold {
-        Spacer(Modifier.height(GlassDimens.sp6))
-        Headline("把这条发给朋友", "他点开就能看，不用装东西、也不用回传任何东西给你。")
+        Column(
+            Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(GlassDimens.sp4),
+        ) {
+            Spacer(Modifier.height(GlassDimens.sp6))
+            Headline("把这条发给朋友", "他点开就能看，不用装东西、也不用回传任何东西给你。")
 
-        GlassCardPanel(backdrop, Modifier.fillMaxWidth(), floating = true) {
-            Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp3)) {
-                Text(
-                    inviteUrl,
-                    fontSize = 12.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = Ink.TextMid,
-                    maxLines = 4,
-                )
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
-                    PrimaryPill("复制邀请", onCopy, backdrop, Modifier.weight(1f))
+            GlassCardPanel(backdrop, Modifier.fillMaxWidth(), floating = true) {
+                Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp3)) {
+                    Text(
+                        inviteUrl,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = Ink.TextMid,
+                        maxLines = 4,
+                    )
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
+                        PrimaryPill("复制邀请", onCopy, backdrop, Modifier.weight(1f))
+                    }
                 }
             }
-        }
 
-        GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
-                SectionTitle("朋友那边会发生什么")
-                StepRow("①", "打开这条链接", "浏览器，免安装")
-                StepRow("②", "点一下开始播放", "浏览器拦自动播放时才需要")
-                StepRow("③", "画面和声音就过来了", "两端直连，不经中转")
+            GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
+                    SectionTitle("朋友那边会发生什么")
+                    StepRow("①", "打开这条链接", "浏览器，免安装")
+                    StepRow("②", "点一下开始播放", "浏览器拦自动播放时才需要")
+                    StepRow("③", "画面和声音就过来了", "两端直连，不经中转")
+                }
             }
+
+            StatusChip("链接里有接入凭证，别转发给不想让看的人", ChipTone.Warn)
+            StatusChip("你可以一直开着，他随时点开都能进", ChipTone.Ok)
         }
-
-        StatusChip("链接里有接入凭证，别转发给不想让看的人", ChipTone.Warn)
-        StatusChip("你可以一直开着，他随时点开都能进", ChipTone.Ok)
-
-        SpacerWeight()
         PrimaryPill(if (screenSharing) "停止分享" else "结束连麦", onStop, backdrop, Modifier.fillMaxWidth(), filled = false)
         Spacer(Modifier.height(GlassDimens.sp6))
     }
@@ -1181,7 +1158,7 @@ private fun FixCard(backdrop: LayerBackdrop, title: String, chip: String, body: 
         Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp1)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text(title, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextHi)
-                StatusChip(chip, if (chip == "几乎必成") ChipTone.Ok else ChipTone.Warn)
+                StatusChip(chip, ChipTone.Warn)
             }
             Text(body, fontSize = 12.sp, color = Ink.TextMid, lineHeight = 17.sp)
         }

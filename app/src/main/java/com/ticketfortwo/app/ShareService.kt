@@ -8,7 +8,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.ticketfortwo.app.signaling.SignalHub
@@ -80,15 +79,8 @@ class ShareService : Service() {
         ) ?: ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
         fgsType = type
         val notification = buildNotification(type)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIF_ID,
-                notification,
-                type,
-            )
-        } else {
-            startForeground(NOTIF_ID, notification)
-        }
+        // 三参重载要求 API 29；minSdk 33，原来那个不可达的 else 分支已删。
+        startForeground(NOTIF_ID, notification, type)
         // 关键：startForegroundService() 是异步的，光"启动了服务"不够。
         // Android 14+ 要求在 getMediaProjection() 之前服务**已经进入前台**，
         // 否则系统抛 SecurityException: Media projections require a foreground
@@ -105,18 +97,33 @@ class ShareService : Service() {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val stop = PendingIntent.getBroadcast(
+        /* 必须 getForegroundService 直指本服务：原来写的 getBroadcast 发的是
+           广播 Intent（只有 setPackage），而全仓没有任何 receiver 接它 ——
+           onStartCommand 的 ACTION_STOP 分支永不可达，通知上那颗"停止"是死的
+           （REVIEW-2026-09-27 P1：类注释和 PLAN 都承诺"随时可切断"）。 */
+        val stop = PendingIntent.getForegroundService(
             this, 1,
-            Intent(ACTION_STOP).setPackage(packageName),
+            Intent(this, ShareService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val voiceOnly = type == ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        /* 标题跟着"这次到底在分享什么"走：厅先开、只连麦起的都是 microphone 服务，
+           根本没有投屏，顶着「正在分享给朋友」就是谎话 —— 用户实测反馈正是
+           "选择了一起放一部片，进去放映厅以后，它就默认开始分享了"（他没开过投屏，
+           看到的却是分享中）。渠道也分开：设置页里叫「屏幕分享」的渠道挂着一条
+           语音通知，同样会误导人以为在投屏。 */
+        return NotificationCompat.Builder(this, if (voiceOnly) CHANNEL_VOICE_ID else CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(getString(R.string.notif_sharing_title))
+            .setContentTitle(
+                getString(if (voiceOnly) R.string.notif_voice_title else R.string.notif_sharing_title)
+            )
             .setContentText(
-                if (SignalHub.viewerConnected.value) "1 人正在观看"
-                else getString(if (voiceOnly) R.string.notif_voice_text else R.string.notif_sharing_text)
+                when {
+                    voiceOnly && SignalHub.viewerConnected.value -> getString(R.string.notif_voice_joined)
+                    voiceOnly -> getString(R.string.notif_voice_text)
+                    SignalHub.viewerConnected.value -> "1 人正在观看"
+                    else -> getString(R.string.notif_sharing_text)
+                }
             )
             .setOngoing(true)
             .setContentIntent(open)
@@ -136,6 +143,15 @@ class ShareService : Service() {
                 )
             )
         }
+        if (nm.getNotificationChannel(CHANNEL_VOICE_ID) == null) {
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    CHANNEL_VOICE_ID,
+                    getString(R.string.notif_channel_voice),
+                    NotificationManager.IMPORTANCE_LOW,
+                )
+            )
+        }
     }
 
     override fun onDestroy() {
@@ -148,6 +164,8 @@ class ShareService : Service() {
 
     companion object {
         private const val CHANNEL_ID = "share"
+        /** 仅语音（放映厅 / 只连麦）那类通知单独一个渠道，理由见 buildNotification。 */
+        private const val CHANNEL_VOICE_ID = "voice"
         private const val NOTIF_ID = 1001
         const val ACTION_STOP = "com.ticketfortwo.app.action.STOP_SHARE"
         const val EXTRA_FGS_TYPE = "com.ticketfortwo.app.extra.FGS_TYPE"
@@ -173,11 +191,6 @@ class ShareService : Service() {
             _foregroundReady.value = false
             val i = Intent(context, ShareService::class.java).putExtra(EXTRA_FGS_TYPE, type)
             context.startForegroundService(i)
-        }
-
-        fun stop(context: Context) {
-            _foregroundReady.value = false
-            context.stopService(Intent(context, ShareService::class.java))
         }
     }
 }

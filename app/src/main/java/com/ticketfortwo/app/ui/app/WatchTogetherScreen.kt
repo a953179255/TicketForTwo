@@ -2,11 +2,13 @@ package com.ticketfortwo.app.ui.app
 
 import android.annotation.SuppressLint
 import android.view.View
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -88,8 +91,15 @@ fun WatchTogetherScreen(
     var lastCmdLabel by remember { mutableStateOf<String?>(null) }
     // HTML5 全屏：很多网页播放器点"全屏"是换一个 View 上来，不接住它就是点了没反应
     var fullScreenView by remember { mutableStateOf<View?>(null) }
+    /* callback 必须存下来并调用：WebView 文档要求 App 主动退出全屏时调
+       onCustomViewHidden()，丢了它页面侧的全屏状态出不来，站点就再进不了/退不了全屏
+       （REVIEW-2026-09-27 P1）。 */
+    var fullScreenCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
+    /* 渲染进程崩了要整只重建（WebView 此后不可复用）；而 onRenderProcessGone 不
+       override 的话系统默认返回 false = 直接杀掉整个 App 进程（REVIEW-2026-09-27 P1）。 */
+    var webGen by remember { mutableStateOf(0) }
 
-    val webView = remember {
+    val webView = remember(webGen) {
         WebView(context).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
@@ -108,24 +118,49 @@ fun WatchTogetherScreen(
                     view: WebView?,
                     request: WebResourceRequest?,
                 ): Boolean = false // 一律在内部打开，不给外部浏览器接手
+
+                override fun onRenderProcessGone(
+                    view: WebView?,
+                    rendererProcess: RenderProcessGoneDetail?,
+                ): Boolean {
+                    // 返回 true 系统才不杀进程；回主线程整只重建（webGen 变化 →
+                    // 记忆中的新 WebView + 下面 keyed effect 重新加载当前页）。
+                    view?.post {
+                        fullScreenView = null
+                        fullScreenCallback = null
+                        webGen += 1
+                    }
+                    return true
+                }
             }
             webChromeClient = object : WebChromeClient() {
                 override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
                     val v = view ?: return
                     fullScreenView = v
+                    fullScreenCallback = callback
                 }
 
                 override fun onHideCustomView() {
                     fullScreenView = null
+                    fullScreenCallback = null
                 }
             }
         }
     }
 
-    LaunchedEffect(pageUrl) { webView.loadUrl(pageUrl) }
+    // 网页全屏时返回键先退全屏（提示语"按返回键回到同看房间"才成立），
+    // 不加这条的话返回落到 onClose 把整屏关掉 —— 按提示操作反而丢了房间。
+    BackHandler(enabled = fullScreenView != null) {
+        fullScreenView = null
+        fullScreenCallback?.onCustomViewHidden()
+        fullScreenCallback = null
+    }
+
+    LaunchedEffect(pageUrl, webGen) { webView.loadUrl(pageUrl) }
 
     // 每秒问一次页面。太密会跟网页自己的渲染抢主线程，太疏观众那边的进度条会跳。
-    LaunchedEffect(pageUrl) {
+    // webGen 进 key：渲染进程重建后旧 effect 里抓的还是已 destroy 的实例。
+    LaunchedEffect(pageUrl, webGen) {
         var ticks = 0
         while (true) {
             delay(1_000)
@@ -155,7 +190,18 @@ fun WatchTogetherScreen(
                 webView.post { webView.evaluateJavascript(WatchSync.jsFor(cmd, pos, dur), null) }
             }
         }
-        onDispose { CallSession.onWatchCommand = null }
+        onDispose {
+            CallSession.onWatchCommand = null
+            /* 退屏/换代时把旧 WebView 收掉：只记得创建、从不 destroy，页面会继续联网、
+               持着 Activity 直到 GC（平台会打 "WebView.destroy() was never called"），
+               autoplay 也没人停。挂在这个 key 上：换代/整屏退出才销毁，横竖屏分支
+               切换是同一个实例、不会误杀（别用 AndroidView onRelease，见 REVIEW-2026-09-27）。 */
+            runCatching {
+                webView.stopLoading()
+                webView.webChromeClient = null
+                webView.destroy()
+            }
+        }
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -201,7 +247,11 @@ fun WatchTogetherScreen(
                 .fillMaxWidth()
                 .padding(horizontal = GlassDimens.screenH)
         ) {
-            AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
+            // key(webGen)：AndroidView 的 factory 只在节点入组合时跑一次，
+            // 换代后不换 key 的话它抓着的还是旧（已 destroy）实例。
+            key(webGen) {
+                AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
+            }
             state?.let {
                 if (!it.found) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("这个页面里没找到播放器", fontSize = 12.5.sp, color = Ink.TextMid)

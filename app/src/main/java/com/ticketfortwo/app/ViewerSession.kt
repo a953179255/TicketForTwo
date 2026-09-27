@@ -195,6 +195,13 @@ object ViewerSession {
     @Volatile
     private var reconnecting = false
 
+    /**
+     * 信令抢救协程。stop() 必须取消它 —— 不取消的话，用户退出后它下一轮才判
+     * `shouldRescue`，会把 Idle 改成 Ended（人已在首页又被拽回结束页），更窄的
+     * 窗口里还会 `ws?.close()` 关掉**新会话**刚建的 socket（REVIEW-2026-09-27 P2）。
+     */
+    private var rescueJob: kotlinx.coroutines.Job? = null
+
     /** 信令重连的次数上限。房主真停了就不该无限重连下去。 */
     private val reconnectTries = 4
 
@@ -284,7 +291,7 @@ object ViewerSession {
             return
         }
         reconnecting = true
-        scope.launch {
+        rescueJob = scope.launch {
             for (i in 0 until reconnectTries) {
                 if (!shouldRescue(everOpened, lastWsUrl != null, peer?.connectionState)) break
                 delay(2_000)
@@ -324,6 +331,7 @@ object ViewerSession {
         everOpened = false
         lastWsUrl = null
         reconnecting = false
+        rescueJob?.cancel(); rescueJob = null
         runCatching { peer?.close() }
         peer = null
         runCatching { audioTrack?.dispose() }
@@ -331,6 +339,11 @@ object ViewerSession {
         remoteAudioTrack = null
         _volume.value = 1f
         _micLive.value = false
+        /* 开麦挂起标记必须一起复位：置位在权限检查**之前**，而失败分支的 return、
+           8 秒兜底协程（在 return 之后才启动）都够不到它 —— 权限被拒一次，
+           之后每次 toggleMic 都在 `if (_micPending.value) return` 提前退出，
+           按钮从此失效直到杀进程（REVIEW-2026-09-27 P1）。 */
+        _micPending.value = false
         runCatching { audioSource?.dispose() }
         audioSource = null
         pendingRemoteCandidates.clear()
@@ -431,14 +444,12 @@ object ViewerSession {
                 val p = ensurePeer(context)
                 p.acceptOffer(sdp)
                 if (pendingRemoteCandidates.isNotEmpty()) {
-                    // 这些候选比 offer 先到（罕见）。setRemoteDescription 是异步的，
-                    // 立刻补会因"远端描述未设"被丢弃，所以稍等它落地再补。
+                    // 这些候选比 offer 先到（罕见）。Peer 内部会在 setRemote 落地后
+                    // 自动补交（见 Peer.pendingRemoteCandidates —— 原生对"描述未设"
+                    // 的候选是直接丢弃），不用再在这里赌 600ms 时延。
                     val pending = pendingRemoteCandidates.toList()
                     pendingRemoteCandidates.clear()
-                    scope.launch {
-                        delay(600)
-                        pending.forEach { p.addRemoteCandidate(it) }
-                    }
+                    pending.forEach { p.addRemoteCandidate(it) }
                 }
             }
 
@@ -633,6 +644,8 @@ object ViewerSession {
         if (ensureMicTrack(context) == null) {
             // 权限没给。这里必须说清楚，否则用户以为"点了没反应"是 App 坏了。
             note("未授予麦克风权限：只能看画面，说不了话")
+            // 置位在检查之前，不在这里复位的话按钮会永久卡在"挂起"（见 stop() 同款注释）。
+            _micPending.value = false
             return
         }
         // 开关只有一处生效：setMicMuted 同时改状态与轨道，
@@ -694,6 +707,9 @@ object ViewerSession {
      */
     private fun end(reason: String) {
         if (_state.value is State.Ended) return   // 再见与 socket 关闭会先后都到
+        /* stop() 已经把人送回首页之后，抢救协程/关闭回调还可能迟到一步 ——
+           再把 Idle 改成 Ended，会把用户从首页拽回结束页（REVIEW-2026-09-27 P2）。 */
+        if (_state.value is State.Idle) return
         note(reason)
         wsOpen = false
         runCatching { ws?.close() }

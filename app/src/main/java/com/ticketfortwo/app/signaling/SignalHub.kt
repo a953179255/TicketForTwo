@@ -368,7 +368,7 @@ object SignalHub {
             if (b < 0) return null
             buf.write(b)
             matched = when (matched) {
-                0, 2 -> if (b == CR) matched + 1 else if (b == CR) 1 else 0
+                0, 2 -> if (b == CR) matched + 1 else 0
                 1, 3 -> if (b == LF) matched + 1 else if (b == CR) 1 else 0
                 else -> 0
             }
@@ -424,7 +424,6 @@ object SignalHub {
     }
 
     private fun readWebSocket(client: Client, input: InputStream) {
-        var fragmentOpcode = -1
         var fragment: ByteArrayOutputStream? = null
 
         while (running && !client.socket.isClosed) {
@@ -434,7 +433,6 @@ object SignalHub {
                     if (frame.fin) {
                         deliver(frame.payload)
                     } else {
-                        fragmentOpcode = frame.opcode
                         fragment = ByteArrayOutputStream().also { it.write(frame.payload) }
                     }
                 }
@@ -445,7 +443,6 @@ object SignalHub {
                     if (frame.fin) {
                         deliver(acc.toByteArray())
                         fragment = null
-                        fragmentOpcode = -1
                     }
                 }
 

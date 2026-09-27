@@ -7,11 +7,7 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.Immutable
-import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
 
 /**
  * 颜色 token。取值出处见 PLAN.md §6.2 —— 抽自 awesome-design-md 的
@@ -26,9 +22,6 @@ internal object Ink {
     val Surface1 = Color(0xFF181818)
     val Surface2 = Color(0xFF1F1F1F)
 
-    // 视频区专用纯黑 —— Apple: surface-black 明确"专用于 video player 背景"
-    val Video = Color(0xFF000000)
-
     // 文本 —— Spotify
     val TextHi = Color(0xFFFFFFFF)
     val TextMid = Color(0xFFB3B3B3)
@@ -38,15 +31,11 @@ internal object Ink {
     val AccentOnDark = Color(0xFF2997FF)
     val AccentSolid = Color(0xFF0071E3)
 
-    // 语义色 —— Spotify（mute 语义库里没有，见 Dimens 注释）
+    // 语义色 —— Spotify（mute 语义库里没有）
     val Live = Color(0xFF1ED760)   // 发言中 / 活跃
     val Error = Color(0xFFF3727F)  // 错误 / 断连
     val Warn = Color(0xFFFFA42B)   // 弱网警告
     val Info = Color(0xFF539DF5)   // 信息
-
-    // 浮层遮罩 —— Figma: "Black used at ~60% opacity behind video-overlay surfaces"
-    val VideoScrim = Color(0x99000000)
-    val StrongScrim = Color(0xC7000000)
 
     /**
      * 环境底的四团色相。不属于 DESIGN.md token，是为"让玻璃有东西可折射"而配的
@@ -85,48 +74,6 @@ private val LightColors: ColorScheme = lightColorScheme(
     error = Color(0xFFB3261E),
 )
 
-/**
- * 尺寸 token。44dp 圆形控件来自 Apple `button-icon-circular 44×44px`，
- * 它同时也是触控命中下限；圆角与间距取自 Apple 的 scale。
- */
-@Immutable
-data class Dimens(
-    /** 圆形图标按钮直径，同时是命中区下限 */
-    val controlSize: Dp = 44.dp,
-    val controlSizeLarge: Dp = 56.dp,
-    val iconSize: Dp = 22.dp,
-    /** 控制岛：底部留白 */
-    val islandBottom: Dp = 24.dp,
-    /** 视频上浮层卡片与控制岛之间的间距 */
-    val overlayGap: Dp = 16.dp,
-    val radiusSm: Dp = 8.dp,
-    val radiusMd: Dp = 12.dp,
-    val radiusLg: Dp = 16.dp,
-    val radiusCard: Dp = 26.dp,
-    val sp1: Dp = 4.dp,
-    val sp2: Dp = 8.dp,
-    val sp3: Dp = 12.dp,
-    val sp4: Dp = 16.dp,
-    val sp5: Dp = 20.dp,
-    val sp6: Dp = 24.dp,
-    val sp8: Dp = 32.dp,
-)
-
-/**
- * 动效时长：**awesome-design-md 全库 74 份 DESIGN.md 里没有 motion/duration token**
- * （只有 Starbucks 给过一条 cubic-bezier），所以这几个值是自定的，别当有出处。
- * 弹性按压的曲线借用那唯一一条 spring。
- */
-@Immutable
-data class Motion(
-    val fastMs: Int = 120,
-    val midMs: Int = 220,
-    val slowMs: Int = 380,
-)
-
-val LocalDimens = staticCompositionLocalOf { Dimens() }
-val LocalMotion = staticCompositionLocalOf { Motion() }
-
 @Composable
 fun TicketForTwoTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
@@ -135,12 +82,6 @@ fun TicketForTwoTheme(
     MaterialTheme(
         colorScheme = if (darkTheme) DarkColors else LightColors,
         typography = Typography(),
-        content = {
-            androidx.compose.runtime.CompositionLocalProvider(
-                LocalDimens provides Dimens(),
-                LocalMotion provides Motion(),
-                content = content,
-            )
-        },
+        content = content,
     )
 }

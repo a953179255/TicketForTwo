@@ -54,13 +54,10 @@ object WatchSync {
     const val SEP = '|'
 
     /** 一次快进/快退的最大幅度：超过两分钟的"跳"只可能是误触或攻击，砍掉。 */
-    const val MAX_STEP_MS = 120_000L
+    val MAX_STEP_MS: Long get() = SyncProto.MAX_STEP_MS
 
-    /** 状态广播节流：房主每秒问一次网页，但只有真的变了才往外发。 */
-    const val DRIFT_TOLERANCE_MS = 1_500L
-
-    fun sanitize(title: String): String =
-        title.replace(Regex("[|\"'\\\\\r\n\t]"), " ").trim().take(60)
+    /** 标题是网页里抓的，可能带换行、竖线、引号 —— 洗法只有一份，见 [SyncProto.sanitize]。 */
+    fun sanitize(title: String): String = SyncProto.sanitize(title)
 
     /** 房主侧：把状态 + "是否允许对方控制"打包成 f 字段。 */
     fun stateFields(state: WatchState, allow: Boolean): String = buildString {
@@ -104,14 +101,11 @@ object WatchSync {
 
     /** 权限闸门单独成一个函数：这是"观众能不能动房主手机"唯一的判定点，必须可测。 */
     fun accept(allowViewerControl: Boolean, cmd: WatchCmd?): WatchCmd? =
-        if (allowViewerControl && cmd != null) cmd else null
+        SyncProto.accept(allowViewerControl, cmd)
 
     /** 快进/快退的落点：夹在 [0, 时长] 之间。时长未知（直播）时只保证不为负。 */
-    fun stepTarget(posMs: Long, durMs: Long, deltaMs: Long): Long {
-        val target = posMs + deltaMs
-        if (durMs <= 0L) return target.coerceAtLeast(0L)
-        return target.coerceIn(0L, durMs)
-    }
+    fun stepTarget(posMs: Long, durMs: Long, deltaMs: Long): Long =
+        SyncProto.stepTarget(posMs, durMs, deltaMs)
 
     // ---- 注入给 WebView 的 JS ---------------------------------------------
     //
@@ -179,13 +173,5 @@ object WatchSync {
     }
 
     /** mm:ss / h:mm:ss —— 两端进度显示共用，避免同一秒在两边写成不同样子。 */
-    fun formatTime(ms: Long): String {
-        if (ms <= 0L) return "0:00"
-        val total = ms / 1000
-        val s = total % 60
-        val m = (total / 60) % 60
-        val h = total / 3600
-        return if (h > 0) "$h:" + "%02d".format(m) + ":" + "%02d".format(s)
-        else "$m:" + "%02d".format(s)
-    }
+    fun formatTime(ms: Long): String = SyncProto.formatTime(ms)
 }

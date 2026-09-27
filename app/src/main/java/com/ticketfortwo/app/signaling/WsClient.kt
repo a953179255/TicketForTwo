@@ -57,6 +57,12 @@ class WsClient(
     private var closed = false
 
     /**
+     * [close()] 等写线程把队列刷完的信号（含刚 send 进来的 bye），见 [close]。
+     * 没有写线程时不会有人 countDown —— 所以 close 侧只在写线程存在时才等。
+     */
+    private val flushDone = java.util.concurrent.CountDownLatch(1)
+
+    /**
      * 最后一次真正写 socket 的那条线程名。**不参与任何逻辑**，只为回归测试存在：
      * `WsClientTest` 断言它等于 [WRITER_THREAD_NAME]，从而证明 [send] 的调用方
      * 是哪条线程都不影响落地。谁要是把写操作改回"调用方直接写"，这条断言就会红 ——
@@ -97,8 +103,16 @@ class WsClient(
     }
 
     fun close() {
+        val first = !closed
         closed = true
-        outbox.clear()
+        /* 道别（bye）是"先 send 再 close"进的队列：老实现第一行就 outbox.clear()，
+           几乎必然把它吞掉 —— 房主收不到 bye，只能等 5–10 秒 ICE FAILED 才知道人走了，
+           正常离开被画成红屏故障（REVIEW-2026-09-27 P1）。这里交给写线程把剩余
+           消息刷完再关 socket（写必须留在专职线程：主线程写 socket 是
+           NetworkOnMainThreadException，见 send 的注释），限时 200ms 兜底。 */
+        if (first && writerThread != null && out != null) {
+            runCatching { flushDone.await(200, TimeUnit.MILLISECONDS) }
+        }
         runCatching { socket?.close() }
         socket = null
         out = null
@@ -117,25 +131,48 @@ class WsClient(
      * 下一条消息多久才被写出去）。再小是白耗唤醒，再大用户会觉得"打招呼很慢"。
      */
     private fun writeLoop() {
-        while (!closed) {
-            val dst = out
-            if (dst == null) {
-                Thread.sleep(10)
-                continue
+        try {
+            while (!closed) {
+                val dst = out
+                if (dst == null) {
+                    Thread.sleep(10)
+                    continue
+                }
+                val msg = try {
+                    outbox.poll(50, TimeUnit.MILLISECONDS)
+                } catch (e: InterruptedException) {
+                    break
+                } ?: continue
+                try {
+                    synchronized(writeLock) { writeFrame(dst, OP_TEXT, msg.toByteArray(Charsets.UTF_8), mask = true) }
+                    lastWriteThread = Thread.currentThread().name
+                } catch (t: Throwable) {
+                    // 带上异常类名和线程名：message 为 null 的异常（如 NetworkOnMainThreadException）
+                    // 只打 message 等于什么都没打，这个坑已经踩过一次。
+                    val at = Thread.currentThread().name
+                    Log.w(TAG, "发送失败：${t.javaClass.name}（${t.message}）于 $at")
+                }
             }
-            val msg = try {
-                outbox.poll(50, TimeUnit.MILLISECONDS)
-            } catch (e: InterruptedException) {
-                break
-            } ?: continue
+            // 收尾刷队：closed 置位后把队列剩下的（bye 就在里面）写完再退 —— close() 正在等信号
+            drainOutbox()
+        } finally {
+            flushDone.countDown()
+        }
+    }
+
+    /** 把 outbox 里剩余消息全部写出；出错或没有输出流就放弃（连接已死，队列留着也发不出去）。 */
+    private fun drainOutbox() {
+        if (out == null) return
+        while (true) {
+            val msg = outbox.poll() ?: return
             try {
-                synchronized(writeLock) { writeFrame(dst, OP_TEXT, msg.toByteArray(Charsets.UTF_8), mask = true) }
+                synchronized(writeLock) {
+                    out?.let { writeFrame(it, OP_TEXT, msg.toByteArray(Charsets.UTF_8), mask = true) }
+                }
                 lastWriteThread = Thread.currentThread().name
             } catch (t: Throwable) {
-                // 带上异常类名和线程名：message 为 null 的异常（如 NetworkOnMainThreadException）
-                // 只打 message 等于什么都没打，这个坑已经踩过一次。
-                val at = Thread.currentThread().name
-                Log.w(TAG, "发送失败：${t.javaClass.name}（${t.message}）于 $at")
+                Log.w(TAG, "收尾刷队中断：${t.javaClass.name}（${t.message}）")
+                return
             }
         }
     }

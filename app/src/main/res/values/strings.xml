@@ -8,8 +8,13 @@
     <string name="app_slogan">两张票，一个厅，管它隔着几座城</string>
 
     <string name="notif_channel">屏幕分享</string>
+    <!-- 仅语音那类前台服务（放映厅、只连麦）的通知：标题绝不能写"正在分享"，
+         那时根本没投屏 —— 用户看到会以为屏幕已经在外传（实测反馈过一次）。 -->
+    <string name="notif_channel_voice">语音</string>
+    <string name="notif_voice_title">语音已连接</string>
+    <string name="notif_voice_text">等对方加入，点停止立即结束</string>
+    <string name="notif_voice_joined">1 人已加入</string>
     <string name="notif_sharing_title">正在分享给朋友</string>
     <string name="notif_sharing_text">对方能看到你的屏幕，点停止立即结束</string>
-    <string name="notif_voice_text">语音通话中，点停止立即结束</string>
     <string name="notif_stop">停止</string>
 </resources>

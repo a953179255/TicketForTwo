@@ -785,6 +785,8 @@ function fmtClock(ms){
    退回看屏幕流，绝不留一个黑屏给观众。 */
 let cine = null, cineHls = null, cineApplyUntil = 0, cineTimer = null;
 let cineReady = false, cineWatch = null, cineAwaitTap = false, cineNeedSound = false, cineLastErr = '';
+/* 与房主的时钟偏移（本机 − 房主），NTP 式取历史最小样本（见 syncLocal）。换厅时清零。 */
+let cineSkew = null;
 const lv = document.getElementById('lv'), lvBadge = document.getElementById('lvBadge'),
       cineBar = document.getElementById('cineBar');
 
@@ -964,6 +966,7 @@ function cineDown(reason, failed, code, ver) {
   paintCtlForCine(false);
   if (cineTimer) { clearInterval(cineTimer); cineTimer = null; }
   cine = null;
+  cineSkew = null;   // 换了一场（可能换了房主），对钟重来
   cineBar.classList.add('hide');
   /* 收厅不是失败，别把它报成"对方放不出来" —— 那样房主会以为自己的选路有问题。 */
   if (failed !== false) cineAck(false, code, (reason || 'unknown') + '（' + diag + '）', v);
@@ -974,7 +977,15 @@ function cineDown(reason, failed, code, ver) {
 /** 每秒一次：把房主那条轴投影到本地，小偏差倍速追，大偏差才 seek。 */
 function syncLocal() {
   if (!cine || lv.readyState < 2) return;
-  const now = Date.now(), age = Math.max(0, now - cine.hostWall);
+  const now = Date.now();
+  /* 对钟：hostWall 是**房主的墙钟**，直接相减会把两台手机的时钟差全额算进 age ——
+     观众快 3 秒就恒定超前 3 秒播，慢 3 秒则 age 被 Math.max 夹成 0、want 冻在
+     上一条，每 2 秒一个"回拉→前跳"的抖动循环（REVIEW-2026-09-27 P1，设计文档
+     承诺的"一次对钟"此前没实现）。NTP 式：偏移取历史最小 (到达 − 发出) ≈
+     时钟差 + 最小单向时延，age 因此只剩真实流逝，且恒非负。 */
+  const skewSample = now - cine.hostWall;
+  cineSkew = cineSkew === null ? skewSample : Math.min(cineSkew, skewSample);
+  const age = Math.max(0, now - cine.hostWall - cineSkew);
   const want = cine.playing ? cine.pos + age * (cine.rate || 1) : cine.pos;
   const drift = want - lv.currentTime * 1000;
   if (now < cineApplyUntil) { paintCine(drift); return; }  // 刚发过指令，先别抢方向盘

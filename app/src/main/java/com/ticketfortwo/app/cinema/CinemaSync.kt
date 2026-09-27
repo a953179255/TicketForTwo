@@ -1,5 +1,7 @@
 package com.ticketfortwo.app.cinema
 
+import com.ticketfortwo.app.watch.SyncProto
+
 /**
  * 放映厅的同步协议 —— **纯逻辑，不碰 Android、不碰网络**，所以能在 JVM 里跑单测。
  *
@@ -52,8 +54,11 @@ object CinemaSync {
         }
     }
 
-    /** 单次步进的天花板：观众手滑连点也不该一下跳到片尾。 */
-    const val MAX_STEP_MS = 120_000L
+    /**
+     * 单次步进的天花板：观众手滑连点也不该一下跳到片尾。
+     * 值只有一份，住在 [SyncProto]（watch 那套用的是同一个）。
+     */
+    val MAX_STEP_MS: Long get() = SyncProto.MAX_STEP_MS
 
     /** 偏差超过这个数才 seek（synctv 用 1.2s，couple-cinema 用 1.8s，取更敏感的）。 */
     const val SEEK_THRESHOLD_MS = 1_200L
@@ -70,9 +75,8 @@ object CinemaSync {
 
     private const val SEP = "|"
 
-    /** 标题是网页里抓的，可能带换行、竖线、引号，必须先洗再拼。 */
-    fun sanitize(s: String?): String =
-        (s ?: "").replace(Regex("[|\"'\\\\\r\n\t]"), " ").trim().take(60)
+    /** 标题是网页里抓的，可能带换行、竖线、引号，必须先洗再拼（实现见 [SyncProto.sanitize]）。 */
+    fun sanitize(s: String?): String = SyncProto.sanitize(s)
 
     /**
      * 房主 → 观众。
@@ -82,7 +86,12 @@ object CinemaSync {
      */
     fun fields(st: State, allow: Boolean): String = listOf(
         st.version.toString(),
-        st.track.url,
+        /* URL 是唯一没过 sanitize 的字段，而分隔符就是 `|`：真实片源里带竖线的
+           不罕见（测试集里就有 2026-09-25 模拟器真抓到的 bilibili 地址）。
+           不转义的话两端全错位 —— 观众解析出 11 段、pos 落在标题上，放映状态
+           整条作废（REVIEW-2026-09-27 P1）。%7C 是 URL 里的标准写法，
+           浏览器/服务器解码后与 `|` 等价，播放不受影响。 */
+        st.track.url.replace("|", "%7C"),
         st.track.kind,
         sanitize(st.track.title),
         st.posMs.toString(),
@@ -96,7 +105,9 @@ object CinemaSync {
     /** 解析失败返回 null：宁可不更新，也不要拿半条脏数据把观众端带偏。 */
     fun parseState(f: String): State? {
         val p = f.split(SEP)
-        if (p.size < 10) return null
+        // 必须恰好 10 段：多出来的只可能来自没转义的 `|`（旧版本房主），放行等于
+        // 拿错位的字段当真值（< 10 放行 11+ 时 p[4] 其实是标题）。
+        if (p.size != 10) return null
         val url = p[1]
         if (!url.startsWith("http://") && !url.startsWith("https://")) return null
         return runCatching {
@@ -145,12 +156,11 @@ object CinemaSync {
      * 单独抽出来是因为这是个**安全边界**：`allow` 关掉之后，任何播放控制都不该生效。
      * 这条判断如果散在 UI 里，迟早有一处漏掉。
      */
-    fun accept(allow: Boolean, cmd: Cmd?): Cmd? = if (allow && cmd != null) cmd else null
+    fun accept(allow: Boolean, cmd: Cmd?): Cmd? = SyncProto.accept(allow, cmd)
 
-    /** 步进的目标位置，钳在 [0, dur] 里。 */
+    /** 步进的目标位置，钳在 [0, dur] 里（实现见 [SyncProto.stepTarget]）。 */
     fun stepTarget(posMs: Long, durMs: Long, deltaMs: Long): Long =
-        (posMs + deltaMs.coerceIn(-MAX_STEP_MS, MAX_STEP_MS)).coerceAtLeast(0L)
-            .let { if (durMs > 0) it.coerceAtMost(durMs) else it }
+        SyncProto.stepTarget(posMs, durMs, deltaMs)
 
     /**
      * 把房主那一刻的状态投影到"观众此刻应该在的第几毫秒"。
@@ -308,12 +318,6 @@ object CinemaSync {
         )
     }
 
-    fun formatTime(ms: Long): String {
-        if (ms <= 0) return "0:00"
-        val s = ms / 1000
-        val h = s / 3600
-        val m = (s % 3600) / 60
-        val sec = s % 60
-        return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%d:%02d".format(m, sec)
-    }
+    /** mm:ss / h:mm:ss，与同看那边同一个实现（恒 ASCII），见 [SyncProto.formatTime]。 */
+    fun formatTime(ms: Long): String = SyncProto.formatTime(ms)
 }

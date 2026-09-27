@@ -142,6 +142,10 @@ object TunnelManager {
             }
 
             if (origin == null) {
+                /* 用户在启动窗口里点了停止（stop() 先把进程杀了，ready 随之异常返回）：
+                   这不是失败，写 Failed 会把"取消"显示成红色网络故障页
+                   （REVIEW-2026-09-27 P1）。进程已被 stop() 收走，直接回 false。 */
+                if (stopping) return@withContext false
                 val exited = process?.isAlive != true
                 stop()
                 _state.value = State.Failed(
@@ -151,9 +155,15 @@ object TunnelManager {
                 return@withContext false
             }
 
+            // await 与 Ready 之间被 stop() 插入的窄窗口：别把 Ready 写给一个已死进程。
+            if (stopping) return@withContext false
             _state.value = State.Ready(origin)
             Log.i(TAG, "门牌已就绪 $origin → 127.0.0.1:$localPort")
             true
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // 协程被取消（CallSession.stop 取消了启动 Job）不是"隧道启动异常"：
+            // 照 catch (Throwable) 写 Failed 会给上层递一条假失败。原样抛出去。
+            throw e
         } catch (t: Throwable) {
             Log.e(TAG, "隧道启动异常：${t.message}")
             stop()

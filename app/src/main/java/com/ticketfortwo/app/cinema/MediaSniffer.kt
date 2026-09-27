@@ -53,12 +53,22 @@ object MediaSniffer {
     private val RE_MASTER = Regex("""\.m3u8([?#]|$)""", RegexOption.IGNORE_CASE)
 
     /**
-     * 有些 CDN 不把清单写成文件后缀，而是把它当成一个**路径段**或一个**查询参数**：
-     * `…/playlist/m3u8?vid=8842` 或 `…/index?type=m3u8`。
+     * 有些 CDN 不把清单写成文件后缀，而是把它当成一个**路径段**：`…/playlist/m3u8?vid=8842`。
      * 只看 `.m3u8` 后缀会把这些漏掉 —— 而漏掉一条主清单，房主看到的就是"没嗅到片源"。
+     *
+     * 这条只对着**路径**匹配（`classify` 已经把 `?`/`#` 之后截掉了），所以不写查询串那半 ——
+     * 那半原来也塞在这里，因为 `path` 里根本不可能出现 `?` 而永远匹配不上（死分支），
+     * 同时 `classify` 又内联编译了一份同义正则。现在拆出去单存，只编译一次，见 [RE_MASTER_QUERY]。
      */
-    private val RE_MASTER_LOOSE = Regex(
-        """(/m3u8([?#/]|$))|([?&](type|fmt|format|test)=m3u8)""",
+    private val RE_MASTER_LOOSE = Regex("""/m3u8([?#/]|$)""", RegexOption.IGNORE_CASE)
+
+    /**
+     * 同一类 CDN，但"查询参数本身就是清单"：`…/index?type=m3u8`。
+     * 必须在**整条 URL** 上匹配 —— 拿截掉 `?` 的路径比永远匹配不上，拿只剩 `?` 后半截的
+     * 查询串比又认不出第一个参数（`?type=m3u8` 前面没有 `&`）。文档里那条例子走的就是这条。
+     */
+    private val RE_MASTER_QUERY = Regex(
+        """[?&](type|fmt|format|test)=m3u8""",
         RegexOption.IGNORE_CASE,
     )
     private val RE_DASH = Regex("""\.mpd([?#]|$)""", RegexOption.IGNORE_CASE)
@@ -87,22 +97,33 @@ object MediaSniffer {
     )
 
     /**
+     * 带清晰度/入口字样的通常是主清单或高码率变体，优先给房主看（[score] 用）。
+     * 原来写在 `score()` 里**每次调用现编一份** —— 而 `score()` 是 `snapshot()` 的
+     * 排序键，400 条候选一轮比较要调几千次，等于每刷一次列表编译几千个正则。
+     */
+    private val RE_QUALITY = Regex(
+        """(1080|720|master|index|hd|fhd|uhd|4k)""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /**
      * 后缀只在**路径**上看，不在整条 URL 上看。
      *
      * 实测踩到的：B 站的埋点 `https://data.bilibili.com/log/web?0011…|…mp4…`
      * 把播放信息（含 .mp4 字样）塞在查询串里，整条匹配会把它当成一条"单文件片源"
      * 摆到房主面前 —— 房主一点"就它了"，观众那边必然放不出来。
+     *
+     * 唯一的例外是 [RE_MASTER_QUERY]：它认的不是**后缀**而是"查询参数就等于清单"
+     * 这件事本身（`?type=m3u8`），只能在整条 URL 上比，且压根不看 `.xxx` 长什么样。
      */
     fun classify(url: String): Kind {
         if (url.isBlank()) return Kind.Ignored
         if (RE_NOISE.containsMatchIn(url)) return Kind.Ignored
         val path = url.substringBefore('?').substringBefore('#')
-        val q = url.substringAfter('?', "")
         return when {
             RE_MASTER.containsMatchIn(path) -> Kind.Master
             RE_MASTER_LOOSE.containsMatchIn(path) ||
-                Regex("""[?&](type|fmt|format|test)=m3u8""", RegexOption.IGNORE_CASE)
-                .containsMatchIn(q) -> Kind.Master
+                RE_MASTER_QUERY.containsMatchIn(url) -> Kind.Master
             RE_DASH.containsMatchIn(path) -> Kind.Dash
             RE_SUBTITLE.containsMatchIn(path) -> Kind.Subtitle
             RE_PROGRESSIVE.containsMatchIn(path) -> Kind.Progressive
@@ -132,10 +153,8 @@ object MediaSniffer {
         }
         // 见过很多次的一般是分片或轮询；主清单通常只请求 1~2 次，反而更像"入口"
         if (h.hits in 1..3) s += 8
-        // 带清晰度字样的通常是主清单或高码率变体，优先给房主看
-        if (Regex("""(1080|720|master|index|hd|fhd|uhd|4k)""", RegexOption.IGNORE_CASE)
-                .containsMatchIn(h.url)
-        ) s += 5
+        // 带清晰度字样的通常是主清单或高码率变体，优先给房主看（见 RE_QUALITY）
+        if (RE_QUALITY.containsMatchIn(h.url)) s += 5
         return s
     }
 
@@ -259,20 +278,6 @@ object MediaSniffer {
 
     fun emeReadJs(): String =
         """(function(){ try { return JSON.stringify(window.__eme||{state:'missing'}); } catch(e){ return '{"state":"err"}'; } })()"""
-
-    /** 页面里那条 `<video>` 的进度（复用 watch 那套的字段口径，但这里只要几何与状态）。 */
-    fun videoRectJs(): String = """
-        (function(){
-          var vs = Array.prototype.slice.call(document.querySelectorAll('video'));
-          if(!vs.length) return 'null';
-          vs.sort(function(a,b){ return (b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight); });
-          var v = vs[0], r = v.getBoundingClientRect();
-          return JSON.stringify({
-            x:r.left+window.scrollX, y:r.top+window.scrollY, w:r.width, h:r.height,
-            vw:v.videoWidth, vh:v.videoHeight, css:window.devicePixelRatio||1
-          });
-        })()
-    """.trimIndent()
 }
 
 /**
@@ -359,8 +364,6 @@ class SnifferState(private val nowMs: () -> Long = System::currentTimeMillis) {
     }
 
     fun clear() = synchronized(lock) { table.clear() }
-
-    fun count(): Int = synchronized(lock) { table.size }
 
     companion object {
         private const val MAX_HITS = 400
