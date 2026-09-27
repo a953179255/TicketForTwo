@@ -569,7 +569,11 @@ internal fun StepRow(no: String, text: String, chip: String) {
 @Composable
 private fun rememberScreenWidthPx(): Int {
     val context = LocalContext.current
-    return remember(context) {
+    // key 带上当前配置宽度：manifest 配了 configChanges，转屏只重组不重建，
+    // `remember(context)` 不失效 —— "本机屏幕宽 1080px"等标签会停在旋转前的值，
+    // 和真正采集时现取的口径打架（REVIEW-2026-09-27 P2，注释自己警告过）。
+    val widthDp = LocalConfiguration.current.screenWidthDp
+    return remember(context, widthDp) {
         val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         wm.currentWindowMetrics.bounds.width()
     }
@@ -655,7 +659,13 @@ fun QualitySettingsScreen(
                                 // onFocusChanged 在首次组合时也会回调 false，所以整段必须幂等。
                                 val n = fpsText.toIntOrNull()
                                     ?.coerceIn(ShareQuality.FPS_MIN, ShareQuality.FPS_MAX)
-                                if (n != null && n != quality.fps) onChange(quality.copy(fps = n))
+                                if (n == null) {
+                                    // 清空 = 回默认档：不留"格子空着、旧值还照常生效"的分裂态
+                                    val def = ShareQuality().fps
+                                    if (quality.fps != def) onChange(quality.copy(fps = def))
+                                } else if (n != quality.fps) {
+                                    onChange(quality.copy(fps = n))
+                                }
                                 fpsText =
                                     if (n != null && n !in ShareQuality.FPSES) n.toString() else ""
                                 fpsFocused = false
@@ -707,7 +717,11 @@ fun QualitySettingsScreen(
                                 val bps = bpsText.toFloatOrNull()
                                     ?.let { (it * 1_000_000).toInt() }
                                     ?.coerceIn(ShareQuality.BPS_MIN, ShareQuality.BPS_MAX)
-                                if (bps != null && bps != quality.maxVideoBps) {
+                                if (bps == null) {
+                                    // 清空 = 回默认档（同帧率那格）
+                                    val def = ShareQuality().maxVideoBps
+                                    if (quality.maxVideoBps != def) onChange(quality.copy(maxVideoBps = def))
+                                } else if (bps != quality.maxVideoBps) {
                                     onChange(quality.copy(maxVideoBps = bps))
                                 }
                                 bpsText =
@@ -782,9 +796,11 @@ fun QualitySettingsScreen(
             }
         }
 
-        // 没有「完成」按钮：这里的每一项都是**改了立即保存**（onChange 里就写盘了），
-        // 系统返回键或左上角返回都能走。多一个确认键只会让人以为"不点就不生效"。
+        // 没有「完成」按钮：这里的每一项都是**改了立即保存**（onChange 里就写盘了）。
+        // 底部补一颗「返回」—— 原注释声称"左上角返回"可这屏根本没有返回控件，
+        // 只能靠系统手势（REVIEW-2026-09-27 P3）。多一个确认键才会让人以为"不点就不生效"。
         StatusChip("改动立即生效，直接返回即可", ChipTone.Ok)
+        PrimaryPill("返回", onBack, backdrop, Modifier.fillMaxWidth(), filled = false)
         Spacer(Modifier.height(GlassDimens.sp6))
     }
 }
@@ -1148,7 +1164,8 @@ fun EndedScreen(
                         StatusChip("只能由他发起", ChipTone.Ok)
                     }
                     Text(
-                        "让房主在他手机上重新点一次「分享屏幕」，再把新链接发给你。" +
+                        "让房主在他手机上重新点一次「分享画面」，选「分享我的屏幕」，" +
+                            "再把新链接发给你。" +
                             "这条链接连同口令已经作废，刷新也不会恢复。",
                         fontSize = 12.sp, color = Ink.TextMid, lineHeight = 17.sp,
                     )

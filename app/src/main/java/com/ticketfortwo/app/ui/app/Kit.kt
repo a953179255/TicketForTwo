@@ -530,16 +530,15 @@ fun PageScaffold(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(
-        modifier
+        // 系统 inset 必须在调用方 modifier（多为 verticalScroll）**外层**：
+        // 原来 modifier 排链首 = inset 变成滚动内容，设置页滚起来标题会穿过
+        // 状态栏、imePadding 只垫到内容末尾（REVIEW-2026-09-27 P2）。
+        Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            // 底部安全区：手势导航条会盖住内容 —— 首页的设置胶囊实测就与横杠重叠了。
             .navigationBarsPadding()
-            // 键盘：观众粘贴链接那一屏的主按钮贴在底部，键盘一弹出来就把它整个盖住，
-            // 用户看到的是"粘好了但『在 App 内观看』点不到"（t2view 实测截图里就是这样，
-            // 当时脚本连点三次没反应，因为点的全落在键盘上）。imePadding 让内容抬到
-            // 键盘之上；没弹键盘时它是 0，不影响其它屏。
             .imePadding()
+            .then(modifier)
             .padding(horizontal = GlassDimens.screenH),
         verticalArrangement = Arrangement.spacedBy(GlassDimens.sp4),
     ) {

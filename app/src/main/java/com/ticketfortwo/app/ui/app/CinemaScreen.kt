@@ -311,8 +311,10 @@ fun CinemaScreen(
     }
 
     // EME 探测：先发起（结果写到 window 上），再轮询读 —— 不赌 WebView 会不会 await Promise
-    // webGen 进 key：渲染进程重建后旧 effect 抓的还是已 destroy 的实例（下两处同）。
-    LaunchedEffect(pageUrl, webGen) {
+    // showPanel 进 key：量具默认收着，面板没开就别探 —— 换页即注入 + 最长 16 秒轮询
+    // 而读数只在「展开嗅探」里才显示，从没打开过也白付这笔开销（REVIEW P3）。
+    LaunchedEffect(pageUrl, webGen, showPanel) {
+        if (!showPanel) return@LaunchedEffect
         webView.post { webView.evaluateJavascript(MediaSniffer.emeStartJs(), null) }
         var tries = 0
         while (tries < 20) {
@@ -463,7 +465,7 @@ fun CinemaScreen(
             val u = normalizeUrl(inputUrl)
             if (u == pageUrl) reloadSeq++ else pageUrl = u
             note = "正在打开，嗅探中…"
-        }, backdrop = backdrop, height = 44.dp)
+        }, backdrop = backdrop, height = 44.dp, enabled = inputUrl.isNotBlank())
     }
     }
 

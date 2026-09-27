@@ -93,6 +93,16 @@ video{width:100%;height:100%;object-fit:contain;background:#000;display:block}
    写在 .hit 之后，同权重下后来者赢：权限一收，残留的按下高亮立刻让位。 */
 .wbtn:disabled{opacity:.36;cursor:default;transform:none;background:rgba(255,255,255,.05);
   color:var(--text-low);border-style:dashed}
+/* 可拖进度轨（REVIEW观看端 P2-9）：协议里 seek 一直就位，只差这条 UI ——
+   没有它，"跳到第 20 分钟"要连按 +10 一百多次。白轨白钮，任何壁纸/视频底上都可读。 */
+.wtrack{position:relative;height:22px;display:flex;align-items:center;cursor:pointer;
+  flex:1 1 auto;min-width:140px;margin-top:2px;touch-action:none}
+.wtrack::before{content:"";position:absolute;left:0;right:0;height:4px;border-radius:2px;
+  background:rgba(255,255,255,.25)}
+.wfill{position:relative;height:4px;border-radius:2px;background:rgba(255,255,255,.92);
+  width:0%;pointer-events:none}
+.wfill::after{content:"";position:absolute;right:-6px;top:-4px;width:12px;height:12px;
+  border-radius:50%;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.5)}
 .wtime{font-size:11.5px;color:var(--text-mid);white-space:nowrap;font-variant-numeric:tabular-nums}
 .center{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px;z-index:6}
 .card{background:var(--surface-1);border:1px solid rgba(255,255,255,.08);border-radius:var(--r-card);
@@ -173,6 +183,10 @@ button.primary{background:var(--accent);color:#fff;border:0;border-radius:var(--
     <div class="line1">
       <span id="cTitle">一起看</span>
       <span class="chip" id="cPerm">仅观看</span>
+    </div>
+    <!-- 进度轨：点/拖跳转，发 seek|ms（sendCine 的本地乐观会先在本页生效） -->
+    <div class="wtrack" id="cTrack" title="点击或拖动跳转">
+      <div class="wfill" id="cTrackFill"></div>
     </div>
     <div class="line2">
       <button class="wbtn" id="cBack" title="后退 10 秒">-10</button>
@@ -279,7 +293,13 @@ function openSocket(){
     return;
   }
 
-  ws.onopen = () => { send({ t: 'hello', role: 'viewer', env: viewerEnv() }); };
+  // 每次开页面一个会话 id：房主靠它区分"同会话的信令重连"（画面不断）与
+  // "刷新/新设备"（必须重新发 offer）—— 没有它，刷新后的页面拿着旧 peer
+  // 永远等不到 offer（REVIEW-2026-09-27 P1）。
+  const viewerSid = (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : (Date.now().toString(36) + Math.random().toString(36).slice(2));
+  ws.onopen = () => { send({ t: 'hello', role: 'viewer', env: viewerEnv(), sid: viewerSid }); };
   ws.onmessage = ev => { onMessage(ev.data); };
   ws.onclose = () => {
     if (closedByUs) return;
@@ -816,6 +836,7 @@ function onCinema(f) {
   if (!/^https?:\/\//i.test(st.url)) { cineDown('这条地址不能直接播', true, 'badurl', st.ver); return; }
   if (cine && st.ver < cine.ver) return;   // 乱序到达的旧状态：丢掉，别把进度倒回去
   const switched = !cine || cine.url !== st.url;
+  const prevVer = cine ? cine.ver : -1;
   cine = st;
   // 放映已经开始，等候期那个定时器就没用了，撤掉免得它晚一步把卡片盖回来
   if (voiceTimer) { clearTimeout(voiceTimer); voiceTimer = null; }
@@ -825,6 +846,13 @@ function onCinema(f) {
      观众会以为仍然没画面。状态换了，措辞也要跟着换。 */
   $('topRight').textContent = '在一起看';
   if (switched) loadLocal(st); else syncLocal();
+  /* 同 URL 换版本（房主中途把同一条重递一次）：switched=false 不走 loadLocal，
+     而回执只挂在加载路径上 —— 房主那边 12 秒后挂"没等到回执"，对方其实一直在放
+     （REVIEW-2026-09-27 P3）。已经在播就按当前画面补一条回执；
+     还没加载完的话 loadedmetadata 会带着新 ver 补上。 */
+  if (!switched && st.ver !== prevVer && lv.videoWidth) {
+    cineAck(true, 'ok', lv.videoWidth + 'x' + lv.videoHeight, st.ver);
+  }
   paintCine();
 }
 
@@ -1011,6 +1039,15 @@ function paintCine(drift) {
      读起来像"不能按" —— 一个能力被自己的样式藏起来了。 */
   perm.className = 'chip' + (cine.allow ? ' ok' : '');
   document.getElementById('cPlay').textContent = cine.playing ? '❚❚' : '▶';
+  // 进度轨：宽度 = 本地真实进度；没权限时轨道压暗，和 wbtn:disabled 同一语言
+  const fill = document.getElementById('cTrackFill');
+  const track = document.getElementById('cTrack');
+  if (fill) {
+    const dur = cine.dur || (lv.duration || 0) * 1000;
+    const cur = cineReady ? lv.currentTime * 1000 : 0;
+    fill.style.width = (dur > 0 ? Math.min(100, Math.max(0, cur / dur * 100)) : 0) + '%';
+  }
+  if (track) track.style.opacity = cine.allow ? '1' : '.4';
   /* 没出画面之前不报时间：显示一个"0:00 / 10:34"会让人以为进度坏了，
      其实只是还没接上；Δ 也一样 —— 没同步过时它是个几千毫秒的假数字。 */
   document.getElementById('cTime').textContent = cineReady
@@ -1063,12 +1100,75 @@ function showCineSoundPill(){
 
 function sendCine(act) {
   if (!cine || !cine.allow) { cineNote('房主还没把方向盘交出来'); return; }
-  cineApplyUntil = Date.now() + 800;   // 回声窗口：这 800ms 里不自动纠正
+  /* 本地先落一步（REVIEW观看端 P2-7）：原来只 send 不动本地，观众按完要等房主
+     下一条广播（最长 2 秒）才有反应，看着像没按上；连按两下还会叠双份。
+     本地立即执行 + 把纠正窗口从 800ms 延到 2.2 秒（盖过下一条 2 秒广播），
+     广播回来只做校正、不再抢方向盘。 */
+  cineApplyUntil = Date.now() + 2200;
+  const parts = String(act).split('|'), cmd = parts[0], arg = +parts[1] || 0;
+  const d = isFinite(lv.duration) ? lv.duration : 0;
+  const clamp = t => (d > 0 && t > d ? d : (t < 0 ? 0 : t));
+  if (cmd === 'step') {
+    lv.currentTime = clamp(lv.currentTime + arg / 1000);
+    runCute(() => lv.play());
+  } else if (cmd === 'seek') {
+    lv.currentTime = clamp(arg / 1000);
+  } else if (cmd === 'pause') {
+    lv.pause();
+  } else if (cmd === 'play') {
+    runCute(() => lv.play());
+  }
+  // 把本地真相回写进镜像：进度条/状态与画面一致，纠正窗口内也不会被拽走
+  cine.pos = lv.currentTime * 1000;
+  cine.hostWall = Date.now();
+  cine.playing = !lv.paused;
+  paintCine();
   send({ t: 'ccmd', f: act });
 }
 document.getElementById('cBack').onclick = () => sendCine('step|-10000');
 document.getElementById('cFwd').onclick = () => sendCine('step|10000');
 document.getElementById('cPlay').onclick = () => sendCine(cine && cine.playing ? 'pause' : 'play');
+
+/* 进度轨：点按即跳、按住拖动预览、松手才发最终 seek（拖动中不刷屏）。
+   没权限时与按钮同一门禁；本地先落 + cineApplyUntil 窗口由 sendSeek/预览共用，
+   广播回来只做校正（REVIEW观看端 P2-9，协议 seek 早就位）。 */
+(function bindCineTrack() {
+  const track = document.getElementById('cTrack');
+  if (!track) return;
+  let dragging = false;
+  const durSec = () => (isFinite(lv.duration) && lv.duration > 0)
+    ? lv.duration
+    : (cine && cine.dur > 0 ? cine.dur / 1000 : 0);
+  const ratioOf = ev => {
+    const r = track.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
+  };
+  const applyLocal = r => {
+    const d = durSec();
+    if (!(d > 0)) return false;
+    const t = Math.max(0, Math.min(d, r * d));
+    lv.currentTime = t;
+    // 镜像同步：进度条/状态与画面一致，纠正窗口内也不会被下一条广播拽走
+    cine.pos = t * 1000; cine.hostWall = Date.now(); cine.playing = !lv.paused;
+    cineApplyUntil = Date.now() + 2200;
+    paintCine();
+    return true;
+  };
+  track.addEventListener('pointerdown', ev => {
+    if (!cine || !cine.allow) { cineNote('房主还没把方向盘交出来'); return; }
+    dragging = true;
+    try { track.setPointerCapture(ev.pointerId); } catch (e) { /* 老浏览器没这个 API 就算了 */ }
+    if (applyLocal(ratioOf(ev))) send({ t: 'ccmd', f: 'seek|' + Math.round(lv.currentTime * 1000) });
+  });
+  track.addEventListener('pointermove', ev => {
+    if (dragging) applyLocal(ratioOf(ev));   // 拖动中只本地预览，不发消息
+  });
+  track.addEventListener('pointerup', ev => {
+    if (!dragging) return;
+    dragging = false;
+    if (applyLocal(ratioOf(ev))) send({ t: 'ccmd', f: 'seek|' + Math.round(lv.currentTime * 1000) });
+  });
+})();
 lv.addEventListener('loadedmetadata', () => {
   // 首帧出来才敢说"原生画质"：这一行是 S 档成没成的直接证据
   if (!lv.videoWidth) return;
@@ -1346,10 +1446,13 @@ function hud(text){
   hud._t = setTimeout(() => h.classList.remove('on'), 650);
 }
 function curBright(){
-  const m = /brightness\(([\d.]+)\)/.exec(activePlayer().style.filter || '');
+  /* 挂在 #stage 而不是 activePlayer()：进放映厅后 activePlayer 换成 lv，
+     之前调好的亮度留在看不见的 video 上、新画面直接回 100%（REVIEW P3-13）。 */
+  const s = $('stage');
+  const m = s ? /brightness\(([\d.]+)\)/.exec(s.style.filter || '') : null;
   return m ? +m[1] : 1;
 }
-function setBright(b){ activePlayer().style.filter = 'brightness(' + b.toFixed(2) + ')'; }
+function setBright(b){ const s = $('stage'); if (s) s.style.filter = 'brightness(' + b.toFixed(2) + ')'; }
 
 (function playerGestures(){
   const stage = $('stage');
@@ -1370,6 +1473,10 @@ function setBright(b){ activePlayer().style.filter = 'brightness(' + b.toFixed(2
         const v = Math.max(0, Math.min(1, g.vol + k));
         const pl = activePlayer();
         pl.volume = v; pl.muted = v <= 0.001;
+        /* 同步音量键状态（REVIEW P3-12）：拖到 0 时 volOn 还是 true，
+           下一次按音量键算出的 muted 不变 —— "点了没反应"要按两次才生效。 */
+        volOn = v > 0.001;
+        $('btnVol').innerHTML = volOn ? ICON.vol : ICON.mute2;
         if (pl === lv && v > 0) { cineNeedSound = false; paintCine(); }   // 拖音量就是要声音
         hud('音量 ' + Math.round(v * 100) + '%');
       } else {
