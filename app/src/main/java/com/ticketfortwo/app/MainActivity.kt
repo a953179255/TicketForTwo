@@ -47,6 +47,7 @@ import com.ticketfortwo.app.cinema.CinemaIntents
 import com.ticketfortwo.app.cinema.extractSharedUrl
 import com.ticketfortwo.app.ui.app.CallScreen
 import com.ticketfortwo.app.ui.app.CinemaScreen
+import com.ticketfortwo.app.ui.app.cinemaLastPageUrl
 import com.ticketfortwo.app.ui.app.resetActivityBrightness
 import android.app.PictureInPictureParams
 import android.app.PictureInPictureUiState
@@ -419,7 +420,28 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     }
 
     fun openCinema() {
-        if (CallSession.isActive) { showCinema = true; return }
+        if (CallSession.isActive) {
+            // 厅里已经有片：WebView 离屏即毁、重进是全新实例 —— 不把地址接回去，
+            // 它会掉回默认测试页而放映状态还挂着（实测：放映中退出再进变 test.html）。
+            // 接回优先级：离开时浏览的那一页（站点的播放器最懂怎么放自己）>
+            // 嗅探到的片源地址（m3u8 直开可能被 CORS/UA 拒）。
+            // 只在"当前地址不是用户刚递进来的新链接"时接管：enterCinema 递新链接进来
+            // （cinemaUrl 已被改成新值）不归这条管，老片源照旧挂到 用户点「开始放映」。
+            CallSession.cinema.value?.let { st ->
+                val page = cinemaLastPageUrl
+                val target = when {
+                    page != null && (cinemaUrl == null || cinemaUrl == st.track.url) -> page
+                    cinemaUrl == null -> st.track.url
+                    else -> null
+                }
+                if (target != null && cinemaUrl != target) {
+                    cinemaUrl = target
+                    cinemaSeq += 1
+                }
+            }
+            showCinema = true
+            return
+        }
         if (!granted(context, Manifest.permission.RECORD_AUDIO)) {
             cinemaMicGrant.launch(Manifest.permission.RECORD_AUDIO)
             return

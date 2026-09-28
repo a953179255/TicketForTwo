@@ -78,6 +78,16 @@ const val CINEMA_TEST_LOCAL = WATCH_TEST_URL
 const val CINEMA_TEST_HLS_2 = "https://test-streams.mux.dev/pts_shift/master.m3u8"
 
 /**
+ * 放映厅里**最后加载的那一页**（进程级，CinemaScreen 的加载 effect 维护）。
+ *
+ * WebView 离屏即毁、重进是全新实例 —— openCinema 靠它把地址接回"离开时看的那一页"：
+ * 影站的播放器最懂怎么放它自己的片（含站点的记忆播放），比接回嗅探到的裸流地址
+ * （m3u8 直开在某些站点会 CORS/UA 拒播）稳得多。会话结束时不必清：门禁在
+ * 恢复逻辑里（"本页 == 进厅时记录的那一页" + 放映状态还挂着），陈旧值伤不到人。
+ */
+var cinemaLastPageUrl: String? = null
+
+/**
  * 等多久就算"对方没给回执"。
  *
  * 观众侧自己有个 8 秒看门狗（没首帧就退回屏幕流并回一条 fail），所以正常路径上
@@ -156,6 +166,14 @@ fun CinemaScreen(
     val screenShared = CallSession.localVideo.collectAsState().value != null
     /** 对方那边到底播出来了没有 —— 没有这条回执时，"正在放映"三个字是半真半假的。 */
     val playback by CallSession.viewerPlayback.collectAsState()
+    /* 厅回来接片：进厅那一刻记下放映状态（位置/是否在播）。WebView 离屏即毁、
+       重进是全新实例，页面从头加载 —— 站点自己复播（记忆播放追平了离开时的位置）
+       就不动它，明显落后才拨回去；片源未就绪（dur=0）就等下一轮探针。
+       换片/换页由"本页 == 片源地址"门禁拦住，不会污染用户后来打开的别的页面；
+       播放中的话拨完接着放（WebView 已关手势门，程序化 play 放行）。 */
+    var pendingRestore by remember {
+        mutableStateOf(cinema?.let { CinemaResume(url = pageUrl, posMs = it.posMs, playing = it.playing) })
+    }
     /** 房主这一侧播放器的位置/时长/标题 —— 直接复用 watch 那套探针，形状一样。 */
     var player by remember { mutableStateOf<com.ticketfortwo.app.watch.WatchState?>(null) }
     /** 方向盘给不给对方。会话里那份是真值，这里只是本地即时反馈（点下去先亮起来）。 */
@@ -282,6 +300,7 @@ fun CinemaScreen(
         hits = emptyList()
         probe = null
         webView.loadUrl(pageUrl)
+        cinemaLastPageUrl = pageUrl   // 给 openCinema 的"回厅接片"留导航记忆
     }
 
     // 厅已经开着的时候又来了一条分享（singleTop + onNewIntent）：换片，不重开 Activity。
@@ -373,6 +392,30 @@ fun CinemaScreen(
                 if (!w.found) return@evaluateJavascript
                 player = w
                 CallSession.publishCinemaProgress(w.posMs, w.durMs, w.playing)
+                // 厅回来接片：加载的还是进厅时记录的那一页（= 放映中那条片源所在页）
+                // 时，把进度拨回去（见 pendingRestore）。换了片 / 用户用「打开」去了别的页
+                // （pageUrl 对不上）就作废，别污染新页面。
+                val resume = pendingRestore
+                if (resume != null && cinema != null && pageUrl == resume.url && w.durMs > 0) {
+                    pendingRestore = null
+                    if (w.posMs < resume.posMs - 3_000) {
+                        // 站点自己的记忆播放没追上离开时的位置才拨，免得两套恢复打架
+                        val target = resume.posMs.coerceAtMost(w.durMs - 1_000).coerceAtLeast(0L)
+                        webView.evaluateJavascript(
+                            WatchSync.jsFor(WatchCmd.Seek(target), w.posMs, w.durMs), null,
+                        )
+                        if (resume.playing) {
+                            webView.evaluateJavascript(
+                                WatchSync.jsFor(WatchCmd.Play, target, w.durMs), null,
+                            )
+                        }
+                        Log.i(
+                            "Cinema",
+                            "厅回来接片：${w.posMs / 1000}s -> ${target / 1000}s" +
+                                if (resume.playing) " 并继续播放" else "",
+                        )
+                    }
+                }
             }
         }
     }
@@ -967,3 +1010,6 @@ private fun androidx.compose.foundation.layout.BoxScope.FullscreenHint(text: Str
         Text(text, fontSize = 12.sp, color = Ink.TextHi)
     }
 }
+
+/** 厅回来接片用的恢复点（见 CinemaScreen 的 pendingRestore）。 */
+private data class CinemaResume(val url: String, val posMs: Long, val playing: Boolean)
