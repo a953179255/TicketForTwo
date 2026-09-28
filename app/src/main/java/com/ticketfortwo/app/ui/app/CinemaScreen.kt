@@ -61,6 +61,7 @@ import com.ticketfortwo.app.ui.glass.CompactGlassField
 import com.ticketfortwo.app.ui.glass.GlassPageBar
 import com.ticketfortwo.app.ui.glass.GlassPanel
 import com.ticketfortwo.app.ui.glass.GlassTextButton
+import com.ticketfortwo.app.ui.glass.LiquidGlassButton
 import com.ticketfortwo.app.ui.glass.LiquidToggle
 import com.ticketfortwo.app.ui.theme.GlassDimens
 import com.ticketfortwo.app.ui.theme.Ink
@@ -69,6 +70,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.draw.clip
@@ -98,10 +100,10 @@ private const val PIN_VIDEO_JS =
       var v=vs.sort(function(a,b){var A=a.getBoundingClientRect(),B=b.getBoundingClientRect();
         return B.width*B.height-A.width*A.height;})[0];
       if(v.dataset.t2saved!==undefined){
-        var rr=v.getBoundingClientRect();
-        if(rr.height>0) return 'ok';
-        // 标记还在、盒子却塌成 0（实测 100vh 在此 WebView 解析为 0、rect=0）：
-        // 不 return，往下用 innerHeight 像素重钉一次
+        var rr=v.getBoundingClientRect(), vw2=window.innerWidth, vh2=window.innerHeight;
+        // 盒子尺寸跟视口对得上才算钉住；对不上（布局换过、视口变了）就重钉一次
+        if(rr.height>0 && Math.abs(rr.height-vh2)<4 && Math.abs(rr.width-vw2)<4)
+          return 'ok|vp='+vw2+'x'+vh2+'|rect='+Math.round(rr.top)+','+Math.round(rr.width)+','+Math.round(rr.height);
       }
       if(v.dataset.t2saved===undefined) v.dataset.t2saved=v.style.cssText;
       var vw=window.innerWidth||372, vh=window.innerHeight||0;
@@ -115,7 +117,7 @@ private const val PIN_VIDEO_JS =
       v.style.setProperty('background','#000','important');
       v.style.setProperty('z-index','2147483647','important');
       var r=v.getBoundingClientRect();
-      return 'fix|vh='+vh+'|rect='+[Math.round(r.top),Math.round(r.width),Math.round(r.height)].join(',');})()"""
+      return 'fix|vp='+vw+'x'+vh+'|rect='+[Math.round(r.top),Math.round(r.width),Math.round(r.height)].join(',');})()"""
 
 private const val UNPIN_VIDEO_JS =
     """(function(){
@@ -256,6 +258,43 @@ fun CinemaScreen(
     val mayControl by CallSession.viewerMayControl.collectAsState()
     var allowControl by remember { mutableStateOf(mayControl) }
     LaunchedEffect(mayControl) { allowControl = mayControl }
+
+    /* ── 收藏夹（参考雨见「书签收藏」；本 App 没有服务器，落本地 SharedPreferences）──
+       条目 = "url␟标题" 的 StringSet；★ 是当前页的收藏开关，动作行的「收藏夹」打开列表。 */
+    val favPrefs = remember {
+        context.getSharedPreferences("t2_cinema_fav", Context.MODE_PRIVATE)
+    }
+    var favs by remember {
+        mutableStateOf(favPrefs.getStringSet("set", emptySet())!!.toList())
+    }
+    var showFavs by remember { mutableStateOf(false) }
+    fun persistFavs() {
+        favPrefs.edit().putStringSet("set", favs.toSet()).apply()
+    }
+    fun toggleFav() {
+        val u = cinemaLastPageUrl ?: pageUrl
+        val exist = favs.firstOrNull { it.substringBefore('␟') == u }
+        if (exist != null) {
+            favs = favs - exist
+            note = "已取消收藏"
+        } else {
+            val t = player?.title?.takeIf { it.isNotBlank() && !it.startsWith("http", true) } ?: u
+            favs = favs + "$u␟$t"
+            note = "已收藏：$t"
+        }
+        persistFavs()
+    }
+    fun openFav(u: String) {
+        showFavs = false
+        val norm = normalizeUrl(u)
+        if (norm != pageUrl) {
+            inputUrl = norm
+            pageUrl = norm
+        } else {
+            reloadSeq++
+        }
+        note = "打开收藏"
+    }
 
     val sniffer = remember { SnifferState() }
 
@@ -719,11 +758,39 @@ fun CinemaScreen(
             modifier = Modifier.weight(1f).padding(end = 2.dp),
             boxHeight = 44.dp,
         )
-        PrimaryPill(text = "打开", onClick = {
-            val u = normalizeUrl(inputUrl)
-            if (u == pageUrl) reloadSeq++ else pageUrl = u
-            note = "正在打开，嗅探中…"
-        }, backdrop = backdrop, height = 44.dp, enabled = inputUrl.isNotBlank())
+        // 刷新：真浏览器语义 —— 重载**当前**这一页（站内点跳走后也对），不是地址栏那条
+        GlassIconBtn("⟳", backdrop) {
+            webView.reload()
+            note = "重新加载这一页"
+        }
+        // 收藏开关：★ = 当前页已在收藏夹；再点一次取消。列表入口在动作行「收藏夹」
+        GlassIconBtn(
+            if ((cinemaLastPageUrl ?: pageUrl).let { u -> favs.any { it.substringBefore('␟') == u } }) "★" else "☆",
+            backdrop,
+            accent = (cinemaLastPageUrl ?: pageUrl).let { u -> favs.any { it.substringBefore('␟') == u } },
+        ) { toggleFav() }
+        // 打开：圆角矩形 —— PrimaryPill 的 percent=50 在两字按钮上糊成一颗圆球，
+        // 和方框不同高不同形（2026-09-29 用户反馈）；改用液态玻璃圆角矩形
+        LiquidGlassButton(
+            onClick = {
+                val u = normalizeUrl(inputUrl)
+                if (u == pageUrl) reloadSeq++ else pageUrl = u
+                note = "正在打开，嗅探中…"
+            },
+            backdrop = backdrop,
+            modifier = Modifier.height(44.dp).width(64.dp),
+            shape = RoundedCornerShape(14.dp),
+            enabled = inputUrl.isNotBlank(),
+            surfaceColor = Ink.AccentSolid,
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "打开",
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White,
+            )
+        }
     }
     }
 
@@ -784,6 +851,8 @@ fun CinemaScreen(
         // 那正是"回不去上一页"的直接原因，2026-09-29 用户反馈）
         GlassTextButton("后退", onClick = { browserBack() }, backdrop,
             enabled = canGoBack || navStack.size >= 2)
+        // 收藏夹：存过的网站一键回来（参考雨见「书签收藏」；本地存储，无服务器）
+        GlassTextButton("收藏夹", onClick = { showFavs = true }, backdrop)
         GlassTextButton(if (showPanel) "收起嗅探" else "展开嗅探", onClick = {
             showPanel = !showPanel
         }, backdrop)
@@ -854,18 +923,13 @@ fun CinemaScreen(
                 Box(Modifier.width(6.dp))
                 ModeSeg(
                     theater = theater,
+                    backdrop = backdrop,
                     onTheater = { theater = true; pinVideo(true) },
                     onBrowse = { theater = false; pinVideo(false) },
                 )
             }
-            /* 顶栏常驻「复制邀请」：放映中面板在横屏是可滚的320dp 窄栏，光靠面板里
-               那一行不够 —— 参考 SyncWatch/couple-cinema/star-syncplayer 三家的共同做法：
-               播放中邀请入口放常驻顶栏，任何状态下一键可复制。
-               放映模式例外：顶栏让位给分段开关，邀请入口挪进甲板的时间行（效果图B）。 */
-            if (!inviteUrl.isNullOrBlank() && !theater) {
-                Box(Modifier.width(6.dp))
-                GlassTextButton("复制邀请", onClick = copyInvite, backdrop = backdrop)
-            }
+            /* 顶栏不再放「复制邀请」：竖屏浏览有底卡邀请行、放映模式有甲板时间行胶囊、
+               横屏右栏也有 —— 顶栏那颗和地址下方那颗重复（2026-09-29 用户反馈）。 */
         }
 
         if (wide) {
@@ -987,18 +1051,18 @@ fun CinemaScreen(
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    DeckCircle("-10") { hostCmd(WatchCmd.Step(-10_000)) }
+                    DeckCircle("-10", backdrop) { hostCmd(WatchCmd.Step(-10_000)) }
                     Box(Modifier.width(34.dp))
-                    DeckCircle(if (player?.playing == true) "❚❚" else "▶", big = true) {
+                    DeckCircle(if (player?.playing == true) "❚❚" else "▶", backdrop, big = true) {
                         hostCmd(if (player?.playing == true) WatchCmd.Pause else WatchCmd.Play)
                     }
                     Box(Modifier.width(34.dp))
-                    DeckCircle("+10") { hostCmd(WatchCmd.Step(10_000)) }
+                    DeckCircle("+10", backdrop) { hostCmd(WatchCmd.Step(10_000)) }
                 }
                 Box(Modifier.height(16.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     if (cinema != null) {
-                        DockBtn("收厅", Modifier.weight(1f), hot = true) {
+                        DockBtn("收厅", backdrop, Modifier.weight(1f), hot = true) {
                             CallSession.setCinemaTrack(null)
                             note = "已收厅，对方那边退回等候屏"
                             theater = false
@@ -1006,10 +1070,10 @@ fun CinemaScreen(
                         }
                     }
                     if (!screenShared) {
-                        DockBtn("分享我的屏幕", Modifier.weight(1f)) { onStartShare() }
+                        DockBtn("分享我的屏幕", backdrop, Modifier.weight(1f)) { onStartShare() }
                     }
                     // 放映模式里也有后退 —— 广告页一键退回，不必先切「浏览」
-                    DockBtn("后退", Modifier.weight(1f)) { browserBack() }
+                    DockBtn("后退", backdrop, Modifier.weight(1f)) { browserBack() }
                 }
                 Box(Modifier.height(12.dp))
                 Row(
@@ -1057,6 +1121,85 @@ fun CinemaScreen(
                这两个条件一叠加，整张卡直接消失，屏幕上只剩一块黑 —— 量具默认收起之后
                第一时间就踩到了（截图实测）。 */
             panel(Modifier)
+        }
+    }
+
+    /* 收藏夹列表：整屏遮罩 + 居中玻璃卡（动作行「收藏夹」打开）。点条目/「打开」进站，
+       「删除」移除；点遮罩或「关闭」收起。 */
+    if (showFavs) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color(0xA6000000))
+                .clickable { showFavs = false },
+            contentAlignment = Alignment.Center,
+        ) {
+            GlassCardPanel(
+                backdrop,
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 28.dp)
+                    .clickable { /* 卡内点击吞掉，别把遮罩点穿 */ },
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "收藏夹",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Ink.TextHi,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            "关闭",
+                            fontSize = 13.sp,
+                            color = Ink.TextMid,
+                            modifier = Modifier
+                                .clickable { showFavs = false }
+                                .padding(6.dp),
+                        )
+                    }
+                    Box(Modifier.height(8.dp))
+                    if (favs.isEmpty()) {
+                        Text(
+                            "还没有收藏。打开想存的网站，点地址栏右边的 ☆ 就行。",
+                            fontSize = 12.5.sp,
+                            color = Ink.TextMid,
+                            lineHeight = 18.sp,
+                        )
+                    } else {
+                        Column(
+                            Modifier
+                                .heightIn(max = 400.dp)
+                                .verticalScroll(rememberScrollState()),
+                        ) {
+                            favs.forEach { entry ->
+                                val u = entry.substringBefore('␟')
+                                val t = entry.substringAfter('␟', u)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+                                ) {
+                                    Column(
+                                        Modifier
+                                            .weight(1f)
+                                            .clickable { openFav(u) },
+                                    ) {
+                                        Text(t, fontSize = 13.5.sp, color = Ink.TextHi, maxLines = 1)
+                                        Text(u, fontSize = 11.sp, color = Ink.TextMid, maxLines = 1)
+                                    }
+                                    GlassTextButton("打开", onClick = { openFav(u) }, backdrop)
+                                    Box(Modifier.width(6.dp))
+                                    GlassTextButton("删除", onClick = {
+                                        favs = favs - entry
+                                        persistFavs()
+                                    }, backdrop)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1401,68 +1544,81 @@ private data class CinemaResume(
 
 /* ── 放映模式（方案B）的四块小件 ──────────────────────────────── */
 
-/** 顶栏「放映 | 浏览」分段开关：选中半边用主题绿压一层，未选中是幽灵字。 */
+/** 顶栏「放映 | 浏览」分段开关 —— 液态玻璃（AndroidLiquidGlass/LiquidGlassButton）。 */
 @Composable
-private fun ModeSeg(theater: Boolean, onTheater: () -> Unit, onBrowse: () -> Unit) {
+private fun ModeSeg(theater: Boolean, backdrop: LayerBackdrop, onTheater: () -> Unit, onBrowse: () -> Unit) {
     Row(
         Modifier
             .clip(RoundedCornerShape(13.dp))
             .background(Color(0x14FFFFFF))
             .padding(3.dp),
     ) {
-        SegCell("放映", theater, onTheater)
-        SegCell("浏览", !theater, onBrowse)
+        SegCell("放映", theater, backdrop, onTheater)
+        SegCell("浏览", !theater, backdrop, onBrowse)
     }
 }
 
 @Composable
-private fun SegCell(label: String, on: Boolean, click: () -> Unit) {
-    Box(
-        Modifier
-            .clip(RoundedCornerShape(11.dp))
-            .background(if (on) Ink.Live.copy(alpha = 0.20f) else Color.Transparent)
-            .clickable(onClick = click)
-            .padding(horizontal = 12.dp, vertical = 5.dp),
+private fun SegCell(label: String, on: Boolean, backdrop: LayerBackdrop, click: () -> Unit) {
+    LiquidGlassButton(
+        onClick = click,
+        backdrop = backdrop,
+        modifier = Modifier.height(34.dp),
+        shape = RoundedCornerShape(11.dp),
+        surfaceColor = if (on) Ink.Live.copy(alpha = 0.22f) else null,
+        contentAlignment = Alignment.Center,
     ) {
         Text(
             label,
             fontSize = 12.sp,
             fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
             color = if (on) Ink.Live else Ink.TextLow,
+            modifier = Modifier.padding(horizontal = 9.dp),
         )
     }
 }
 
-/** 甲板上的圆形传输键：大绿那颗是播放/暂停，两侧是 ±10。 */
+/**
+ * 甲板圆形传输键 —— 液态玻璃（原先是 background 半透平涂，看着只有透明没有玻璃感，
+ * 2026-09-29 用户反馈；与仓库其他按钮统一走 LiquidGlassButton 的折射+按压液感）。
+ * 大绿那颗是播放/暂停，两侧 ±10。
+ */
 @Composable
-private fun DeckCircle(label: String, big: Boolean = false, onClick: () -> Unit) {
-    Box(
-        Modifier
+private fun DeckCircle(label: String, backdrop: LayerBackdrop, big: Boolean = false, onClick: () -> Unit) {
+    LiquidGlassButton(
+        onClick = onClick,
+        backdrop = backdrop,
+        modifier = Modifier
             .height(if (big) 60.dp else 52.dp)
-            .width(if (big) 60.dp else 52.dp)
-            .clip(RoundedCornerShape(if (big) 30.dp else 26.dp))
-            .background(if (big) Ink.Live else Color(0x14FFFFFF))
-            .clickable(onClick = onClick),
+            .width(if (big) 60.dp else 52.dp),
+        shape = CircleShape,
+        surfaceColor = if (big) Ink.Live else null,
         contentAlignment = Alignment.Center,
     ) {
         Text(
             label,
             fontSize = if (big) 21.sp else 16.sp,
             fontWeight = FontWeight.SemiBold,
-            color = if (big) Color(0xFF052313) else Ink.TextHi,
+            color = if (big) Color.White else Ink.TextHi,
         )
     }
 }
 
-/** 甲板底坞的一格（收厅 / 分享我的屏幕 / 后退）。 */
+/** 甲板底坞的一格（收厅 / 分享我的屏幕 / 后退）：液态玻璃；hot = 收厅的绿染。 */
 @Composable
-private fun DockBtn(label: String, modifier: Modifier = Modifier, hot: Boolean = false, onClick: () -> Unit) {
-    Box(
-        modifier
-            .height(50.dp)
-            .clip(RoundedCornerShape(15.dp))
-            .background(if (hot) Ink.Live.copy(alpha = 0.16f) else Color(0x14FFFFFF))
-            .clickable(onClick = onClick),
+private fun DockBtn(
+    label: String,
+    backdrop: LayerBackdrop,
+    modifier: Modifier = Modifier,
+    hot: Boolean = false,
+    onClick: () -> Unit,
+) {
+    LiquidGlassButton(
+        onClick = onClick,
+        backdrop = backdrop,
+        modifier = modifier.height(50.dp),
+        shape = RoundedCornerShape(15.dp),
+        surfaceColor = if (hot) Ink.Live.copy(alpha = 0.18f) else null,
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -1470,6 +1626,31 @@ private fun DockBtn(label: String, modifier: Modifier = Modifier, hot: Boolean =
             fontSize = 12.5.sp,
             fontWeight = if (hot) FontWeight.SemiBold else FontWeight.Medium,
             color = if (hot) Ink.Live else Ink.TextHi,
+        )
+    }
+}
+
+/** 地址行小键（⟳ 刷新 / ☆★ 收藏）：44dp 触控下限的液态玻璃圆角方键。 */
+@Composable
+private fun GlassIconBtn(
+    icon: String,
+    backdrop: LayerBackdrop,
+    accent: Boolean = false,
+    onClick: () -> Unit,
+) {
+    LiquidGlassButton(
+        onClick = onClick,
+        backdrop = backdrop,
+        modifier = Modifier.height(44.dp).width(44.dp),
+        shape = RoundedCornerShape(13.dp),
+        surfaceColor = if (accent) Ink.Live.copy(alpha = 0.20f) else null,
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            icon,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = if (accent) Ink.Live else Ink.TextHi,
         )
     }
 }
