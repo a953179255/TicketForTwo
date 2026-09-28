@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -175,6 +177,12 @@ fun CallScreen(
     /** 非空才画那颗方向按钮（房主侧没有"跟随对方"这回事）。 */
     orientationLabel: String? = null,
     onCycleOrientation: () -> Unit = {},
+    /**
+     * 房主侧：顶栏左上角的"返回首页"。会话是前台服务撑着的，返回只是"人回首页"，
+     * 分享不断 —— 首页那颗变身圆钮管"回去/停止"（见 HomeSession）。
+     * null = 不画（观众侧；观众的返回语义是结束观看，见 MainActivity 的 BackHandler）。
+     */
+    onBack: (() -> Unit)? = null,
     /** 观众侧右半屏滑动调音量（0..1）。房主侧手势层不挂，这个回调不会被调用。 */
     onViewerVolume: (Float) -> Unit = {},
     /** 观众侧：房主播放器的状态镜像；没开同看时是 null，整条同看 UI 就不画。 */
@@ -386,6 +394,19 @@ fun CallScreen(
                     Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    // 返回首页（房主侧）：分享不断，首页圆钮管"回去/停止"。点击目标 44dp 是触控下限。
+                    if (onBack != null) {
+                        androidx.compose.material3.IconButton(
+                            onClick = onBack,
+                            modifier = Modifier.size(44.dp),
+                        ) {
+                            androidx.compose.material3.Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "返回首页",
+                                tint = Ink.TextHi,
+                            )
+                        }
+                    }
                     // 红点 = "你的屏幕正在被别人看"。只有语音时它是绿的：该报警的时候别贬值。
                     Box(
                         Modifier
@@ -671,11 +692,11 @@ private fun HostStage(
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
-                // 一起看：播放器在我们手里，对方才可能真的动得到进度。
+                // 同屏放映（原"一起看片"）：播放器在我们手里，对方才可能真的动得到进度。
                 // 放在这张卡里而不是控制岛上 —— 控制岛要留给"通话级"的三个动作，
                 // 而这一颗是"接下来要干什么"，和卡片说的是同一件事。
                 PrimaryPill(
-                    text = "一起看片",
+                    text = "同屏放映",
                     onClick = onOpenWatch,
                     backdrop = backdrop,
                     filled = false,

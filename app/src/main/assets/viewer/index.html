@@ -165,7 +165,7 @@ button.primary{background:var(--accent);color:#fff;border:0;border-radius:var(--
   <!-- 同看条：只在房主还在广播时出现（见 JS 里的 WATCH_STALE_MS），所以初始 hide -->
   <div class="overlay watch hide" id="watchBar">
     <div class="line1">
-      <span id="wTitle">一起看</span>
+      <span id="wTitle">同屏放映</span>
       <span class="chip" id="wPerm">仅观看</span>
     </div>
     <div class="line2" id="wKeys">
@@ -181,7 +181,7 @@ button.primary{background:var(--accent);color:#fff;border:0;border-radius:var(--
        和 #watchBar 互斥 —— 屏幕上永远只有一条这样的横条，这就是"一层 UI"。 -->
   <div class="overlay watch hide" id="cineBar">
     <div class="line1">
-      <span id="cTitle">一起看</span>
+      <span id="cTitle">同步放映</span>
       <span class="chip" id="cPerm">仅观看</span>
     </div>
     <!-- 进度轨：点/拖跳转，发 seek|ms（sendCine 的本地乐观会先在本页生效） -->
@@ -845,7 +845,7 @@ function onCinema(f) {
   document.getElementById('watchBar').classList.add('hide');  // 一次只留一条横条
   /* 顶栏那句"语音已通"是等候期的话；开始放映之后它还挂着，
      观众会以为仍然没画面。状态换了，措辞也要跟着换。 */
-  $('topRight').textContent = '在一起看';
+  $('topRight').textContent = '同步放映中';
   if (switched) loadLocal(st); else syncLocal();
   /* 同 URL 换版本（房主中途把同一条重递一次）：switched=false 不走 loadLocal，
      而回执只挂在加载路径上 —— 房主那边 12 秒后挂"没等到回执"，对方其实一直在放
@@ -1043,7 +1043,7 @@ function syncLocal() {
 
 function paintCine(drift) {
   if (!cine) return;
-  document.getElementById('cTitle').textContent = cine.title || '一起看';
+  document.getElementById('cTitle').textContent = cine.title || '同步放映';
   const perm = document.getElementById('cPerm');
   perm.textContent = cine.allow ? '可控制' : '仅观看';
   /* class 名要和样式表对得上：这里原来写的是 ' g'，而 CSS 里只有 `.chip.ok`
@@ -1211,7 +1211,7 @@ function setWatch(s){
   const bar = $('watchBar');
   if (!s) { bar.classList.add('hide'); return; }
   bar.classList.remove('hide');
-  $('wTitle').textContent = s.title || '一起看';
+  $('wTitle').textContent = s.title || '同屏放映';
   const perm = $('wPerm');
   perm.textContent = s.allow ? '可控制' : '仅观看';
   perm.className = 'chip' + (s.allow ? ' ok' : '');

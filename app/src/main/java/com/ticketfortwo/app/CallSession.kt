@@ -128,7 +128,7 @@ object CallSession {
     private val _log = MutableStateFlow<List<String>>(emptyList())
     val log: StateFlow<List<String>> = _log.asStateFlow()
 
-    // ---- 同看（一起看片）---------------------------------------------------
+    // ---- 同看（同屏放映）---------------------------------------------------
     //
     // 播放器在房主自己的 WebView 里（见 WatchTogetherScreen）。会话这边只做两件事：
     // 把播放器状态广播给观众、把观众发来的指令交给那一屏。
@@ -1007,5 +1007,36 @@ object CallSession {
             sender.parameters = params
             note("码率上限 -> ${bps / 1000} kbps")
         }.onFailure { note("设置码率失败：${it.message}") }
+    }
+
+    /**
+     * 设置页在分享进行中改档 —— 能热改的立刻生效，热不了的由调用方走授权链。
+     *
+     * 能热改的三样：声音档（applyVoicePolicy 重算麦克风/下行）、码率上限
+     * （RtpSender.setParameters）、帧率/分辨率（changeCaptureFormat，转向监听同一条路）。
+     * 它们都不动 m-line，不需要重新协商。
+     * 唯独「带画面 ⇄ 只连麦」是结构变化：**开**画面必须拿新的投屏授权（Android 规则，
+     * 复用旧 Intent 会抛 SecurityException），本地给不了 —— 返回 true 让 MainActivity
+     * 去开授权指引；**关**画面走与系统收回授权同一条已验证的路径：只停画面，会话继续。
+     *
+     * @return true = 这次切到了"带画面"但本场还没有视频轨，需要走一次系统授权。
+     */
+    fun updateQuality(q: ShareQuality): Boolean {
+        val old = quality
+        quality = q
+        if (_role.value != Role.Host || !isActive) return false
+        if (q.voiceMode != old.voiceMode) applyVoicePolicy("设置变更")
+        if (localVideoTrack != null) {
+            if (q.maxVideoBps != old.maxVideoBps) applyVideoBitrateCap(q.maxVideoBps)
+            if (q.fps != old.fps || q.scale != old.scale) capture?.applyQuality(q.scale, q.fps)
+        }
+        if (old.videoEnabled && !q.videoEnabled && localVideoTrack != null) {
+            runCatching { capture?.stopCapture() }
+            capture = null
+            localVideoTrack = null
+            _localVideo.value = null
+            note("已切到「只连麦」：画面已停，会话继续")
+        }
+        return q.videoEnabled && !old.videoEnabled && localVideoTrack == null
     }
 }

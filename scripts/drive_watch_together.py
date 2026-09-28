@@ -113,12 +113,12 @@ def main():
     if find(host, "测试片"):
         print("   房主已经在同看页上，跳过进入这一步")
     else:
-        btn = locate(host, "一起看片")
+        btn = locate(host, "同屏放映")
         if not btn:
-            print("FAIL 房主屏上找不到「一起看片」—— 分享没在跑？")
+            print("FAIL 房主屏上找不到「同屏放映」—— 分享没在跑？")
             return 1
         tap(host, btn)
-        print("   点「一起看片」，等页面加载…")
+        print("   点「同屏放映」，等页面加载…")
     time.sleep(12)
     # 网页的 autoplay 在 WebView 里经常被静默拦掉（媒体策略看的是"有没有用户手势"，
     # 而我们的手势发生在 App 的按钮上，不算给页面）。这里替用户点一下播放器本身。

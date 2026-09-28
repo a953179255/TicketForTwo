@@ -62,6 +62,7 @@ import com.ticketfortwo.app.signaling.SignalHub
 import com.ticketfortwo.app.ui.app.EndedScreen
 import com.ticketfortwo.app.ui.app.FailedScreen
 import com.ticketfortwo.app.ui.app.HomeScreen
+import com.ticketfortwo.app.ui.app.HomeSession
 import com.ticketfortwo.app.ui.app.InviteScreen
 import com.ticketfortwo.app.ui.app.PreparingScreen
 import com.ticketfortwo.app.ui.app.QualitySettingsScreen
@@ -174,6 +175,13 @@ private object PipState {
  */
 private val leftCinemaFlag = MutableStateFlow(false)
 
+/**
+ * 「已从会话屏（分享/连麦/邀请）按返回退回首页」这个 UI 意图，**进程级**（理由同
+ * [leftCinemaFlag]）。会话是前台服务撑着的，返回只是"人回首页"，不是"结束分享" ——
+ * 首页那颗变身圆钮负责"回去"和"停止"（见 HomeScreen 的 session 参数）。
+ */
+private val leftCallFlag = MutableStateFlow(false)
+
 private enum class UiRole { None, Host, Viewer }
 
 /**
@@ -192,7 +200,7 @@ private sealed interface Page {
     /** 放映厅：厅先开、人先进来、片子后选。从「分享画面」那一屏进来。 */
     object Cinema : Page
 
-    /** 「分享画面」的第二步：给对方看屏幕，还是一起放一部片。 */
+    /** 「分享画面」的第二步：给对方看屏幕，还是同步放映一部片。 */
     object ShareKind : Page
     object Consent : Page
     data class ViewerJoin(val error: String?) : Page
@@ -288,6 +296,8 @@ private fun AppRouter(backdrop: LayerBackdrop) {
      */
     /** 进程级（见 [leftCinemaFlag]）：不能用 rememberSaveable —— Activity finish 后重进会丢。 */
     val leftCinema by leftCinemaFlag.collectAsState()
+    /** 从会话屏（分享/连麦/邀请）按返回退回了首页 —— 会话没断，首页圆钮管"回去/停止"。 */
+    val leftCall by leftCallFlag.collectAsState()
     /** 首页绿色那颗圆点开的"给什么"选择页。用 saveable：配置变化不该把它甩回首页。 */
     var showShareKind by rememberSaveable { mutableStateOf(false) }
     /** 从「分享 → 双人票」递进来的链接；非空就直接开厅放这一页。 */
@@ -327,6 +337,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
            那些流程里是对的（尤其"只连麦"，它的停止钮就该叫「结束连麦」）。 */
         if (state is CallSession.State.Idle || state is CallSession.State.Preparing) {
             leftCinemaFlag.value = false
+            leftCallFlag.value = false
         }
     }
 
@@ -562,16 +573,31 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     /** 从放映厅回来了、厅还开着、正停在"等人加入" —— 这一格该回首页，见 [leftCinema]。 */
     val roomBehind = leftCinema && isHost && state is CallSession.State.WaitingViewer
 
+    /**
+     * 会话进行中按返回退到了首页 —— 分享/连麦/邀请屏都算（[leftCallFlag]）。
+     * 此时已在家，系统返回键要能照常退出 App，所以返回处理器在这里必须让位。
+     */
+    val sessionBehind = leftCall && isHost && (state is CallSession.State.WaitingViewer || state is CallSession.State.Connected)
+
     // 系统返回键：二级页面返回上一级，而不是把 App 整个退出去。
     // BackHandler 后注册的优先级更高，所以从最深的页面向浅注册。
     BackHandler(enabled = viewerState !is ViewerSession.State.Idle) { ViewerSession.stop() }
     BackHandler(enabled = viewerIntent && state is CallSession.State.Idle) {
         viewerIntent = false; paste = ""; viewerError = null
     }
-    BackHandler(enabled = showConsent) { showConsent = false }
+    /* 会话进行中按返回：回首页（会话不断，前台服务撑着），首页圆钮管"回去/停止"。
+       注册在 showXxx 之前 —— 设置/放映厅/同看这些更深的页打开时，它们的处理器
+       （注册在后面）优先级更高，返回仍归它们；已经在家（leftCall 或 roomBehind）
+       时 enabled=false，返回照常退出 App —— 不然返回会被吞，用户困在首页。 */
+    BackHandler(
+        enabled = isHost && !sessionBehind && !roomBehind &&
+            (state is CallSession.State.WaitingViewer || state is CallSession.State.Connected),
+    ) { leftCallFlag.value = true }
     BackHandler(enabled = showSettings) { showSettings = false }
     BackHandler(enabled = showWatch) { showWatch = false }
     BackHandler(enabled = showCinema) { leaveCinema() }
+    // 授权指引比放映厅更深（路由里它盖在厅上面），返回也要先关指引再谈离厅。
+    BackHandler(enabled = showConsent) { showConsent = false }
     BackHandler(enabled = showShareKind) { showShareKind = false }
 
     // 首页在两个分支里都要画（角色未定 / 兜底）。写成一处，避免以后改了其一忘了其二。
@@ -598,22 +624,58 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     }
 
     val home: @Composable () -> Unit = {
+        /* 首页圆钮的"会话进行中"态（方案二，见 HomeSession）。优先级：正在分享 >
+           放映厅已开 > 语音会话 —— 屏幕正在被看是最要紧的事实（红点同一原则）。
+           点圆回到对应的会话屏；圆下小字钮结束整场（与 CallSession.stop 同一落点）。 */
+        val homeSession: HomeSession? = when {
+            !isHost || !(leftCall || roomBehind) -> null
+            // 屏幕真的在被看 —— 最要紧的事实优先（与顶栏红点同一原则）。
+            hostVideo != null -> HomeSession(
+                label = "正在分享",
+                status = when {
+                    viewerOnline -> "1 人正在观看 · 已直连"
+                    state is CallSession.State.WaitingViewer -> "等对方进来"
+                    else -> "还没有人加入"
+                },
+                stopLabel = "停止分享",
+                // 清掉"退回首页"意图，路由自然落回 Call/Invite；leftCinema 是陈旧的放映厅意图，一并清。
+                onReturn = { leftCallFlag.value = false; leftCinemaFlag.value = false },
+                onStop = stop,
+            )
+            state is CallSession.State.Connected -> HomeSession(
+                label = "语音连麦中",
+                status = if (viewerOnline) "1 人正在观看 · 已直连" else "还没有人加入",
+                stopLabel = "结束连麦",
+                onReturn = { leftCallFlag.value = false; leftCinemaFlag.value = false },
+                onStop = stop,
+            )
+            roomBehind -> HomeSession(
+                label = "放映厅已开",
+                status = if (viewerOnline) "对方已在厅里" else "等对方进来",
+                stopLabel = "关闭放映厅",
+                onReturn = { leftCallFlag.value = false; openCinema() },
+                onStop = stop,
+            )
+            leftCall && state is CallSession.State.WaitingViewer -> HomeSession(
+                label = "等对方加入",
+                status = "邀请已就绪，发给他就能进",
+                stopLabel = "结束连麦",
+                onReturn = { leftCallFlag.value = false },
+                onStop = stop,
+            )
+            else -> null
+        }
         HomeScreen(
             backdrop = backdrop,
             // 绿色那颗圆不再直接开投屏：先进"给对方看什么"那一屏（放映厅和屏幕分享
             // 是同一件事的两条路，并列在首页会让人点错）。
+            // 会话进行中它变身成状态（方案二），点圆回到对应的会话屏。
             onStart = { showShareKind = true },
             onJoinViewer = { viewerIntent = true; paste = ""; viewerError = null },
             onSettings = { showSettings = true },
             quality = quality,
             lastSummary = lastConnected,
-            // 厅还开着（从放映厅返回落到首页）：卡上给"回去"和"关掉"两条路。
-            roomLabel = if (roomBehind) (if (viewerOnline) "对方已在厅里" else "等对方进来") else null,
-            roomLive = viewerOnline,
-            onEnterRoom = { openCinema() },
-            // 直接传引用。写成 `{ stop }` 是个空壳：stop 本身就是 () -> Unit，
-            // 花括号里只是求值一下它、不会调用 —— 按钮点下去什么都不会发生。
-            onCloseRoom = stop,
+            session = homeSession,
         )
     }
 
@@ -626,12 +688,15 @@ private fun AppRouter(backdrop: LayerBackdrop) {
         // 「分享画面」的选择页：和投屏指引同级（都还没开会话），排在它们前面。
         showShareKind -> Page.ShareKind
 
+        // 投屏授权指引：**临时覆盖层**，要能盖在放映厅上 —— 厅里"分享我的屏幕"
+        // 这条入口（v2.1 主路径）授权时人还停在厅里，指引必须压住它。
+        showConsent -> Page.Consent
+
         // 放映厅：独立的页面意图，不要求"正在分享"，所以排在 Watch 前面。
         showCinema -> Page.Cinema
 
         // 一起看：分享期间的覆盖层，盖在会话屏之上（它成立的前提就是"我还在分享"）
         showWatch -> Page.Watch
-        showConsent -> Page.Consent
 
         // ── 观众：App 内收看（与房主的 CallSession 互斥）──
         viewerState is ViewerSession.State.Connected -> Page.ViewerCall
@@ -651,6 +716,12 @@ private fun AppRouter(backdrop: LayerBackdrop) {
         // 观众还没进入会话 —— 粘贴邀请
         role == UiRole.Viewer && state is CallSession.State.Idle -> Page.ViewerJoin(viewerError)
 
+        // 分享/连麦中按返回退回了首页（leftCall）：会话在前台服务里继续跑，
+        // 首页那颗变身圆钮管"回去/停止"（见 HomeScreen 的 session 参数）。
+        // 必须排在 Connected/Invite 之前，否则回首页立刻被弹回会话屏。
+        // Failed 不在此列：失败页有自己的"重试/停止"，用户得看见它。
+        sessionBehind -> Page.Home
+
         state is CallSession.State.Connected -> Page.Call(isHost)
 
         state is CallSession.State.Failed -> Page.Failed(
@@ -659,7 +730,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
         )
 
         // 从放映厅退回首页、厅还开着（见 leftCinema）：不落「把这条发给朋友」，
-        // 更不在"返回"这个动作里结束分享 —— 首页顶上那张卡管"厅还活着、怎么回去"。
+        // 更不在"返回"这个动作里结束分享 —— 首页那颗变身圆钮管"回厅/关厅"（方案二）。
         roomBehind -> Page.Home
 
         // 门牌就绪：把这条链接发出去就完事，剩下的双方自己会走完。
@@ -703,6 +774,9 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 inviteUrl = sessionInvite,
                 viewerOnline = viewerOnline,
                 voiceMode = quality.voiceMode,
+                // 厅里切投屏：同一条授权链（指引 → 系统弹窗 → attachScreenCapture），
+                // 授权完人还留在厅里（showCinema 不动，路由里指引已让位）。
+                onStartShare = { startScreenShare() },
                 onBack = { leaveCinema() },
             )
 
@@ -716,8 +790,16 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 backdrop = backdrop,
                 quality = quality,
                 onChange = { q ->
+                    val old = quality
                     quality = q
                     scope.launch(Dispatchers.IO) { ShareQuality.save(context, q) }
+                    // 分享进行中：声音档/码率/帧率/分辨率立刻热改（CallSession.updateQuality）。
+                    // 返回 true = 切到了"带画面"但本场没有视频轨 —— 开画面必须拿新的
+                    // 投屏授权（Android 规则），直接带用户去授权指引；设置页在这里让位。
+                    if (CallSession.updateQuality(q)) {
+                        showSettings = false
+                        startScreenShare()
+                    }
                 },
                 onBack = { showSettings = false },
             )
@@ -734,10 +816,16 @@ private fun AppRouter(backdrop: LayerBackdrop) {
             Page.Consent -> ConsentGuideScreen(
                 backdrop = backdrop,
                 onBack = { showConsent = false },
-                /* 投屏这条路一提交，"已离开放映厅"就作废：厅先开的会话此时会**就地接上投屏**
-                   （CallSession.startHost 的 isActive 分支），状态仍在 WaitingViewer ——
-                   不清这个标志，用户按流程走到的还是首页那张厅卡，而不是"发链接"屏。 */
-                onContinue = { showConsent = false; leftCinemaFlag.value = false; startHostFlow() },
+                /* 投屏这条路一提交，"已离开放映厅/已从会话屏退回"就都作废：厅先开的会话此时
+                   会**就地接上投屏**（CallSession.startHost 的 isActive 分支），状态仍在
+                   WaitingViewer —— 不清标志，用户按流程走到的还是首页那张厅卡/圆钮，
+                   而不是"发链接"屏。授权完就该看见会话本身。 */
+                onContinue = {
+                    showConsent = false
+                    leftCinemaFlag.value = false
+                    leftCallFlag.value = false
+                    startHostFlow()
+                },
             )
 
             Page.ViewerCall -> CallScreen(
@@ -817,6 +905,9 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 // 这条轨只服务观众侧。
                 remoteTrack = remoteVideo,
                 isHost = p.host,
+                // 房主：顶栏左上角"返回首页"。返回只是人回首页，分享不断 ——
+                // 首页那颗变身圆钮管"回去/停止"。观众侧不画（返回=结束观看）。
+                onBack = if (p.host) ({ leftCallFlag.value = true }) else null,
                 // 以前这里是写死的「已直连」—— 没人看的时候也说"已直连"，
                 // 等于把用户问的"到底有没有人在观看"用一个假答案糊过去了。
                 peerLabel = if (viewerOnline) "1 人正在观看 · 已直连" else "还没有人加入",

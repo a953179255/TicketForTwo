@@ -63,6 +63,28 @@ import java.util.Locale
 
 // ─────────────────────────── 房主 · 首页 ───────────────────────────
 
+/**
+ * 首页那颗「分享画面」圆的"会话进行中"形态（方案二：圆钮变身）。
+ *
+ * 会话是前台服务撑着的；用户按返回回到首页，**不是**结束分享 —— 可一个还在跑的
+ * 会话如果首页上看不见，就只剩通知栏知道，而"分享到底还在不在"恰恰是用户在问的
+ * 问题（原话："在放映厅点返回以后，不应该结束分享"）。所以圆钮变身成状态：
+ * 圆内写现在在干什么，点圆回到对应的会话屏，圆下一颗小字钮负责结束整场。
+ * 「进入观看」在这一态下让位隐藏 —— 自己正在放片的人不需要"进入观看"。
+ */
+data class HomeSession(
+    /** 圆内标题：放映厅已开 / 正在分享 / 语音连麦中 / 等对方加入。 */
+    val label: String,
+    /** 一行状态：等对方进来 / 对方已在厅里 / 1 人正在观看 … */
+    val status: String,
+    /** 圆下方那颗小字钮：关闭放映厅 / 停止分享 / 结束连麦。 */
+    val stopLabel: String,
+    /** 点圆：回到对应的会话屏。 */
+    val onReturn: () -> Unit,
+    /** 小字钮：结束整场（会话级，与 CallSession.stop 同一动作）。 */
+    val onStop: () -> Unit,
+)
+
 @Composable
 fun HomeScreen(
     backdrop: LayerBackdrop,
@@ -71,19 +93,8 @@ fun HomeScreen(
     onSettings: () -> Unit,
     quality: ShareQuality,
     lastSummary: String?,
-    /**
-     * 放映厅还开着、但房主退到了首页时的一行状态（[RoomLabel] 的文案）；null = 没有开着的厅。
-     *
-     * 为什么需要这张卡：用户从放映厅按返回，期望是"离开界面"而不是"结束"（原话：
-     * "在放映厅点返回以后，不应该结束分享"）。返回落到首页，可厅还活着这件事
-     * 必须在首页看得见、也必须有入口回去 —— 否则一个还在跑的会话就只剩通知知道，
-     * 而"分享到底还在不在"恰恰是用户在问的问题。
-     */
-    roomLabel: String? = null,
-    /** 对方是不是已经在厅里 —— 决定状态胶囊的措辞与配色。 */
-    roomLive: Boolean = false,
-    onEnterRoom: () -> Unit = {},
-    onCloseRoom: () -> Unit = {},
+    /** 非空 = 会话进行中、人退到了首页：圆钮变身 + 圆下停止钮 + 「进入观看」隐藏。 */
+    session: HomeSession? = null,
 ) {
     // 横屏（含平板、折叠屏展开）单独一套排法，见下面 wideHome 的两处分支。
     // 判据用**屏幕**长宽比，不用某一块容器的：信息卡那边也要同一个结论，
@@ -127,29 +138,40 @@ fun HomeScreen(
             /* 矮屏上这两颗圆 + 两行说明就是装不进 weight(1f) 给的那点高度（实测 594dp 高的
                机器上第二颗圆被底部信息卡压掉半截）。让**这一块自己可滚**：
                高屏内容放得下 → 看不出任何变化；矮屏 → 能滚着看完，而不是叠在一起。 */
+            /* 会话进行中（session 非空）：圆钮变身成状态 —— 标题写现在在干什么，
+               点圆回到对应的会话屏；「进入观看」让位隐藏（自己正在放片的人用不上）。
+               空闲时才是普通的分享入口。 */
             val shareOrb = @Composable {
-                GlassOrbEntry(
-                    onClick = onStart,
-                    backdrop = backdrop,
-                    tint = OrbTintViolet,
-                    diameter = orbSize,
-                    icon = {
-                        Icon(
-                            OrbShareIcon,
-                            contentDescription = null,
-                            tint = OrbInk,
-                            modifier = Modifier.size(34.dp),
-                        )
-                    },
-                label = "分享画面",
-                /* 这颗圆原来叫「分享屏幕」，而「放映厅」是首页底下另一颗胶囊 ——
-                   可这两件事其实是同一件事：**把画面给出去**。分成两个入口，
-                   用户就得先懂"投屏"和"放映厅"的区别才点得对（点了屏幕分享才发现
-                   对方在看他翻相册）。现在收成一个入口，进去再选（见 ShareKindScreen）。
-                   名字也跟着改成"分享画面"：它承诺的是结果，不是一种技术。 */
-                sub = "选屏幕，或选一部片",
-                subOutside = subOutside,
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    GlassOrbEntry(
+                        onClick = session?.onReturn ?: onStart,
+                        backdrop = backdrop,
+                        tint = OrbTintViolet,
+                        diameter = orbSize,
+                        icon = {
+                            Icon(
+                                OrbShareIcon,
+                                contentDescription = null,
+                                tint = OrbInk,
+                                modifier = Modifier.size(34.dp),
+                            )
+                        },
+                        label = session?.label ?: "分享画面",
+                        /* 这颗圆原来叫「分享屏幕」，而「放映厅」是首页底下另一颗胶囊 ——
+                           可这两件事其实是同一件事：**把画面给出去**。分成两个入口，
+                           用户就得先懂"投屏"和"放映厅"的区别才点得对（点了屏幕分享才发现
+                           对方在看他翻相册）。现在收成一个入口，进去再选（见 ShareKindScreen）。
+                           名字也跟着改成"分享画面"：它承诺的是结果，不是一种技术。
+                           会话进行中它变身成状态（见 HomeSession），承诺不变。 */
+                        sub = session?.status ?: "选屏幕，或选一部片",
+                        subOutside = subOutside,
+                    )
+                    if (session != null) {
+                        Spacer(Modifier.height(8.dp))
+                        // 圆下一行小字钮：结束整场（方案二）。会话级动作，与 CallSession.stop 同一落点。
+                        GlassTextButton(session.stopLabel, onClick = session.onStop, backdrop)
+                    }
+                }
             }
             val joinOrb = @Composable {
                 GlassOrbEntry(
@@ -170,7 +192,15 @@ fun HomeScreen(
                     subOutside = subOutside,
                 )
             }
-            if (wide) {
+            if (session != null) {
+                // 会话进行中：只画变身后的圆（含停止钮），「进入观看」隐藏。
+                Column(
+                    Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    shareOrb()
+                }
+            } else if (wide) {
                 // 横屏：两颗圆并排。间距按"说明那行不会压到邻圆"给（说明最长 9 个字 ≈ 120dp，
                 // 圆半径 ~54dp，所以 48dp 的缝只是视觉间距，真正不重叠靠各自的宽度）。
                 Row(
@@ -191,53 +221,6 @@ fun HomeScreen(
                     // 而那行小字自己就有 ~19dp 高，会贴着下一个圆的上沿。
                     Spacer(Modifier.height(if (subOutside) 30.dp else 16.dp))
                     joinOrb()
-                }
-            }
-        }
-
-        // 厅还开着的那张卡：放在两颗圆和信息卡之间 —— 它是这一屏唯一的"进行中"状态，
-        // 比画质那些常驻信息更该先被看到。
-        if (roomLabel != null) {
-            GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
-                if (wideHome) {
-                    /* 横屏压成一行：竖屏那种"标题行 + 两颗 52dp 按钮"的两行卡约 100dp+，
-                       横屏首页的总预算经不起这个开销（圆钮会塌，见 orbSize 注释）。 */
-                    Row(
-                        Modifier.fillMaxWidth()
-                            .padding(horizontal = GlassDimens.sp3, vertical = GlassDimens.sp2),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2),
-                    ) {
-                        Text(
-                            "放映厅已开",
-                            fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextHi,
-                            modifier = Modifier.weight(1f),
-                        )
-                        StatusChip(roomLabel, if (roomLive) ChipTone.Ok else ChipTone.Neutral)
-                        PrimaryPill("回到放映厅", onEnterRoom, backdrop, height = 36.dp)
-                        PrimaryPill("关闭放映厅", onCloseRoom, backdrop, height = 36.dp, filled = false)
-                    }
-                } else {
-                    Column(
-                        Modifier.padding(GlassDimens.sp3),
-                        verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2),
-                    ) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                "放映厅已开",
-                                fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextHi,
-                                modifier = Modifier.weight(1f),
-                            )
-                            StatusChip(roomLabel, if (roomLive) ChipTone.Ok else ChipTone.Neutral)
-                        }
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2),
-                        ) {
-                            PrimaryPill("回到放映厅", onEnterRoom, backdrop, Modifier.weight(1f))
-                            PrimaryPill("关闭放映厅", onCloseRoom, backdrop, Modifier.weight(1f), filled = false)
-                        }
-                    }
                 }
             }
         }
@@ -318,7 +301,7 @@ fun ShareKindScreen(
     val cinemaCard = @Composable {
         KindCard(
             backdrop = backdrop,
-            title = "一起放一部片",
+            title = "同步放映",
             chip = "推荐",
             chipTone = ChipTone.Ok,
             body = "你挑片子，对方那台手机自己播同一条地址 —— 画质是原生的，" +
@@ -580,9 +563,11 @@ private fun rememberScreenWidthPx(): Int {
 }
 
 /**
- * 分享设置：分辨率 / 帧率 / 码率 / 是否带画面。
+ * 分享设置：分辨率 / 帧率 / 码率 / 声音档。
  *
- * 全部是"开始分享时生效"的档位（见 [ShareQuality] 的注释：零服务器没法中途重协商）。
+ * 分享进行中改档**即时生效**（见 [ShareQuality] 与 CallSession.updateQuality：
+ * 声音档/码率/帧率/分辨率都不动 m-line，可热改）；唯独"带画面 ⇄ 只连麦"的
+ * 结构变化要重新授权，由 onChange 里走授权指引。
  * 麦克风开关刻意不在这里 —— 它是通话中的实时动作，已在控制岛上，
  * 重复语义只留一处（沿用 HaoAI/效果图的约定）。
  */
@@ -600,7 +585,7 @@ fun QualitySettingsScreen(
     // 滚动列里不能用 SpacerWeight（weight 在无限高约束下直接崩），所以这里只垫小间距。
     PageScaffold(modifier = Modifier.verticalScroll(rememberScrollState())) {
         Spacer(Modifier.height(GlassDimens.sp6))
-        Headline("分享设置", "这些是上限不是保证值：网络差或发热时会自动再降。开始分享时生效，本场通话内不可改。")
+        Headline("分享设置", "这些是上限不是保证值：网络差或发热时会自动再降。分享中改了立即生效；开画面要重新授权一次。")
 
         SectionTitle("画质")
         GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {

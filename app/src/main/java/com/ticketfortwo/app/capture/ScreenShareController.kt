@@ -100,6 +100,21 @@ class ScreenShareController(
         capturer?.changeCaptureFormat(even(width), even(height), fps)
     }
 
+    /**
+     * 设置页中途改了分辨率/帧率：按新档重算几何、**更新转向监听的基准值**
+     * （startScale/startFps 是 watchRotation 的参照，不改它转一次屏就退回旧档）、
+     * 再热改采集格式 —— changeCaptureFormat 不动 m-line，无需重新协商。
+     */
+    fun applyQuality(scale: Float, fps: Int) {
+        startScale = scale
+        startFps = fps
+        val g = displayGeometry(scale, fps)
+        if (g == lastGeo) return
+        lastGeo = g
+        changeFormat(g.width, g.height, fps)
+        Log.i(tag, "热改采集格式 -> ${g.width}x${g.height}@${fps}fps")
+    }
+
     fun stopCapture() {
         runCatching { capturer?.stopCapture() }
     }

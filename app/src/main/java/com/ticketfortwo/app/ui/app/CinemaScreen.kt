@@ -110,6 +110,12 @@ fun CinemaScreen(
     viewerOnline: Boolean = false,
     /** 这一场的声音档，只为在状态卡上说实话（"只有视频声"时麦克风可能是关着的）。 */
     voiceMode: VoiceMode = VoiceMode.VideoOnly,
+    /**
+     * 厅里也能开投屏：首页圆钮在厅开着时是"回到放映厅"，ShareKind 进不去 ——
+     * 厅先开（只语音）再切投屏这条 v2.1 主路径的入口就落在这里
+     * （"分享我的屏幕" → 授权指引 → attachScreenCapture，授权后留在厅里接着选片）。
+     */
+    onStartShare: () -> Unit = {},
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -146,6 +152,8 @@ fun CinemaScreen(
     var canGoBack by remember { mutableStateOf(false) }
     /** 放映状态（会话里那份的本地镜像，只为画 UI）。 */
     val cinema by CallSession.cinema.collectAsState()
+    /** 现在到底有没有在投屏 —— 决定"分享我的屏幕"这颗入口还画不画。 */
+    val screenShared = CallSession.localVideo.collectAsState().value != null
     /** 对方那边到底播出来了没有 —— 没有这条回执时，"正在放映"三个字是半真半假的。 */
     val playback by CallSession.viewerPlayback.collectAsState()
     /** 房主这一侧播放器的位置/时长/标题 —— 直接复用 watch 那套探针，形状一样。 */
@@ -512,6 +520,12 @@ fun CinemaScreen(
                 }
             }
         }, backdrop)
+        // 分享我的屏幕：厅先开（只语音）再切投屏的入口。首页圆钮在厅开着时是
+        // "回到放映厅"，ShareKind 进不去 —— 这条 v2.1 主路径的入口落在这里；
+        // 授权后留在厅里接着选片。已经在投屏就藏起来（没有第二件事可做）。
+        if (!screenShared) {
+            GlassTextButton("分享我的屏幕", onClick = onStartShare, backdrop)
+        }
         // 浏览器后退：广告/自动跳转后一步步退回上一页（与系统返回键同一行为，
         // 没有这颗按钮时用户只能重开链接 —— 2026-09-28 用户反馈）
         GlassTextButton("后退", onClick = { webView.goBack() }, backdrop, enabled = canGoBack)

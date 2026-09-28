@@ -225,7 +225,7 @@ fun WatchTogetherScreen(
     }
 
     Column(Modifier.fillMaxSize()) {
-        GlassPageBar(backdrop, title = "一起看", onBack = onClose) {
+        GlassPageBar(backdrop, title = "同屏放映", onBack = onClose) {
             Text(
                 if (viewerOnline) "对方可控制" else "还没有人加入",
                 fontSize = 11.5.sp,
