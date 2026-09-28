@@ -2,6 +2,8 @@ package com.ticketfortwo.app.ui.app
 
 import android.os.SystemClock
 import android.util.Log
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -27,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,7 +37,13 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -564,6 +573,66 @@ private fun CinemaMirrorBar(
                     fontSize = 10.sp,
                     color = if (allowed) Ink.Live else Ink.TextLow,
                 )
+            }
+            /* 可拖进度轨：网页放映条早就有可点/可拖的进度轨，App 这边一直只有 ±10
+               两颗键 —— 想跳到某一段只能一下一下点（2026-09-29 观看端体验审视：
+               这是唯一真缺的交互，其余项要么已修、要么见评审清单另行安排）。
+               拖动只表达意图：落点交给房主裁决、再以广播回来（Cmd.Seek，与网页版
+               同一条路）；拖动中的位置先画在本地，手感不发木。没拿到方向盘
+               （allowed=false）时不接手势 —— 和三颗圆钮同一规则。 */
+            if (state.durMs > 0) {
+                var dragFrac by remember(state) { mutableFloatStateOf(-1f) }
+                val idle = (shownPosMs.toFloat() / state.durMs).coerceIn(0f, 1f)
+                val frac = if (dragFrac >= 0f) dragFrac else idle
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(22.dp)
+                        .semantics { contentDescription = "播放进度" }
+                        .pointerInput(state.durMs, allowed) {
+                            if (!allowed) return@pointerInput
+                            detectDragGestures(
+                                onDragStart = { pos ->
+                                    dragFrac = (pos.x / size.width).coerceIn(0f, 1f)
+                                    Log.i("Cinema", "进度轨 drag start x=${pos.x}")
+                                },
+                                onDrag = { change, _ ->
+                                    change.consume()
+                                    dragFrac = (change.position.x / size.width).coerceIn(0f, 1f)
+                                },
+                                onDragEnd = {
+                                    val target = (dragFrac.coerceIn(0f, 1f) * state.durMs).toLong()
+                                    dragFrac = -1f
+                                    onCmd(com.ticketfortwo.app.cinema.CinemaSync.Cmd.Seek(target))
+                                    Log.i("Cinema", "进度轨拖动 seek -> $target（观众端）")
+                                },
+                                onDragCancel = { dragFrac = -1f },
+                            )
+                        },
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    Canvas(Modifier.fillMaxSize()) {
+                        val h = 4.dp.toPx()
+                        val top = (size.height - h) / 2f
+                        drawRoundRect(
+                            color = Color.White.copy(alpha = 0.22f),
+                            cornerRadius = CornerRadius(h),
+                            size = Size(size.width, h),
+                            topLeft = Offset(0f, top),
+                        )
+                        drawRoundRect(
+                            color = if (allowed) Ink.Live else Ink.TextLow,
+                            cornerRadius = CornerRadius(h),
+                            size = Size(size.width * frac, h),
+                            topLeft = Offset(0f, top),
+                        )
+                        drawCircle(
+                            color = Color.White,
+                            radius = 6.dp.toPx(),
+                            center = Offset(size.width * frac, size.height / 2f),
+                        )
+                    }
+                }
             }
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {

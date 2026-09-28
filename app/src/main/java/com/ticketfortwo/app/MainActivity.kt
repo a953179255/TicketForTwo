@@ -419,26 +419,36 @@ private fun AppRouter(backdrop: LayerBackdrop) {
         }
     }
 
-    fun openCinema() {
-        if (CallSession.isActive) {
-            // 厅里已经有片：WebView 离屏即毁、重进是全新实例 —— 不把地址接回去，
-            // 它会掉回默认测试页而放映状态还挂着（实测：放映中退出再进变 test.html）。
-            // 接回优先级：离开时浏览的那一页（站点的播放器最懂怎么放自己）>
-            // 嗅探到的片源地址（m3u8 直开可能被 CORS/UA 拒）。
-            // 只在"当前地址不是用户刚递进来的新链接"时接管：enterCinema 递新链接进来
-            // （cinemaUrl 已被改成新值）不归这条管，老片源照旧挂到 用户点「开始放映」。
-            CallSession.cinema.value?.let { st ->
-                val page = cinemaLastPageUrl
-                val target = when {
-                    page != null && (cinemaUrl == null || cinemaUrl == st.track.url) -> page
-                    cinemaUrl == null -> st.track.url
-                    else -> null
-                }
-                if (target != null && cinemaUrl != target) {
-                    cinemaUrl = target
-                    cinemaSeq += 1
-                }
+    /**
+     * 打开放映厅。
+     *
+     * [restoreAddress] = 这次要不要接管地址。WebView 离屏即毁、重进是全新实例，
+     * 不把地址接回去它会掉回默认测试页而放映状态还挂着（实测：放映中退出再进变
+     * test.html）。接回优先级：离开时浏览的那一页（[cinemaLastPageUrl]，由加载 effect
+     * 和 onPageStarted 持续记录 —— 含站内点链接；只记程序化加载那一下会接回旧页，
+     * 页面重载、两端进度清零，2026-09-29 用户实测）> 嗅探到的片源地址
+     * （m3u8 直开可能被 CORS/UA 拒）。
+     *
+     * [enterCinema] 递新链接进来时传 false：那条链接才是刚要打开的，老页面不能抢；
+     * 其余入口（ShareKind、圆钮、会话屏卡片）都按"回到离开时那一页"接管。
+     */
+    fun openCinema(restoreAddress: Boolean = true) {
+        if (restoreAddress) {
+            val target = when {
+                cinemaLastPageUrl != null -> cinemaLastPageUrl
+                CallSession.isActive && cinemaUrl == null -> CallSession.cinema.value?.track?.url
+                else -> null
             }
+            android.util.Log.i(
+                "Cinema",
+                "回厅接片：lastPage=$cinemaLastPageUrl cinemaUrl=$cinemaUrl target=$target",
+            )
+            if (target != null && cinemaUrl != target) {
+                cinemaUrl = target
+                cinemaSeq += 1
+            }
+        }
+        if (CallSession.isActive) {
             showCinema = true
             return
         }
@@ -450,10 +460,18 @@ private fun AppRouter(backdrop: LayerBackdrop) {
         showCinema = true
     }
 
-    /** 离开放映厅。**只关这一屏，不动会话** —— 返回是"人出去了"，不是"厅关了"。 */
+    /**
+     * 离开放映厅。**只关这一屏，不动会话** —— 返回是"人出去了"，不是"厅关了"。
+     *
+     * 同时立「回首页」的意图（[leftCallFlag]）：出门该落在首页，不是弹回会话屏 ——
+     * 分享中从厅里点顶栏返回，原来直接撞见"正在分享"那张卡（2026-09-29 用户反馈，
+     * 卡上的两个入口还和首页语义重复）。首页圆钮管"回去/停止"，回去的落点按
+     * [leftCinema] 优先回厅。
+     */
     fun leaveCinema() {
         showCinema = false
         leftCinemaFlag.value = true
+        leftCallFlag.value = true
     }
 
     /**
@@ -471,7 +489,8 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     fun enterCinema(url: String) {
         cinemaUrl = url
         cinemaSeq += 1
-        openCinema()
+        // restoreAddress=false：新链接刚写进 cinemaUrl，接回逻辑不能把老页面盖回去
+        openCinema(restoreAddress = false)
         showCinema = true
     }
 
@@ -649,6 +668,16 @@ private fun AppRouter(backdrop: LayerBackdrop) {
         /* 首页圆钮的"会话进行中"态（方案二，见 HomeSession）。优先级：正在分享 >
            放映厅已开 > 语音会话 —— 屏幕正在被看是最要紧的事实（红点同一原则）。
            点圆回到对应的会话屏；圆下小字钮结束整场（与 CallSession.stop 同一落点）。 */
+
+        /* 圆钮"回去"的落点：**从哪离开的回哪去** —— 厅开着（leftCinema）就回厅，
+           否则回会话屏。分享中从厅里退首页再点圆，原来落点是会话屏那张"正在分享"卡，
+           要再点一次卡上的钮才进厅（2026-09-29 用户反馈的绕路）；厅是更深的意图，
+           开着就该直接回去。leftCinema 的清理由厅内授权指引（leftCinema 在
+           consent onContinue 清）和会话散场接管，这里不顺手清 —— 回厅的路上它还有效。 */
+        val backToBehind: () -> Unit = {
+            leftCallFlag.value = false
+            if (leftCinema) openCinema() else leftCinemaFlag.value = false
+        }
         val homeSession: HomeSession? = when {
             !isHost || !(leftCall || roomBehind) -> null
             // 屏幕真的在被看 —— 最要紧的事实优先（与顶栏红点同一原则）。
@@ -660,15 +689,14 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                     else -> "还没有人加入"
                 },
                 stopLabel = "停止分享",
-                // 清掉"退回首页"意图，路由自然落回 Call/Invite；leftCinema 是陈旧的放映厅意图，一并清。
-                onReturn = { leftCallFlag.value = false; leftCinemaFlag.value = false },
+                onReturn = backToBehind,
                 onStop = stop,
             )
             state is CallSession.State.Connected -> HomeSession(
                 label = "语音连麦中",
                 status = if (viewerOnline) "1 人正在观看 · 已直连" else "还没有人加入",
                 stopLabel = "结束连麦",
-                onReturn = { leftCallFlag.value = false; leftCinemaFlag.value = false },
+                onReturn = backToBehind,
                 onStop = stop,
             )
             roomBehind -> HomeSession(
@@ -800,6 +828,9 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 // 授权完人还留在厅里（showCinema 不动，路由里指引已让位）。
                 onStartShare = { startScreenShare() },
                 onBack = { leaveCinema() },
+                // 覆盖层（授权指引/同看/设置）会把本屏整屏卸载，回来是全新实例 ——
+                // 卸载前把实时地址交回来，重建时才不会掉回旧地址（见 CinemaScreen.onDispose）
+                onPageLeave = { u -> if (u.isNotBlank()) cinemaUrl = u },
             )
 
             Page.Watch -> WatchTogetherScreen(

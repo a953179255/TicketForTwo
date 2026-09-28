@@ -28,10 +28,13 @@ fi
 
 # -gpu host：AVD 配置里的默认值在这台机上跑不出玻璃所需的 RenderNode 离屏层，
 # 必须显式覆盖成 host（上次建完就是这样才起得来）。
+# 但 host 模式 2026-09-29 连环崩（YUV shader 编译失败、gpu vendor rc=1，连崩三次，
+# 与剩余内存无关）—— 那种时候用 T2_GPU=angle 绕开 host 的 GL 翻译层，改走 ANGLE。
+GPU="${T2_GPU:-host}"
 # 默认 -no-window：不抢焦点，界面靠 adb uiautomator + screencap 驱动与验收。
 # 传 --window 则开真实窗口 —— 需要**人亲手操作**模拟器时才用（比如用户自己测分享流程、
 # 要长按复制邀请链接发到手机上）。无头模式下用户桌面上根本看不见它，别默认开窗口。
-EMU_ARGS=(-avd "$AVD" -no-boot-anim -gpu host)
+EMU_ARGS=(-avd "$AVD" -no-boot-anim -gpu "$GPU")
 if [ "${1:-}" = "--window" ]; then
   echo "以带窗口模式启动（会出现在桌面上并抢焦点）"
 else

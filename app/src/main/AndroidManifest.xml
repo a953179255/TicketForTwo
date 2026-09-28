@@ -23,12 +23,16 @@
         android:name="android.hardware.camera"
         android:required="false" />
 
+    <!-- 这个 App 的放映厅就是个浏览器：只认 https 的话，纯 http 的站点
+         （含自建测试站、不少老牌影站）直接 ERR_CLEARTEXT_NOT_PERMITTED 打不开。
+         2026-09-29 E2E 实测撞上；放开明文是浏览器类应用的常规配置。 -->
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
-        android:roundIcon="@mipmap/ic_launcher_round"
+        android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
         android:theme="@style/Theme.TicketForTwo">
 
         <activity
