@@ -831,6 +831,10 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 // 覆盖层（授权指引/同看/设置）会把本屏整屏卸载，回来是全新实例 ——
                 // 卸载前把实时地址交回来，重建时才不会掉回旧地址（见 CinemaScreen.onDispose）
                 onPageLeave = { u -> if (u.isNotBlank()) cinemaUrl = u },
+                // 放映模式甲板的统计行（方案B）
+                latencyMs = stats?.rttMs?.toLong(),
+                videoFps = quality.fps,
+                videoBps = quality.maxVideoBps,
             )
 
             Page.Watch -> WatchTogetherScreen(

@@ -129,6 +129,62 @@ button.primary{background:var(--accent);color:#fff;border:0;border-radius:var(--
   background:rgba(0,0,0,.78);border:1px solid rgba(255,255,255,.14);
   color:#f2f4f7;font-size:13px;line-height:1.35;pointer-events:none}
 .hide{display:none!important}
+/* ══ 方案B「信息卡片」（2026-09-29 用户选定）：同步放映的竖屏形态 ══
+   画面变成圆角卡片、状态/进度/统计三张卡常驻 + 底部四格工具条，
+   替代原来的三条浮层（顶栏/放映条/工具岛）——横屏不启用（JS 门控），横条照旧。 */
+body.cineB #stage{background:
+ radial-gradient(140% 50% at 18% 22%,rgba(58,88,124,.70),transparent 60%),
+ radial-gradient(120% 46% at 88% 34%,rgba(140,74,58,.60),transparent 58%),
+ linear-gradient(180deg,#0a0e13,#06090c)}
+body.cineB #vbg,body.cineB #lv{inset:auto!important;width:384px!important;height:240px!important;
+ left:14px!important;top:12px!important;clip-path:inset(0 round 16px)}
+body.cineB #lv{background:#000;border:1px solid rgba(255,255,255,.12);border-radius:16px}
+body.cineB #lvBadge{right:28px;top:26px}
+body.cineB #topBar,body.cineB #ctlBar,body.cineB #cineBar{display:none!important}
+#bCards{position:absolute;left:14px;right:14px;top:264px;z-index:5;
+ display:flex;flex-direction:column;gap:12px}
+.bcard{background:rgba(16,20,26,.86);border:1px solid rgba(255,255,255,.10);
+ border-radius:18px;padding:14px 15px;backdrop-filter:blur(14px);
+ box-shadow:0 8px 26px rgba(0,0,0,.34)}
+.brow1{display:flex;align-items:center;gap:10px;min-width:0}
+.btitle{flex:1;min-width:0;font-size:14.5px;font-weight:650;color:#f2f5f9;white-space:nowrap;
+ overflow:hidden;text-overflow:ellipsis}
+.btags{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.btag{font-size:11.5px;padding:4px 10px;border-radius:11px;display:flex;align-items:center;gap:5px;
+ background:rgba(255,255,255,.07);color:#c3ccd6;border:1px solid rgba(255,255,255,.13)}
+.btag.ok{background:rgba(49,208,127,.15);color:#7cf0b2;border-color:rgba(49,208,127,.34)}
+.bdot{width:6px;height:6px;border-radius:50%;background:var(--live);box-shadow:0 0 7px var(--live)}
+.bsub{margin-top:9px;font-size:11.5px;color:#8b95a1}
+.btimebox{display:flex;align-items:baseline;gap:8px;min-width:0}
+.bnow{font-size:32px;font-weight:700;letter-spacing:-.5px;color:#fff;font-variant-numeric:tabular-nums}
+.ball{font-size:13.5px;color:#8b95a1;font-variant-numeric:tabular-nums}
+.bd{margin-left:auto;font-size:11.5px;color:#8fe7b8;background:rgba(49,208,127,.12);
+ border:1px solid rgba(49,208,127,.3);padding:3px 9px;border-radius:10px;font-variant-numeric:tabular-nums}
+.btrack{position:relative;height:7px;border-radius:4px;background:rgba(255,255,255,.15);
+ margin:12px 0 4px;touch-action:none}
+.bfill{position:absolute;left:0;top:0;bottom:0;border-radius:4px;background:var(--live);width:0}
+.bfill::after{content:"";position:absolute;right:-7px;top:50%;width:16px;height:16px;border-radius:50%;
+ background:#fff;transform:translateY(-50%);box-shadow:0 1px 6px rgba(0,0,0,.6)}
+.btrans{display:flex;align-items:center;justify-content:center;gap:34px;margin-top:14px}
+.btb{width:52px;height:52px;border-radius:26px;display:grid;place-items:center;font-size:16px;
+ background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.13);color:#eef1f5;cursor:pointer}
+.btb.play{width:60px;height:60px;border-radius:30px;background:var(--live);border:none;color:#052313;
+ font-size:21px;box-shadow:0 6px 20px rgba(49,208,127,.4)}
+.btb:disabled{opacity:.45}
+.bgrid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;background:rgba(255,255,255,.09);
+ border:1px solid rgba(255,255,255,.1);border-radius:14px;overflow:hidden}
+.bcell{background:rgba(14,18,23,.92);padding:10px 4px;text-align:center}
+.bcell b{display:block;font-size:14.5px;font-weight:650;color:#f2f5f9;font-variant-numeric:tabular-nums}
+.bcell span{font-size:10px;color:#7f8a96;letter-spacing:.4px}
+#bTabs{position:absolute;left:14px;right:14px;bottom:16px;height:60px;z-index:5;border-radius:20px;
+ background:rgba(16,20,26,.88);border:1px solid rgba(255,255,255,.10);backdrop-filter:blur(14px);
+ display:flex;align-items:center;justify-content:space-around}
+.bit{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10.5px;color:#96a0ab;
+ background:none;border:none;cursor:pointer;min-width:56px}
+.bit .ic{width:38px;height:38px;border-radius:19px;display:grid;place-items:center;font-size:16px;
+ background:rgba(255,255,255,.06);color:#dfe5ec}
+.bit.on .ic{background:rgba(49,208,127,.16);color:#7cf0b2}
+.bit.on{color:#7cf0b2}
 .meter{display:inline-flex;align-items:flex-end;gap:2px;height:14px}
 .meter i{width:3px;background:var(--live);border-radius:2px}
 .steps{font-size:13px;color:var(--text-mid);line-height:1.9}
@@ -195,6 +251,48 @@ button.primary{background:var(--accent);color:#fff;border:0;border-radius:var(--
       <span class="wtime" id="cTime">0:00 / 0:00</span>
       <span class="wtime" id="cDrift" style="opacity:.6"></span>
     </div>
+  </div>
+
+  <!-- 方案B：同步放映的常驻卡片（竖屏启用，body.cineB 门控；横屏由 JS 不启用）。
+       字段全部由 paintBCine 从横条已画好的节点抄过来 —— 两套 UI 永不各说各话。 -->
+  <div id="bCards" class="hide">
+    <div class="bcard">
+      <div class="brow1">
+        <span class="btitle" id="bTitle">同步放映</span>
+        <span class="btag ok" id="bPermTag">可控制</span>
+      </div>
+      <div class="btags">
+        <span class="btag"><i class="bdot"></i>直连</span>
+        <span class="btag" id="bState">同步放映中</span>
+      </div>
+      <div class="bsub">房主在放映厅选的片 · 本地播同一条源，画质原生</div>
+    </div>
+    <div class="bcard">
+      <div class="btimebox">
+        <span class="bnow" id="bNow">0:00</span>
+        <span class="ball" id="bAll">/ 0:00</span>
+        <span class="bd" id="bD">Δ —</span>
+      </div>
+      <div class="btrack" id="bTrack" title="点击或拖动跳转">
+        <div class="bfill" id="bFill"></div>
+      </div>
+      <div class="btrans">
+        <button class="btb" id="bBack" title="后退 10 秒">-10</button>
+        <button class="btb play" id="bPlay" title="暂停 / 继续">❚❚</button>
+        <button class="btb" id="bFwd" title="前进 10 秒">+10</button>
+      </div>
+    </div>
+    <div class="bgrid">
+      <div class="bcell"><b id="bLat">—</b><span>同步延迟</span></div>
+      <div class="bcell"><b id="bFps">—</b><span>帧率 FPS</span></div>
+      <div class="bcell"><b id="bRes">—</b><span>本地画质</span></div>
+    </div>
+  </div>
+  <div id="bTabs" class="hide">
+    <button class="bit" id="bMic"><span class="ic">🎙</span>连麦</button>
+    <button class="bit" id="bVol"><span class="ic">🔊</span>音量</button>
+    <button class="bit" id="bPip"><span class="ic">⧉</span>小窗</button>
+    <button class="bit" id="bFull"><span class="ic">⛶</span>全屏</button>
   </div>
 
   <div class="center" id="panel">
@@ -396,7 +494,11 @@ async function startPeer(offerSdp){
     if (s === 'failed') {
       // 分诊：信令通道还在 → 地址是真敲不通，那才是"连不上"，给换网络建议有意义；
       // 通道已经断了 → 媒体撑不住是必然结果，报对称 NAT 属于误诊。
-      if (signalingAlive()) reportFailure('failed');
+      // 但**放映中是例外**：本地播片源才是主路径，屏幕层这时只是备用画面 ——
+      // 房主只开了放映没开共享时屏幕层必失败，弹"连不上"大卡会把健康的放映卡
+      // 整个盖住（2026-09-29 方案B 真机截图实测）。一行状态说明就够。
+      if (cine) { $('topRight').textContent = '同步放映中 · 屏幕层未通'; }
+      else if (signalingAlive()) reportFailure('failed');
       else reportEnded('看不到画面了 · 与房主的连接先断了');
     }
     if (s === 'disconnected') $('topRight').textContent = '连接抖动，正在自愈';
@@ -843,6 +945,7 @@ function onCinema(f) {
   if (voiceTimer) { clearTimeout(voiceTimer); voiceTimer = null; }
   cineBar.classList.remove('hide');
   document.getElementById('watchBar').classList.add('hide');  // 一次只留一条横条
+  bWanted = true; syncBCards();   // 方案B：竖屏换卡片（见 syncBCards）
   /* 顶栏那句"语音已通"是等候期的话；开始放映之后它还挂着，
      观众会以为仍然没画面。状态换了，措辞也要跟着换。 */
   $('topRight').textContent = '同步放映中';
@@ -997,6 +1100,7 @@ function cineDown(reason, failed, code, ver) {
   cine = null;
   cineSkew = null;   // 换了一场（可能换了房主），对钟重来
   cineBar.classList.add('hide');
+  bWanted = false; syncBCards();
   /* 收厅不是失败，别把它报成"对方放不出来" —— 那样房主会以为自己的选路有问题。 */
   if (failed !== false) cineAck(false, code, (reason || 'unknown') + '（' + diag + '）', v);
   $('topRight').textContent = gotVideo ? '画面已到' : '语音已通';
@@ -1013,6 +1117,7 @@ function syncLocal() {
   if (Date.now() - cineLastAt > 5000) {
     if (cineBar && !cineBar.classList.contains('hide')) {
       cineBar.classList.add('hide');
+      bWanted = false; syncBCards();   // 陈旧收条时卡片一起收（房主回来会在 onCinema 里放回）
       cineNote('房主已离开放映厅，进度不再跟随');
     }
     return;
@@ -1072,6 +1177,48 @@ function paintCine(drift) {
   lvBadge.innerHTML = '本地播放 · <b>' +
     (lv.videoWidth ? lv.videoWidth + '×' + lv.videoHeight : '准备中…') + '</b>' +
     (cineNeedSound ? ' · 点一下开声音' : '');
+  paintBCine();
+}
+
+/* ══ 方案B 卡片的显示与同步 ══
+   显隐由 [bWanted] + 竖屏共同决定（横屏仍走老横条）；
+   内容不自己算，直接抄横条节点的字 —— paintCine 是唯一画师，抄它就不会两套 UI 打架。 */
+let bWanted = false;
+function syncBCards() {
+  const on = bWanted && window.matchMedia('(orientation:portrait)').matches;
+  document.body.classList.toggle('cineB', on);
+  document.getElementById('bCards').classList.toggle('hide', !on);
+  document.getElementById('bTabs').classList.toggle('hide', !on);
+}
+window.addEventListener('resize', syncBCards);
+
+function paintBCine() {
+  if (!bWanted || !cine) return;
+  if (!window.matchMedia('(orientation:portrait)').matches) return;
+  const $id = i => document.getElementById(i);
+  $id('bTitle').textContent = $id('cTitle').textContent;
+  const bp = $id('bPermTag'), cp = $id('cPerm');
+  bp.textContent = cp.textContent;
+  bp.className = 'btag' + (cp.classList.contains('ok') ? ' ok' : '');
+  const t = $id('cTime').textContent;
+  if (t.indexOf('接上') >= 0) { $id('bNow').textContent = '接片中…'; $id('bAll').textContent = ''; }
+  else {
+    const parts = t.split(' / ');
+    $id('bNow').textContent = parts[0] || '—';
+    $id('bAll').textContent = parts[1] ? '/ ' + parts[1] : '';
+  }
+  const d = $id('cDrift').textContent;
+  $id('bD').textContent = d || 'Δ —';
+  $id('bFill').style.width = $id('cTrackFill').style.width;
+  $id('bTrack').style.opacity = $id('cTrack').style.opacity || '1';
+  $id('bPlay').textContent = $id('cPlay').textContent;
+  $id('bBack').disabled = $id('cBack').disabled;
+  $id('bFwd').disabled = $id('cFwd').disabled;
+  const m = /(\d+)\s*ms/.exec(d);
+  $id('bLat').textContent = m ? m[1] + 'ms' : '—';
+  $id('bFps').textContent = $id('sFps').textContent;
+  $id('bRes').textContent = (($id('lvRes') || {}).textContent || '—');
+  $id('bMic').classList.toggle('on', micOn);
 }
 
 function armSoundOnce(){
@@ -1141,12 +1288,21 @@ document.getElementById('cBack').onclick = () => sendCine('step|-10000');
 document.getElementById('cFwd').onclick = () => sendCine('step|10000');
 document.getElementById('cPlay').onclick = () => sendCine(cine && cine.playing ? 'pause' : 'play');
 
+/* 方案B 卡片的按键：与横条同一处理函数，工具四格转发给原工具岛（onclick 已挂好的那套） */
+document.getElementById('bBack').onclick = () => sendCine('step|-10000');
+document.getElementById('bFwd').onclick = () => sendCine('step|10000');
+document.getElementById('bPlay').onclick = document.getElementById('cPlay').onclick;
+document.getElementById('bMic').onclick = () => document.getElementById('btnMic').click();
+document.getElementById('bVol').onclick = () => document.getElementById('btnVol').click();
+document.getElementById('bPip').onclick = () => document.getElementById('btnPip').click();
+document.getElementById('bFull').onclick = () => document.getElementById('btnFull').click();
+
 /* 进度轨：点按即跳、按住拖动预览、松手才发最终 seek（拖动中不刷屏）。
    没权限时与按钮同一门禁；本地先落 + cineApplyUntil 窗口由 sendSeek/预览共用，
    广播回来只做校正（REVIEW观看端 P2-9，协议 seek 早就位）。 */
-(function bindCineTrack() {
-  const track = document.getElementById('cTrack');
-  if (!track) return;
+(function bindCineTrackAll() {
+  const bind = track => {
+    if (!track) return;
   let dragging = false;
   const durSec = () => (isFinite(lv.duration) && lv.duration > 0)
     ? lv.duration
@@ -1180,6 +1336,9 @@ document.getElementById('cPlay').onclick = () => sendCine(cine && cine.playing ?
     dragging = false;
     if (applyLocal(ratioOf(ev))) send({ t: 'ccmd', f: 'seek|' + Math.round(lv.currentTime * 1000) });
   });
+  };
+  bind(document.getElementById('cTrack'));
+  bind(document.getElementById('bTrack'));   // 方案B 卡片里的进度轨：同一套点/拖逻辑
 })();
 lv.addEventListener('loadedmetadata', () => {
   // 首帧出来才敢说"原生画质"：这一行是 S 档成没成的直接证据
