@@ -22,11 +22,23 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.source.LoadEventInfo
+import androidx.media3.exoplayer.source.MediaLoadData
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.ticketfortwo.app.MainActivity
 import com.ticketfortwo.app.R
+import java.net.HttpURLConnection
+import java.net.URL
 import kotlin.math.abs
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 悬浮窗播放器：播"嗅探到的地址"，与网页里的 `<video>` 无关。
@@ -58,24 +70,106 @@ class FloatPlayerService : android.app.Service() {
         }
     }
 
+    /** 服务内的后台作用域（挑档网络请求用）。 */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * 从多个候选里找出 master 并挑低档变体；全是变体/拉不到就用第一条原样返回。
+     * 页面嗅探常常给的是**变体清单**（看不出码率），master 才有完整的档位表 —— 所以逐个试。
+     */
+    private fun pickVariant(urls: List<String>, headers: Map<String, String>): String {
+        var fallback = urls.firstOrNull() ?: return urls.firstOrNull().orEmpty()
+        for (u in urls.distinct()) {
+            val r = resolveVariant(u, headers)
+            if (r != u) {           // 找到了 master 并成功挑档
+                mark("挑档成功 ${u.substringAfterLast('/')} -> ${r.substringAfterLast('/')}")
+                return r
+            }
+            // r == u：u 本身是变体或拉取失败；先把第一条能直接用的记作兜底
+            if (fallback == urls.first()) fallback = u
+        }
+        mark("挑档失败，用原地址 ${fallback.substringAfterLast('/')}")
+        return fallback
+    }
+
+    /**
+     * 从 master 清单里挑一个**适合浮窗**的低档变体清单地址；不是 master / 拉不到就原样返回。
+     *
+     * 选档规则（窗最大 276dp≈725px）：
+     *  1. 宽 ≤960 里带宽最高的（给放大留 1.3 倍余量，实测 mux 这条流会选到 848x480/0.84Mbps）；
+     *  2. 没有就退 ≤1280 里带宽最高的（720p/2.1Mbps）；
+     *  3. 再没有就用原地址（下一档兜底：播放器自己选，行为同以前）。
+     */
+    private fun resolveVariant(url: String, headers: Map<String, String>): String {
+        if (!url.contains(".m3u8", ignoreCase = true)) return url
+        val text = runCatching { fetchText(url, headers) }.getOrNull() ?: return url
+        if (!text.contains("#EXT-X-STREAM-INF")) return url   // 已经是变体清单
+        val lines = text.lineSequence().map { it.trim() }.toList()
+        val variants = mutableListOf<Triple<Int, Int, String>>()  // width, bandwidth, url
+        for (i in lines.indices) {
+            if (!lines[i].startsWith("#EXT-X-STREAM-INF")) continue
+            val next = lines.getOrNull(i + 1)
+            if (next.isNullOrBlank() || next.startsWith("#")) continue
+            val w = Regex("""RESOLUTION=(\d+)x""").find(lines[i])?.groupValues?.get(1)?.toIntOrNull() ?: continue
+            val bw = Regex("""BANDWIDTH=(\d+)""").find(lines[i])?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val abs = runCatching { URL(URL(url), next).toString() }.getOrDefault(next)
+            variants += Triple(w, bw, abs)
+        }
+        if (variants.isEmpty()) return url
+        val chosen = variants.filter { it.first <= 960 }.maxByOrNull { it.second }
+            ?: variants.filter { it.first <= 1280 }.maxByOrNull { it.second }
+            ?: return url
+        return chosen.third
+    }
+
+    /** 简单拉文本（限 64KB，够一份清单）。headers 用于防盗链站。 */
+    private fun fetchText(url: String, headers: Map<String, String>): String {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        return try {
+            conn.connectTimeout = 6_000
+            conn.readTimeout = 6_000
+            headers.forEach { (k, v) -> conn.setRequestProperty(k, v) }
+            if (conn.responseCode !in 200..299) return url
+            conn.inputStream.bufferedReader().use { r ->
+                val buf = CharArray(64 * 1024)
+                val n = r.read(buf)
+                if (n <= 0) "" else String(buf, 0, n)
+            }
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /** 打点：距 FloatPlayer.startMs（请求启动那一瞬）过了多久。
+        用来把"浮窗出现慢/画面慢"拆成服务启动 / 窗口挂载 / 首帧三段。 */
+    private fun mark(tag: String) {
+        android.util.Log.i(
+            "FloatPlay",
+            "+${android.os.SystemClock.uptimeMillis() - FloatPlayer.startMs}ms $tag",
+        )
+    }
+
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
         FloatPlayer.service = this
+        mark("服务 onCreate")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent == null) { stopSelf(); return START_NOT_STICKY }
         when (intent.action) {
             ACTION_STOP -> { teardown(); stopSelf(); return START_NOT_STICKY }
-            ACTION_START -> start(
+            ACTION_START -> { mark("收到启动指令"); start(
                 url = intent.getStringExtra(EXTRA_URL) ?: return START_NOT_STICKY,
                 title = intent.getStringExtra(EXTRA_TITLE) ?: "",
                 referer = intent.getStringExtra(EXTRA_REFERER),
                 cookie = intent.getStringExtra(EXTRA_COOKIE),
                 ua = intent.getStringExtra(EXTRA_UA),
                 posMs = intent.getLongExtra(EXTRA_POS, 0L),
-            )
+                candidates = intent.getStringArrayExtra(EXTRA_CANDIDATES)?.toList()
+                    ?: emptyList(),
+            ) }
         }
         return START_NOT_STICKY
     }
@@ -97,6 +191,7 @@ class FloatPlayerService : android.app.Service() {
         cookie: String?,
         ua: String?,
         posMs: Long,
+        candidates: List<String>,
     ) {
         val headers = buildMap {
             referer?.takeIf { it.isNotBlank() }?.let { put("Referer", it) }
@@ -109,16 +204,49 @@ class FloatPlayerService : android.app.Service() {
             .setAllowCrossProtocolRedirects(true)
         if (!ua.isNullOrBlank()) ds.setUserAgent(ua)
 
+        /* 限档位到 720p —— 浮窗最宽 276dp（≈725px），下 HD/1080p 分片纯属浪费。
+           打点实测瓶颈：网速仅 ~1.5MB/s 时，一个 HD 分片要下 4.2 秒（6.5MB），
+           首帧被拖到 +10s。720p 以内字节量降一个量级，首帧显著提前。 */
+        val trackSelector = DefaultTrackSelector(this).apply {
+            parameters = parameters.buildUpon().setMaxVideoSize(1280, 720).build()
+        }
         val exo = ExoPlayer.Builder(this)
+            .setTrackSelector(trackSelector)
             .setMediaSourceFactory(DefaultMediaSourceFactory(ds))
+            .setLoadControl(
+                // media3 1.8 合并成 setBufferDurationsMs(min, max, forPlayback, afterRebuffer)。
+                // 后两项 2500/5000 → 500/500：ExoPlayer 默认要攒够 2.5 秒缓冲才肯开播，
+                // 这是首帧慢的一大截来源（打点实测：窗口 +493ms 就挂上了，首帧却 +9.6s）
+                DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(50_000, 50_000, 500, 500)
+                    .build(),
+            )
             .build()
             .apply {
                 addListener(object : Player.Listener {
+                    override fun onRenderedFirstFrame() {
+                        mark("首帧画面（画面出现）")
+                        handler.post {
+                            placeholder?.animate()?.alpha(0f)?.setDuration(160)
+                                ?.withEndAction { placeholder?.visibility = View.GONE }
+                        }
+                    }
+                    override fun onPlaybackStateChanged(state: Int) {
+                        if (state == Player.STATE_READY) mark("READY 可播放")
+                    }
+
                     override fun onPlayerError(error: PlaybackException) {
                         /* 播不起来就老实认错并交还指挥权：最坏情况退回"网页里照播"，
                            不会把放映搞坏（这是设计里对防盗链站点的兜底）。 */
                         FloatPlayer.update {
                             it.copy(ready = false, playing = false, error = error.message)
+                        }
+                        handler.post {
+                            placeholder?.let {
+                                it.text = "画面加载失败，稍后自动重试"
+                                it.visibility = View.VISIBLE
+                                it.alpha = 1f
+                            }
                         }
                         android.util.Log.w("FloatPlay", "浮窗起播失败: ${error.message}")
                     }
@@ -126,8 +254,37 @@ class FloatPlayerService : android.app.Service() {
                 setMediaItem(MediaItem.fromUri(url))
                 // 从网页那个播放器接着播，不从头来
                 if (posMs > 0) seekTo(posMs)
+                addAnalyticsListener(object : AnalyticsListener {
+                    override fun onLoadStarted(
+                        eventTime: AnalyticsListener.EventTime,
+                        loadEventInfo: LoadEventInfo,
+                        mediaLoadData: MediaLoadData,
+                    ) {
+                        mark("LOAD开始 dataType=${mediaLoadData.dataType} uri=${loadEventInfo.uri}")
+                    }
+
+
+                    override fun onLoadCompleted(
+                        eventTime: AnalyticsListener.EventTime,
+                        loadEventInfo: LoadEventInfo,
+                        mediaLoadData: MediaLoadData,
+                    ) {
+                        mark(
+                            "LOAD完成 dataType=${mediaLoadData.dataType} " +
+                                "${loadEventInfo.loadDurationMs}ms ${loadEventInfo.bytesLoaded}B " +
+                                "uri=${loadEventInfo.uri}",
+                        )
+                    }
+
+                    override fun onTimelineChanged(
+                        eventTime: AnalyticsListener.EventTime,
+                        reason: Int,
+                    ) {
+                        mark("清单就位 reason=$reason")
+                    }
+                })
+                // 先不喂源：要先挑低档变体（见下方 resolveVariant），挑完再 setMediaItem+prepare
                 playWhenReady = true
-                prepare()
             }
         player = exo
 
@@ -137,9 +294,30 @@ class FloatPlayerService : android.app.Service() {
                 playing = false, posMs = posMs, durMs = 0L, ready = false, error = null,
             )
         }
+        mark(
+            "约束生效检查 maxVideo=" +
+                "${trackSelector.parameters.maxVideoWidth}x${trackSelector.parameters.maxVideoHeight}",
+        )
+        mark("播放器已建并 prepare")
         addOverlay(exo, title)
+        mark("窗口已挂上（浮窗可见）")
         startForeground(NOTIF_ID, buildNotification(title))
         handler.post(ticker)
+
+        /* 后台拉 master 清单挑低档变体，主线程不碰网络。
+           为什么必须自己挑：media3 的 maxVideoSize 约束**实测对 HLS 初始变体选择无效**
+           （约束 1280x720 已进选择器、日志可见，但仍然选了 url_8=1080p —— 13.5MB/片
+           在 1.5MB/s 的网速下要下 8 秒，首帧被拖到 +7.5s）。
+           浮窗最宽 276dp≈725px，480p(848px) 已完全够用，分片从 6.5~13.5MB 降到 <1MB。 */
+        scope.launch {
+            val target = withContext(Dispatchers.IO) { pickVariant(listOf(url) + candidates, headers) }
+            withContext(Dispatchers.Main) {
+                if (player !== exo) return@withContext        // 期间被收掉
+                mark("起播(挑档后) ${target.substringAfterLast('/')}")
+                exo.setMediaItem(MediaItem.fromUri(target))
+                exo.prepare()
+            }
+        }
     }
 
     private fun publish() {
@@ -236,6 +414,23 @@ class FloatPlayerService : android.app.Service() {
         }
         root.addView(video)
         exo.setVideoTextureView(video)
+
+        // 占位：首帧没到之前窗口是空的（深底压深壁纸 = 几乎不可见），
+        // 立刻显示这句，用户就知道窗已经出来了、画面在路上
+        val ph = TextView(this).apply {
+            text = "正在接入画面…"
+            setTextColor(0xFF9AA6B8.toInt())
+            textSize = 11f
+            gravity = android.view.Gravity.CENTER
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            )
+            isClickable = false
+            isFocusable = false
+        }
+        placeholder = ph
+        root.addView(ph)
 
         /* 控制条**覆盖在画面内部**（不再占独立空间）：默认藏起来，
            轻点窗身从画面里浮出来，3 秒自动收（2026-09-30 用户要求）。 */
@@ -400,6 +595,7 @@ class FloatPlayerService : android.app.Service() {
         runCatching { overlay?.let { wm?.removeView(it) } }
         overlay = null
         bar = null
+        placeholder = null
         runCatching { player?.release() }
         player = null
         FloatPlayer.update { FloatState() }
@@ -450,6 +646,11 @@ class FloatPlayerService : android.app.Service() {
         const val EXTRA_COOKIE = "cookie"
         const val EXTRA_UA = "ua"
         const val EXTRA_POS = "pos"
+        const val EXTRA_CANDIDATES = "candidates"
+
+    /** 占位提示：首帧没到之前浮窗是空的，深底在深壁纸上几乎不可见
+        （用户感知成"浮窗出现很慢"，其实窗口 0.5 秒就挂上了，慢的是画面）。 */
+    private var placeholder: TextView? = null
 
         private const val NOTIF_ID = 1007
         private const val CHANNEL_ID = "t2_float"

@@ -17,6 +17,13 @@ data class FloatRequest(
     val cookie: String? = null,
     val userAgent: String? = null,
     val startPosMs: Long = 0L,
+    /**
+     * 其余候选地址（嗅探到的同页多条 .m3u8）。
+     * 页面嗅探常常拿到的是**变体清单**（master 里的第一档）—— 从它看不出码率档位，
+     * 所以把全部候选都带上：服务端逐个试，谁是 master 就挑它的低档变体
+     * （浮窗最宽 725px，1080p 分片在慢网下要下 8 秒，480p 只要 2 秒）。
+     */
+    val candidates: List<String> = emptyList(),
 )
 
 /**
@@ -59,7 +66,12 @@ object FloatPlayer {
         _state.value = f(_state.value)
     }
 
+    /** 浮窗启动时刻（uptimeMillis）：服务侧各段耗时都相对它打点（排查"启动慢"）。 */
+    var startMs: Long = 0L
+
     fun start(context: Context, req: FloatRequest) {
+        startMs = android.os.SystemClock.uptimeMillis()
+        android.util.Log.i("FloatPlay", "+0ms 请求启动服务")
         val i = Intent(context, FloatPlayerService::class.java)
             .setAction(FloatPlayerService.ACTION_START)
             .putExtra(FloatPlayerService.EXTRA_URL, req.url)
@@ -68,6 +80,7 @@ object FloatPlayer {
             .putExtra(FloatPlayerService.EXTRA_COOKIE, req.cookie)
             .putExtra(FloatPlayerService.EXTRA_UA, req.userAgent)
             .putExtra(FloatPlayerService.EXTRA_POS, req.startPosMs)
+            .putExtra(FloatPlayerService.EXTRA_CANDIDATES, req.candidates.toTypedArray())
         // Android 12+ 后台启动前台服务会抛；浮窗入口都在前台点击里，这里按常规起
         context.startForegroundService(i)
     }

@@ -370,6 +370,10 @@ fun CinemaScreen(
                 cookie = hit.cookie,
                 userAgent = hit.userAgent,
                 startPosMs = startAt,
+                // 全部候选一起带上：让服务端有机会找到 master 并挑低档
+                candidates = hits
+                    .filter { MediaSniffer.playable(it.kind) && it.url.startsWith("http", true) }
+                    .map { it.url },
             ),
         )
     }
