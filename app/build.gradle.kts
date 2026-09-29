@@ -139,6 +139,11 @@ dependencies {
     // 预编译 libwebrtc：自带 org.webrtc.ScreenCapturerAndroid（MediaProjection 封装）
     implementation(libs.webrtc)
 
+    // 悬浮窗播放器：播"嗅探到的地址"，独立于网页（见 docs/references/yjllq-float-window.md）
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.exoplayer.hls)
+    implementation(libs.androidx.media3.ui)
+
     debugImplementation(libs.androidx.ui.tooling)
 
     testImplementation(libs.junit)

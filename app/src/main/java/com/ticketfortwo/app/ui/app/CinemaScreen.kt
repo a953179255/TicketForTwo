@@ -49,6 +49,8 @@ import com.ticketfortwo.app.VoiceMode
 import com.ticketfortwo.app.cinema.CinemaDebug
 import com.ticketfortwo.app.cinema.CinemaProbe
 import com.ticketfortwo.app.cinema.CinemaSync
+import com.ticketfortwo.app.cinema.FloatPlayer
+import com.ticketfortwo.app.cinema.FloatRequest
 import com.ticketfortwo.app.cinema.MediaSniffer
 import com.ticketfortwo.app.cinema.SRC_PAGE
 import com.ticketfortwo.app.cinema.SnifferState
@@ -265,6 +267,10 @@ fun CinemaScreen(
         recentUrl = loaded.second
     }
     var showFavs by remember { mutableStateOf(false) }
+    /* 「收厅」的二次确认。它是这一屏**唯一会中断放映**的动作，原来跟「收藏夹」
+       这类无害按钮平铺在同一排、一点就生效 —— 误触的代价是把对方直接踢回等候屏
+       （2026-09-29 用户拍板要加确认）。 */
+    var askCloseRoom by remember { mutableStateOf(false) }
     fun persistFavs() {
         favPrefs.edit().putStringSet("set", favs.toSet()).apply()
     }
@@ -326,6 +332,35 @@ fun CinemaScreen(
 
     val sniffer = remember { SnifferState() }
 
+    /* ── 浮窗播放器（跨页 + 跨 App）──
+       「单一指挥官」：任何时刻只有一个进度源说了算。网页里的 <video> 与浮窗里的播放器
+       同时播会出现两个声音、两套进度，观众端就是被来回拽（跟 2026-09-29 修过的
+       "进度循环"同源）。所以这里显式记一个 commander，广播只读它的读数。 */
+    val float by FloatPlayer.state.collectAsState()
+    var commander by remember { mutableStateOf(Commander.Page) }
+
+    /** 起浮窗：先立新、后废旧 —— 网页那个照旧播着，等浮窗**真的播起来**才停它。 */
+    fun openFloat() {
+        val h = CinemaProbe.bestOf(hits)
+        if (h == null) {
+            note = "还没嗅到能播的地址 —— 先在这页把视频点成播放"
+            return
+        }
+        val startAt = player?.posMs ?: 0L
+        note = "浮窗起播中…"
+        FloatPlayer.start(
+            context,
+            FloatRequest(
+                url = h.url,
+                title = MediaSniffer.hostLabel(h.url),
+                referer = h.referer,
+                cookie = h.cookie,
+                userAgent = h.userAgent,
+                startPosMs = startAt,
+            ),
+        )
+    }
+
     /* WebView 从 CinemaBrowser 领取（进程级存活），但 **clients 每次进屏都重装**：
        它们闭包引用的这一屏组合状态（inputUrl/hits/player/…）是组合态 —— 重进后
        还挂着上一屏的闭包就会写进死状态。宿主对象内联创建（不 remember），
@@ -383,6 +418,21 @@ fun CinemaScreen(
             }
         }
         CinemaBrowser.obtain(context).also { CinemaBrowser.install(it, host) }
+    }
+
+    /** 关浮窗：反向交接 —— 把浮窗的进度拨回网页播放器，然后才停它（同样先立新后废旧）。 */
+    fun closeFloat() {
+        val at = float.posMs
+        if (at > 0) {
+            webView.post {
+                webView.evaluateJavascript(
+                    WatchSync.jsFor(WatchCmd.Seek(at), at, float.durMs), null,
+                )
+            }
+        }
+        commander = Commander.Page
+        FloatPlayer.stop(context)
+        note = "已收起浮窗，回到网页里播"
     }
 
     /**
@@ -474,6 +524,7 @@ fun CinemaScreen(
     // 弹层比页面更"深"：后注册优先级更高 —— 收藏夹开着时返回先关它，
     // 否则会隔着遮罩退网页/离厅（审查 A3-5）
     BackHandler(enabled = showFavs) { showFavs = false }
+    BackHandler(enabled = askCloseRoom) { askCloseRoom = false }
 
     /* 退回目标的安顿窗口：onPageStarted 落到目标 ≠ 站点安顿了 —— 页面可能紧接着
        又把自己 replace 成广告。窗口内出现新导航即视为"被弹走"（见 onPageStarted
@@ -675,9 +726,57 @@ fun CinemaScreen(
                         }
                     }
                 }
+                /* 指挥权已经交给浮窗：网页这个播放器已停，它的读数是陈旧的，
+                   再照发会把观众的时间轴拽回旧位置（两套进度打架的根源）。 */
+                if (commander == Commander.Float) return@evaluateJavascript
                 CallSession.publishCinemaProgress(w.posMs, w.durMs, w.playing)
             }
         }
+    }
+
+    /* 浮窗交接 —— **先立新、后废旧**：网页那个照旧播着，等浮窗**真的播起来**才停它。
+       判据用 float.ready（isPlaying 且位置已走），不能刚调 play() 就交权：
+       HLS 常常要缓冲一两秒，那一两秒里两边都没在播，观众会收到一次假暂停。 */
+    LaunchedEffect(float.active, float.ready) {
+        if (float.active && float.ready && commander == Commander.Page) {
+            webView.post {
+                webView.evaluateJavascript(
+                    WatchSync.jsFor(WatchCmd.Pause, float.posMs, float.durMs), null,
+                )
+            }
+            commander = Commander.Float
+            note = "浮窗接手了 —— 网页那边先停，进度接着走"
+            Log.i("Cinema", "FLOAT handoff @ ${float.posMs / 1000}s")
+        }
+    }
+
+    /* 指挥官是浮窗时，进度改由浮窗读数广播（网页那个已停，不再更新）。 */
+    LaunchedEffect(commander, float.active) {
+        if (commander != Commander.Float || !float.active) return@LaunchedEffect
+        while (true) {
+            delay(500)
+            val f = FloatPlayer.state.value
+            if (!f.active) break
+            if (cinema != null) CallSession.publishCinemaProgress(f.posMs, f.durMs, f.playing)
+        }
+    }
+
+    /* 浮窗播不起来（防盗链之类的站点）：把指挥权还给网页，最坏就是退回现在的样子。 */
+    LaunchedEffect(float.error) {
+        if (float.error != null && commander == Commander.Float) {
+            commander = Commander.Page
+            webView.post {
+                webView.evaluateJavascript(WatchSync.jsFor(WatchCmd.Play, float.posMs, 0), null)
+            }
+            note = "浮窗播不了这个站（可能是防盗链），已退回网页里播"
+        }
+    }
+
+    /* 正在分享屏幕：浮窗**只藏视图**，播放与进度照旧 ——
+       藏掉是因为它会被采集进分享画面（还可能是个黑框）；
+       但声音和进度必须继续，否则观众那边会以为房主暂停了。 */
+    LaunchedEffect(screenShared, float.active) {
+        if (float.active) FloatPlayer.setHidden(screenShared)
     }
 
     // 观众的放映请求落到这个 WebView 上（它才是播放器）。
@@ -845,10 +944,7 @@ fun CinemaScreen(
         // 自动切等于把误判直接端给对方。
         GlassTextButton(if (cinema == null) "开始放映" else "收厅", onClick = {
             if (cinema != null) {
-                CallSession.setCinemaTrack(null)
-                note = "已收厅，对方那边退回等候屏"
-                theater = false
-                pinVideo(false)
+                askCloseRoom = true     // 二次确认（唯一会中断放映的动作）
             } else {
                 val h = CinemaProbe.bestOf(hits)
                 if (h != null) {
@@ -884,6 +980,19 @@ fun CinemaScreen(
         if (!screenShared) {
             GlassTextButton("分享我的屏幕", onClick = onStartShare, backdrop)
         }
+        /* 浮窗播：另起一个播放器播"嗅探到的地址" —— 换页、回主界面、回桌面都照播
+           （对标雨见的嗅探即浮窗）。收起时把进度拨回网页播放器（反向交接）。 */
+        GlassTextButton(if (float.active) "收起浮窗" else "浮窗播", onClick = {
+            when {
+                float.active -> closeFloat()
+                // 悬浮窗权限只能用户自己在系统设置里开，我们只能把路指过去
+                !FloatPlayer.canDrawOverlays(context) -> {
+                    runCatching { context.startActivity(FloatPlayer.openOverlaySettings(context)) }
+                    note = "要在桌面/别的应用上也看到小窗，得先在设置里允许「显示在其他应用上层」—— 打开后回来再点一次「浮窗播」"
+                }
+                else -> openFloat()
+            }
+        }, backdrop)
         // 浏览器后退：广告/自动跳转后一步步退回上一页（与系统返回键同一行为，
         // 没有这颗按钮时用户只能重开链接 —— 2026-09-28 用户反馈）
         // 可用性 = 原生历史 或 自家记录（广告 replace 吃掉原生历史时按钮不许灰死 ——
@@ -1138,10 +1247,7 @@ fun CinemaScreen(
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     if (cinema != null) {
                         DockBtn("收厅", backdrop, Modifier.weight(1f), hot = true) {
-                            CallSession.setCinemaTrack(null)
-                            note = "已收厅，对方那边退回等候屏"
-                            theater = false
-                            pinVideo(false)
+                            askCloseRoom = true     // 与动作行同一个二次确认
                         }
                     }
                     if (!screenShared) {
@@ -1184,6 +1290,81 @@ fun CinemaScreen(
                    这两个条件一叠加，整张卡直接消失，屏幕上只剩一块黑 —— 量具默认收起之后
                    第一时间就踩到了（截图实测）。 */
                 panel(Modifier)
+            }
+        }
+    }
+
+    /* 收厅二次确认：动作行与甲板底坞两处入口共用一个。
+       文案说清后果（对方会退回等候屏）+ 给退路（你这边还能重新放映）。 */
+    if (askCloseRoom) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color(0xA6000000))
+                .clickable { askCloseRoom = false },
+            contentAlignment = Alignment.Center,
+        ) {
+            GlassCardPanel(
+                backdrop,
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 28.dp)
+                    .clickable { /* 卡内点击吞掉，别把遮罩点穿 */ },
+            ) {
+                Column(Modifier.padding(18.dp)) {
+                    Text(
+                        "确定收厅？",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Ink.TextHi,
+                    )
+                    Box(Modifier.height(6.dp))
+                    Text(
+                        "对方那边会立刻退回等候屏",
+                        fontSize = 12.5.sp,
+                        color = Ink.TextMid,
+                        lineHeight = 18.sp,
+                    )
+                    Text(
+                        "你这边网页和进度都还在，可以重新放映",
+                        fontSize = 11.5.sp,
+                        color = Ink.TextLow,
+                        lineHeight = 17.sp,
+                    )
+                    Box(Modifier.height(16.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        LiquidGlassButton(
+                            onClick = { askCloseRoom = false },
+                            backdrop = backdrop,
+                            modifier = Modifier.weight(1f).height(46.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text("再想想", fontSize = 14.sp, color = Ink.TextHi)
+                        }
+                        LiquidGlassButton(
+                            onClick = {
+                                askCloseRoom = false
+                                CallSession.setCinemaTrack(null)
+                                note = "已收厅，对方那边退回等候屏"
+                                theater = false
+                                pinVideo(false)
+                            },
+                            backdrop = backdrop,
+                            modifier = Modifier.weight(1f).height(46.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            surfaceColor = Ink.Warn.copy(alpha = 0.18f),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                "收厅",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Ink.Warn,
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -1594,6 +1775,15 @@ private fun androidx.compose.foundation.layout.BoxScope.FullscreenHint(text: Str
 }
 
 /**
+ * 进度由谁说了算 —— 「单一指挥官」。
+ *
+ * 网页里的 `<video>` 与浮窗里的播放器**不能同时说了算**：两套进度会互相拽，
+ * 观众端表现为进度来回跳（2026-09-29 修过的"进度循环"同源问题）。
+ * 所以任一时刻只有一方是指挥官，广播只读它的读数，另一方必须停。
+ */
+private enum class Commander { Page, Float }
+
+/**
  * 厅回来接片用的恢复点（见 CinemaScreen 的 pendingRestore）。
  *
  * [durMs] 是"是不是同一部片"的门：重进接回的那一页可能已经不是离开时那部
@@ -1608,18 +1798,23 @@ private data class CinemaResume(
 
 /* ── 放映模式（方案B）的四块小件 ──────────────────────────────── */
 
-/** 顶栏「放映 | 浏览」分段开关 —— 液态玻璃（AndroidLiquidGlass/LiquidGlassButton）。 */
+/**
+ * 顶栏「浏览 | 放映」模式开关。
+ *
+ * 原来是两颗并列按钮 —— 看着像两个独立功能，看不出是同一件事的两面
+ * （2026-09-29 用户反馈）。改成分段开关：一块滑块在两态间滑动，选中态染绿，
+ * 与设置页的分段控件同一套液态玻璃语言。
+ *
+ * 顺序按"浏览在前"：进厅默认就是浏览态，开关停在左边是"还没开始"的自然位置。
+ */
 @Composable
 private fun ModeSeg(theater: Boolean, backdrop: LayerBackdrop, onTheater: () -> Unit, onBrowse: () -> Unit) {
-    Row(
-        Modifier
-            .clip(RoundedCornerShape(13.dp))
-            .background(Color(0x14FFFFFF))
-            .padding(3.dp),
-    ) {
-        SegCell("放映", theater, backdrop, onTheater)
-        SegCell("浏览", !theater, backdrop, onBrowse)
-    }
+    SegmentRow(
+        options = listOf("浏览", "放映"),
+        selected = if (theater) 1 else 0,
+        // 分段控件是等宽铺满的，这里只要两个字的宽度 —— 定宽，别把顶栏撑开
+        modifier = Modifier.width(132.dp),
+    ) { idx -> if (idx == 1) onTheater() else onBrowse() }
 }
 
 @Composable

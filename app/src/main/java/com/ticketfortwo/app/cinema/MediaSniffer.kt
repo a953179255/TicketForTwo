@@ -196,6 +196,14 @@ object MediaSniffer {
         val kind: Kind,
         val referer: String?,
         val userAgent: String?,
+        /**
+         * 这条请求带上的 Cookie。
+         *
+         * 只为了浮窗播放器而记：很多站点的视频地址带防盗链，浮窗自己拿（不带网页那次的
+         * 凭证）拿到的是 403 或空数据。带上同一份 Cookie/Referer/UA 才有机会拿到真数据
+         * （见 docs/references/yjllq-float-window.md）。拿不到时界面显示"未知时长"，不编数字。
+         */
+        val cookie: String? = null,
         val firstSeenMs: Long,
         var hits: Int = 1,
         /** 来自哪一路：请求流 / 页面探测 / 两边都有。两边都有时可信度最高。 */
@@ -307,6 +315,7 @@ class SnifferState(private val nowMs: () -> Long = System::currentTimeMillis) {
                     kind = kind,
                     referer = headers?.get("Referer") ?: headers?.get("referer"),
                     userAgent = headers?.get("User-Agent") ?: headers?.get("user-agent"),
+                    cookie = headers?.get("Cookie") ?: headers?.get("cookie"),
                     firstSeenMs = nowMs(),
                     sources = SRC_REQUEST,
                 )
@@ -334,23 +343,25 @@ class SnifferState(private val nowMs: () -> Long = System::currentTimeMillis) {
      * 在某些 WebView 版本上**不会**为 fetch/XHR 回调（它主要覆盖主框架与子资源加载），
      * 但 Resource Timing 里一定有。两路并起来才不会漏。
      */
-    fun observePageProbe(probe: MediaSniffer.PageProbe) {
+    fun observePageProbe(probe: MediaSniffer.PageProbe, pageUrl: String? = null) {
         synchronized(lock) {
             if (probe.currentSrc.isNotBlank() && !probe.isBlob) {
-                merge(probe.currentSrc, SRC_PAGE)
+                merge(probe.currentSrc, SRC_PAGE, pageUrl)
             }
-            probe.resources.forEach { merge(it, SRC_PAGE) }
+            probe.resources.forEach { merge(it, SRC_PAGE, pageUrl) }
         }
     }
 
-    private fun merge(url: String, src: Int) {
+    private fun merge(url: String, src: Int, pageUrl: String? = null) {
         val kind = MediaSniffer.classify(url)
         // 页面报上来的资源后缀都不认识的话不留：埋点会把列表淹掉
         if (kind == MediaSniffer.Kind.Ignored) return
         val old = table[url]
         if (old == null) {
             table[url] = MediaSniffer.Hit(
-                url = url, kind = kind, referer = null, userAgent = null,
+                url = url, kind = kind,
+                // 页面这一路没有请求头可抄 —— 拿当前页 URL 当来源，给浮窗兜底
+                referer = pageUrl, userAgent = null, cookie = null,
                 firstSeenMs = nowMs(), sources = src,
             )
         } else {

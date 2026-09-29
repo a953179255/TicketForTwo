@@ -1,0 +1,77 @@
+# Gradle / AGP
+.gradle/
+build/
+app/build/
+.kotlin/
+
+# 机器专属：含本机 sdk.dir，绝不入库
+# 注意：gitignore 不支持行尾注释，注释必须独立成行
+local.properties
+
+# IDE
+*.iml
+.idea/
+.navigation/
+captures/
+
+# 构建产物与签名
+*.apk
+*.aab
+*.keystore
+!debug.keystore
+release-signing.properties
+keystore.properties
+
+# 系统 / 编辑器
+.DS_Store
+Thumbs.db
+*.swp
+
+# 原生构建中间物
+.externalNativeBuild/
+.cxx/
+
+# 多 agent 共享调试暂存区，勿入库
+.test-work/
+tmp/
+
+# 本地调试产物：一次性邀请链接（含真实 SDP 与候选地址）、统计回传
+# 统一放 .dev/ —— viewer/public 是会被打包上传的站点根，绝不能落在那儿
+.dev/
+# uiautomator dump 落在**仓库根**（drive_m0.py 的 cwd），写成 viewer/ 下就永远匹配不上
+ui_dump.xml
+
+# Python 字节码缓存（harness 脚本 import 时生成）
+__pycache__/
+*.pyc
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+node_modules/
+bower_components/
+jspm_packages/
+site-packages/
+venv/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）

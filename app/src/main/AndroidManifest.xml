@@ -18,6 +18,8 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- 悬浮控制岛：自己的界面也会出现在分享画面里，这个开关后面要能关 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- 浮窗播放器：切后台仍要继续播，必须挂在 mediaPlayback 类型的前台服务上 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 
     <uses-feature
         android:name="android.hardware.camera"
@@ -64,6 +66,13 @@
             android:name=".ShareService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection|microphone" />
+
+        <!-- 浮窗播放器：独立于网页播"嗅探到的地址"，跨页/跨 App 都活着。
+             类型必须声明 mediaPlayback，否则 Android 14+ startForeground 直接抛。 -->
+        <service
+            android:name=".cinema.FloatPlayerService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
 
     </application>
 

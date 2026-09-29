@@ -14,6 +14,9 @@ serializationJson = "1.9.0"
 backdrop = "2.0.1"
 # 预编译 libwebrtc（MIT）。含 org.webrtc.ScreenCapturerAndroid
 webrtc = "150.7871.01"
+# 悬浮窗播放器：要播"嗅探到的地址"，必须有一个独立于网页的播放器（网页里的 <video>
+# 会随页面卸载消失）。只取 exoplayer + hls 两件，不引 ui/dash（DASH 只报时长、不播）
+media3 = "1.8.0"
 junit = "4.13.2"
 androidxJunit = "1.2.1"
 espresso = "3.6.1"
@@ -35,6 +38,9 @@ coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutin
 serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "serializationJson" }
 backdrop = { group = "io.github.kyant0", name = "backdrop", version.ref = "backdrop" }
 webrtc = { group = "io.github.webrtc-sdk", name = "android", version.ref = "webrtc" }
+androidx-media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
+androidx-media3-exoplayer-hls = { group = "androidx.media3", name = "media3-exoplayer-hls", version.ref = "media3" }
+androidx-media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxJunit" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espresso" }
