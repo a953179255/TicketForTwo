@@ -807,12 +807,54 @@ fun CinemaScreen(
     }
 
     /* 放映模式（钉满全屏）时浮窗**不该再挂着**：同一个片，屏上已经有一份全屏的，
-       角落再浮一个小的纯占地方。收浮窗（反向交接，进度拨回网页），观众端不受影响。 */
-    LaunchedEffect(theater, float.active) {
-        if (theater && float.active) {
+       角落再浮一个小的纯占地方。收浮窗（反向交接，进度拨回网页），观众端不受影响。
+       **只在 App 在前台时收** —— 切后台那条规则会自动开浮窗，两条规则曾在这里
+       打架：浮窗刚被后台规则拉起，就被这条前台规则立刻杀了（实测 ExoPlayer
+       创建 0.5 秒即 Release，浮窗根本活不过 ON_STOP）。 */
+    var appResumed by remember { mutableStateOf(true) }
+    LaunchedEffect(theater, float.active, appResumed) {
+        if (theater && float.active && appResumed) {
             closeFloat()
             note = "放映时画面已经全屏，浮窗收起来了"
         }
+    }
+
+    /* 放映中把 App 退到后台（HOME / 切别的 App / 锁屏）：**自动切成悬浮窗继续播** ——
+       不然想边干别的边一起看，就只能干瞪着这个 App（2026-09-30 用户要求）。
+       回到前台且还停在放映态：反向交接，画面回到全屏。
+       （切后台后网页里的播放器本来还能出声，但浮窗 ready 后"指挥官"逻辑会把它停掉 ——
+       两套声音只活一个，这正是交接流程的职责。正在分享屏幕时不掺和：那时画面本来就
+       在往外送，浮窗反而会被采集进去。） */
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            android.util.Log.i(
+                "Cinema",
+                "LIFECYCLE $event theater=$theater cinema!=null=${cinema != null} " +
+                    "floatActive=${float.active} shared=$screenShared",
+            )
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> {
+                    appResumed = false
+                    if (theater && cinema != null && !float.active && !screenShared) {
+                        runCatching {
+                            openFloat(null)
+                            note = "已切到悬浮窗继续播"
+                        }.onFailure { android.util.Log.w("Cinema", "autofloat fail: ${it.message}") }
+                    }
+                }
+                androidx.lifecycle.Lifecycle.Event.ON_START -> {
+                    appResumed = true
+                    if (theater && float.active && commander == Commander.Float) {
+                        closeFloat()
+                        note = "回到全屏放映"
+                    }
+                }
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
     }
 
     /* 候选时长：异步回填。

@@ -48,11 +48,13 @@ class FloatPlayerService : android.app.Service() {
     private var titleView: TextView? = null
     private val handler = Handler(Looper.getMainLooper())
 
-    /** 进度回传：界面与"指挥权"判断都靠它。500ms 足够顺，又不至于空转。 */
+    /** 进度回传：界面与"指挥权"判断都靠它。1000ms 一拍 ——
+        之前 500ms 一拍，叠加状态回灌界面（整屏重组），用户实测"开浮窗手机有点卡"：
+        一半的功夫就砍在这。进度广播本来就按秒级算，1s 足够顺。 */
     private val ticker = object : Runnable {
         override fun run() {
             publish()
-            handler.postDelayed(this, 500)
+            handler.postDelayed(this, 1_000)
         }
     }
 
@@ -147,15 +149,23 @@ class FloatPlayerService : android.app.Service() {
             return
         }
         val dur = p.duration.takeIf { it > 0 } ?: 0L
-        FloatPlayer.update {
-            it.copy(
-                playing = p.isPlaying,
-                posMs = p.currentPosition.coerceAtLeast(0L),
-                durMs = dur,
-                /* ready = 真的在播。刚 prepare() 完 isPlaying 常常还是 false
-                   （HLS 要缓冲），拿它当交接判据会出现"两头都没播"的空白。 */
-                ready = p.isPlaying && p.currentPosition > 0L,
-            )
+        val pos = p.currentPosition.coerceAtLeast(0L)
+        /* 只在有意义的变化时回灌状态：位置挪了 ≥400ms / 时长变了 / 播放态变了。
+           不加这道门的话每拍都发一遍 → 界面每秒白重组一次（卡的另一半）。 */
+        val s = FloatPlayer.state.value
+        val changed = kotlin.math.abs(pos - s.posMs) >= 400 ||
+            dur != s.durMs || p.isPlaying != s.playing || (p.isPlaying && !s.ready)
+        if (changed) {
+            FloatPlayer.update {
+                it.copy(
+                    playing = p.isPlaying,
+                    posMs = pos,
+                    durMs = dur,
+                    /* ready = 真的在播。刚 prepare() 完 isPlaying 常常还是 false
+                       （HLS 要缓冲），拿它当交接判据会出现"两头都没播"的空白。 */
+                    ready = p.isPlaying && pos > 0L,
+                )
+            }
         }
     }
 
@@ -192,8 +202,10 @@ class FloatPlayerService : android.app.Service() {
     private fun addOverlay(exo: ExoPlayer, title: String) {
         val m = getSystemService(WINDOW_SERVICE) as WindowManager
         wm = m
-        val w = dp(WIN_W_DP)
-        val h = dp(WIN_H_DP) + dp(BAR_H_DP)
+        /* 窗高 = 画面高，**不再给控制条留独立空间**（2026-09-30 用户反馈：
+           控制条藏了但占位还在）。控制条改为覆盖在画面内部（见下方 bar）。 */
+        val w = dp(SIZES[sizeIdx].first)
+        val h = dp(SIZES[sizeIdx].second)
 
         val radius = dp(14).toFloat()
         val root = FrameLayout(this).apply {
@@ -219,19 +231,20 @@ class FloatPlayerService : android.app.Service() {
         val video = TextureView(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
-                dp(WIN_H_DP),
+                FrameLayout.LayoutParams.MATCH_PARENT,
             )
         }
         root.addView(video)
         exo.setVideoTextureView(video)
 
-        /* 控制条默认藏起来（2026-09-30 用户要求）：省屏幕 —— 点一下窗身才现身。
-           这也是唯一的两颗小按钮（播放/暂停、×）的载体。 */
+        /* 控制条**覆盖在画面内部**（不再占独立空间）：默认藏起来，
+           轻点窗身从画面里浮出来，3 秒自动收（2026-09-30 用户要求）。 */
         val bar = FrameLayout(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, dp(BAR_H_DP), Gravity.BOTTOM,
             )
-            setBackgroundColor(0xCC000000.toInt())
+            // 半透明压在画面上：看得清按钮，又不把画面整体遮掉一条
+            setBackgroundColor(0xB3000000.toInt())
             visibility = View.GONE
         }
         this.bar = bar
@@ -298,14 +311,25 @@ class FloatPlayerService : android.app.Service() {
             x = dp(16)
             y = dp(120)
         }
-        /* 拖动 + 轻点：按住挪动是拖窗；**原地松手（没挪动）= 切换控制条显隐**
-           （2026-09-30 用户要求：控制条只在点窗时出现，平时不占地方）。 */
+        /* 拖动 + 轻点 + 双击：按住挪动 = 拖窗；**原地轻点** = 控制条现一下身；
+           **双击** = 循环调窗大小（小 → 中 → 大 → 小，2026-09-30 用户要求，
+           与主流视频 App 的画中画一致）。单击动作延时 290ms 确认 —— 等等看
+           第二下会不会来，来了就取消单击、改执行双击。 */
         var lastX = 0f
         var lastY = 0f
         var downX = 0
         var downY = 0
         var moved = false
         val slop = ViewConfiguration.get(this).scaledTouchSlop
+        var lastTapAt = 0L
+        val singleTapRun = Runnable {
+            bar?.let { b ->
+                b.removeCallbacks(hideBarRun)
+                b.visibility = View.VISIBLE
+                b.alpha = 1f
+                b.postDelayed(hideBarRun, 3_000)
+            }
+        }
         root.setOnTouchListener { v, e ->
             when (e.action) {
                 MotionEvent.ACTION_DOWN -> {
@@ -327,12 +351,17 @@ class FloatPlayerService : android.app.Service() {
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     if (e.action == MotionEvent.ACTION_UP && !moved) {
-                        // 轻点：控制条现一下身（3 秒后自动收起）
-                        bar?.let { b ->
-                            b.removeCallbacks(hideBarRun)
-                            b.visibility = View.VISIBLE
-                            b.alpha = 1f
-                            b.postDelayed(hideBarRun, 3_000)
+                        val now = android.os.SystemClock.uptimeMillis()
+                        // 380ms：比 GestureDetector 的双击超时（300ms）稍宽 —— 触屏手上
+                        // 二连击常落在 300~350ms，宁可偶尔把两次慢单击当双击（代价只是换档）
+                        if (now - lastTapAt < 380) {
+                            // 双击：调窗大小（取消还没执行的单击）
+                            v.removeCallbacks(singleTapRun)
+                            lastTapAt = 0
+                            cycleSize(v)
+                        } else {
+                            lastTapAt = now
+                            v.postDelayed(singleTapRun, 290)
                         }
                     }
                     true
@@ -343,6 +372,20 @@ class FloatPlayerService : android.app.Service() {
 
         overlay = root
         runCatching { m.addView(root, lp) }
+    }
+
+    /** 三档窗大小（宽 dp to 高 dp），高随宽保持 16:9 附近的比例。 */
+    private val SIZES = arrayOf(170 to 96, 222 to 125, 276 to 155)
+    private var sizeIdx = 0
+
+    /** 双击换挡：小 → 中 → 大 → 回到小。同一次会话记住当前档，拖动不重置。 */
+    private fun cycleSize(view: View) {
+        sizeIdx = (sizeIdx + 1) % SIZES.size
+        val lp = view.layoutParams as? WindowManager.LayoutParams ?: return
+        lp.width = dp(SIZES[sizeIdx].first)
+        lp.height = dp(SIZES[sizeIdx].second)
+        runCatching { wm?.updateViewLayout(view, lp) }
+        android.util.Log.i("FloatPlay", "size -> ${SIZES[sizeIdx]}")
     }
 
     /** 控制条自动收起：轻点唤出，3 秒不碰就藏（见 addOverlay 的轻点分支）。 */
@@ -410,8 +453,6 @@ class FloatPlayerService : android.app.Service() {
 
         private const val NOTIF_ID = 1007
         private const val CHANNEL_ID = "t2_float"
-        private const val WIN_W_DP = 170
-        private const val WIN_H_DP = 96
         private const val BAR_H_DP = 30
     }
 }
