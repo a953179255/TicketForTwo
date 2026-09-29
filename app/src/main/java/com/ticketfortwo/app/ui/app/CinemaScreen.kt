@@ -2161,7 +2161,11 @@ private data class CinemaResume(
  */
 @Composable
 private fun ModeSeg(theater: Boolean, backdrop: LayerBackdrop, onTheater: () -> Unit, onBrowse: () -> Unit) {
-    val knobX by animateDpAsState(if (theater) 66.dp else 2.dp, label = "modeKnob")
+    /* 几何要对准字心：胶囊 128 宽、内衬 2dp → 内区 124，两格各 62（字心在 31 / 93）。
+       滑块 58 宽 → x = 2 时中心 31（盖住"浏览"），x = 64 时中心 93（盖住"放映"），
+       右缘 122 也不出界 —— 之前算成 66，滑块右缘冒出胶囊 2dp、字也不居中
+       （2026-09-30 用户截图实测）。 */
+    val knobX by animateDpAsState(if (theater) 64.dp else 2.dp, label = "modeKnob")
     val knobShape = RoundedCornerShape(24.dp)
     GlassPanel(
         backdrop = backdrop,
@@ -2170,11 +2174,14 @@ private fun ModeSeg(theater: Boolean, backdrop: LayerBackdrop, onTheater: () -> 
         shape = RoundedCornerShape(50),
         modifier = Modifier.height(34.dp).width(128.dp),
     ) {
-        Box(Modifier.fillMaxSize().padding(2.dp)) {
+        Box(
+            Modifier.fillMaxSize().padding(2.dp),
+            contentAlignment = Alignment.CenterStart,
+        ) {
             Box(
                 Modifier
                     .offset(x = knobX)
-                    .size(width = 60.dp, height = 28.dp)
+                    .size(width = 58.dp, height = 28.dp)
                     .clip(knobShape)
                     .background(
                         if (theater) Ink.Live.copy(alpha = 0.34f)
@@ -2420,7 +2427,9 @@ private fun RoomShortcuts(
     }
 }
 
-/** 一颗快捷芯片：LiquidGlassButton（与甲板/动作行同一按压液感，禁裸 clickable+ripple）。 */
+/** 一颗快捷芯片：LiquidGlassButton（与甲板/动作行同一按压液感，禁裸 clickable+ripple）。
+ *  尺寸对齐动作行的 GlassTextButton（约 38dp 高、14sp 加粗）——
+ *  之前 34dp/12sp 明显小一号，同一屏里像两代人（2026-09-30 用户反馈）。 */
 @Composable
 private fun ShortcutChip(
     text: String,
@@ -2430,10 +2439,16 @@ private fun ShortcutChip(
     LiquidGlassButton(
         onClick = onClick,
         backdrop = backdrop,
-        modifier = Modifier.height(34.dp),
+        modifier = Modifier.height(38.dp),
         shape = RoundedCornerShape(percent = 50),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Ink.TextHi)
+        Text(
+            text,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Ink.TextHi,
+            modifier = Modifier.padding(horizontal = 14.dp),
+        )
     }
 }
