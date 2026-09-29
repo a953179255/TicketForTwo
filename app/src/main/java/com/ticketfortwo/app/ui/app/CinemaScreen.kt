@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -282,6 +283,9 @@ fun CinemaScreen(
     /* 退回目标是否已经落到过眼里 —— 落地之后再出现的导航是用户自己点的（认它），
        没落地就跳走才是"被弹走"（继续连退）。见 onPageStarted 的 when。 */
     var backSawTarget by remember { mutableStateOf(false) }
+    /* 引导首页（方案A）：pageUrl 还是默认 test.html 且没在放映 → 显示目的驱动的
+       操作卡替代彩条 WebView；用户点任意入口后进浏览器，引导不再出现。 */
+    var lobbyDismissed by remember { mutableStateOf(false) }
     /* 退回落地时刻 vs 网页内最后一次触摸（longArray 持有，不触发重组）。
        页面自己落地即跳（跳板 replace）没有触摸；用户点链接一定先摸过屏 ——
        两者靠这个时间戳区分，谁该被"连退"吃掉一目了然（审查 A3-1/A3-4 的冲突面）。 */
@@ -295,6 +299,9 @@ fun CinemaScreen(
         // 新的一场还没片：别把上一场的放映模式带进来
         if (CallSession.cinema.value == null) theaterMode.value = false
     }
+    /* 引导首页（方案A）：pageUrl 还是默认 test.html 且没在放映 → 显示目的驱动的
+       操作卡替代彩条 WebView；用户点任意入口后进浏览器，引导不再出现。 */
+    val showLobby = !lobbyDismissed && pageUrl == CINEMA_TEST_LOCAL && !theater
 
     /** 房主这一侧播放器的位置/时长/标题 —— 直接复用 watch 那套探针，形状一样。 */
     var player by remember { mutableStateOf<com.ticketfortwo.app.watch.WatchState?>(null) }
@@ -1110,6 +1117,14 @@ fun CinemaScreen(
                每次切换 AndroidView 都整棵 detach/reattach，Chromium 重挂黑闪一两帧、
                再叠加页面重排 = 用户实测的"切换闪烁"。切模式只改这一份节点的布局
                约束（300dp ↔ 填满），视口变化由页内 resize 重钉兜底；节点不动，画面就不闪。 */
+            if (showLobby) {
+                CinemaLobby(
+                    backdrop = backdrop,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    onOpenSite = { lobbyDismissed = true },
+                    onFavorites = { lobbyDismissed = true; showFavs = true },
+                )
+            } else {
             if (!theater) {
                 addressRow(Modifier)
                 actionRow()
@@ -1264,6 +1279,7 @@ fun CinemaScreen(
                    这两个条件一叠加，整张卡直接消失，屏幕上只剩一块黑 —— 量具默认收起之后
                    第一时间就踩到了（截图实测）。 */
                 panel(Modifier)
+            }
             }
         }
     }
@@ -1858,6 +1874,87 @@ private fun TheaterTrack(frac: Float, enabled: Boolean, onSeek: (Float) -> Unit)
                     .clip(RoundedCornerShape(7.dp))
                     .background(Color.White),
             )
+        }
+    }
+}
+
+/* ── 放映模式（方案B）引导首页：还没打开网页时替代彩条 WebView ─────────── */
+
+@Composable
+private fun CinemaLobby(
+    backdrop: LayerBackdrop,
+    modifier: Modifier = Modifier,
+    onOpenSite: () -> Unit,
+    onFavorites: () -> Unit,
+) {
+    Column(
+        modifier
+            .fillMaxSize()
+            .background(Color(0xF00B0E12)),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Spacer(Modifier.height(28.dp))
+        // 🎬 品牌图标
+        Box(
+            Modifier
+                .height(56.dp)
+                .width(56.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(Ink.Live.copy(alpha = 0.12f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("🎬", fontSize = 26.sp)
+        }
+        Spacer(Modifier.height(15.dp))
+        Text("双人放映厅", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Ink.TextHi)
+        Spacer(Modifier.height(5.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.height(6.dp).width(6.dp).clip(RoundedCornerShape(3.dp))
+                    .background(Ink.Live),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text("厅已开 · 等对方进来", fontSize = 12.sp, color = Ink.TextMid)
+        }
+        Spacer(Modifier.height(26.dp))
+        // 三颗目的驱动的操作入口
+        LobbyAction("🌐", "打开网站", "输入地址，一起看想看的片子", hot = true, backdrop = backdrop, onClick = onOpenSite)
+        Spacer(Modifier.height(9.dp))
+        LobbyAction("⭐", "收藏夹", "快速回到之前看过的站点", backdrop = backdrop, onClick = onFavorites)
+    }
+}
+
+@Composable
+private fun LobbyAction(
+    icon: String,
+    title: String,
+    subtitle: String,
+    backdrop: LayerBackdrop,
+    hot: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (hot) Ink.Live.copy(alpha = 0.09f) else Color(0x0FFFFFFF))
+            .clickable(onClick = onClick)
+            .padding(13.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.height(40.dp).width(40.dp).clip(RoundedCornerShape(11.dp))
+                    .background(Color(0x14FFFFFF)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(icon, fontSize = 17.sp)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextHi)
+                Text(subtitle, fontSize = 11.5.sp, color = Ink.TextMid, modifier = Modifier.padding(top = 1.dp))
+            }
+            Text("›", fontSize = 15.sp, color = Color(0xFF5C6670))
         }
     }
 }
