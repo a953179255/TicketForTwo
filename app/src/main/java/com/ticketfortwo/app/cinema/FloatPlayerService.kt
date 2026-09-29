@@ -11,7 +11,9 @@ import android.os.Looper
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
+import android.view.TextureView
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
@@ -22,9 +24,9 @@ import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.ui.PlayerView
 import com.ticketfortwo.app.MainActivity
 import com.ticketfortwo.app.R
+import kotlin.math.abs
 
 /**
  * 悬浮窗播放器：播"嗅探到的地址"，与网页里的 `<video>` 无关。
@@ -42,7 +44,7 @@ class FloatPlayerService : android.app.Service() {
     private var wm: WindowManager? = null
     private var overlay: View? = null
     private var player: ExoPlayer? = null
-    private var playerView: PlayerView? = null
+    private var bar: View? = null
     private var titleView: TextView? = null
     private val handler = Handler(Looper.getMainLooper())
 
@@ -195,9 +197,10 @@ class FloatPlayerService : android.app.Service() {
 
         val radius = dp(14).toFloat()
         val root = FrameLayout(this).apply {
-            /* 圆角（2026-09-30 用户反馈：直角四角不好看）。
-               两层都要：背景画圆角色块 + 轮廓裁剪把里面方角的视频一起切圆，
-               只做背景的话 PlayerView 的直角会从圆角底下探出来。 */
+            /* 圆角要真正切到视频画面，**必须用 TextureView**：
+               默认的 SurfaceView 是独立合成图层，视图的轮廓裁剪切不到它 ——
+               上一版画面四角依旧是方的就是这个原因（用户 2026-09-30 实测）。
+               背景画圆角色块 + 轮廓裁剪把里面（现在是 TextureView）一起切圆。 */
             val bg = android.graphics.drawable.GradientDrawable().apply {
                 setColor(0xE6101116.toInt())
                 cornerRadius = radius
@@ -213,23 +216,25 @@ class FloatPlayerService : android.app.Service() {
             clipToOutline = true
             elevation = dp(8).toFloat()
         }
-        val pv = PlayerView(this).apply {
-            player = exo
-            useController = false          // 自己画一条小控制条，不用默认那一大块
+        val video = TextureView(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 dp(WIN_H_DP),
             )
         }
-        playerView = pv
-        root.addView(pv)
+        root.addView(video)
+        exo.setVideoTextureView(video)
 
+        /* 控制条默认藏起来（2026-09-30 用户要求）：省屏幕 —— 点一下窗身才现身。
+           这也是唯一的两颗小按钮（播放/暂停、×）的载体。 */
         val bar = FrameLayout(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, dp(BAR_H_DP), Gravity.BOTTOM,
             )
             setBackgroundColor(0xCC000000.toInt())
+            visibility = View.GONE
         }
+        this.bar = bar
         val t = TextView(this).apply {
             text = title
             setTextColor(0xFFFFFFFF.toInt())
@@ -293,20 +298,43 @@ class FloatPlayerService : android.app.Service() {
             x = dp(16)
             y = dp(120)
         }
-        // 拖动：按住窗任意处挪动（吸附到屏幕边缘内的 clamp 由 motion 事件算）
+        /* 拖动 + 轻点：按住挪动是拖窗；**原地松手（没挪动）= 切换控制条显隐**
+           （2026-09-30 用户要求：控制条只在点窗时出现，平时不占地方）。 */
         var lastX = 0f
         var lastY = 0f
         var downX = 0
         var downY = 0
+        var moved = false
+        val slop = ViewConfiguration.get(this).scaledTouchSlop
         root.setOnTouchListener { v, e ->
             when (e.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    lastX = e.rawX; lastY = e.rawY; downX = lp.x; downY = lp.y; true
+                    lastX = e.rawX; lastY = e.rawY
+                    downX = lp.x; downY = lp.y
+                    moved = false
+                    true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    lp.x = (downX + (e.rawX - lastX)).toInt().coerceAtLeast(0)
-                    lp.y = (downY + (e.rawY - lastY)).toInt().coerceAtLeast(0)
-                    runCatching { m.updateViewLayout(v, lp) }
+                    val dx = e.rawX - lastX
+                    val dy = e.rawY - lastY
+                    if (moved || abs(dx) > slop || abs(dy) > slop) {
+                        moved = true
+                        lp.x = (downX + dx).toInt().coerceAtLeast(0)
+                        lp.y = (downY + dy).toInt().coerceAtLeast(0)
+                        runCatching { m.updateViewLayout(v, lp) }
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (e.action == MotionEvent.ACTION_UP && !moved) {
+                        // 轻点：控制条现一下身（3 秒后自动收起）
+                        bar?.let { b ->
+                            b.removeCallbacks(hideBarRun)
+                            b.visibility = View.VISIBLE
+                            b.alpha = 1f
+                            b.postDelayed(hideBarRun, 3_000)
+                        }
+                    }
                     true
                 }
                 else -> false
@@ -317,12 +345,18 @@ class FloatPlayerService : android.app.Service() {
         runCatching { m.addView(root, lp) }
     }
 
+    /** 控制条自动收起：轻点唤出，3 秒不碰就藏（见 addOverlay 的轻点分支）。 */
+    private val hideBarRun = Runnable {
+        bar?.animate()?.alpha(0f)?.setDuration(200)?.withEndAction {
+            bar?.visibility = View.GONE
+        }
+    }
+
     private fun teardown() {
         handler.removeCallbacks(ticker)
         runCatching { overlay?.let { wm?.removeView(it) } }
         overlay = null
-        playerView?.player = null
-        playerView = null
+        bar = null
         runCatching { player?.release() }
         player = null
         FloatPlayer.update { FloatState() }

@@ -140,9 +140,9 @@ dependencies {
     implementation(libs.webrtc)
 
     // 悬浮窗播放器：播"嗅探到的地址"，独立于网页（见 docs/references/yjllq-float-window.md）
+    // 不引 media3-ui：画面用 TextureView（SurfaceView 切不了圆角），控制条自绘
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.exoplayer.hls)
-    implementation(libs.androidx.media3.ui)
 
     debugImplementation(libs.androidx.ui.tooling)
 

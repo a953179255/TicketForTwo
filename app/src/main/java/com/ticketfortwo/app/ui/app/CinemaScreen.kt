@@ -343,6 +343,8 @@ fun CinemaScreen(
        "进度循环"同源）。所以这里显式记一个 commander，广播只读它的读数。 */
     val float by FloatPlayer.state.collectAsState()
     var commander by remember { mutableStateOf(Commander.Page) }
+    /* 候选时长（URL → 毫秒）：异步回填，先出条目、时长后填。 */
+    var durations by remember { mutableStateOf(emptyMap<String, Long>()) }
 
     /**
      * 起浮窗：先立新、后废旧 —— 网页那个照旧播着，等浮窗**真的播起来**才停它。
@@ -801,13 +803,20 @@ fun CinemaScreen(
         if (float.active) FloatPlayer.setHidden(screenShared)
     }
 
+    /* 放映模式（钉满全屏）时浮窗**不该再挂着**：同一个片，屏上已经有一份全屏的，
+       角落再浮一个小的纯占地方。收浮窗（反向交接，进度拨回网页），观众端不受影响。 */
+    LaunchedEffect(theater, float.active) {
+        if (theater && float.active) {
+            closeFloat()
+            note = "放映时画面已经全屏，浮窗收起来了"
+        }
+    }
+
     /* 候选时长：异步回填。
        一页里常有正片/预告/广告好几条，光看地址分不清谁是谁 —— **时长是最直观的分辨依据**
        （2026-09-30 用户要求，对标雨见的候选列表）。探测要联网，所以：
-        - 先出条目、时长后填（列表不卡）；
-        - 每条只探一次，结果按 URL 记住，重进不重复问；
+        - 每条只探一次，结果按 URL 记住（状态在上面与 float 一起声明），重进不重复问；
         - 拿不到就是拿不到，界面显示"未知"，不编数字。 */
-    var durations by remember { mutableStateOf(emptyMap<String, Long>()) }
     LaunchedEffect(showPanel, hits.size) {
         if (!showPanel) return@LaunchedEffect
         val todo = hits
