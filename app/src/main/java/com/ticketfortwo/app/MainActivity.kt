@@ -747,6 +747,9 @@ private fun AppRouter(backdrop: LayerBackdrop) {
             quality = quality,
             lastSummary = lastConnected,
             session = homeSession,
+            // 剪贴板浮卡（方案C）：「开厅一起看」与「分享 → 双人票」递链接同一条路 ——
+            // enterCinema = 开厅 + 递链接 + 不做地址回退（新链接不该被老页面盖掉）。
+            onWatchUrl = { u -> enterCinema(u) },
         )
     }
 

@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -35,11 +36,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -72,6 +75,18 @@ import java.util.Locale
  * 圆内写现在在干什么，点圆回到对应的会话屏，圆下一颗小字钮负责结束整场。
  * 「进入观看」在这一态下让位隐藏 —— 自己正在放片的人不需要"进入观看"。
  */
+/* ── 方案C · 链接感应 ──
+   看片的真实起点往往不是"打开 App"，而是"我在别的 App 复制了一条链接"。
+   进首页时瞄一眼剪贴板，有链接就浮一张卡问一句"开厅一起看？"——点一下，
+   开厅+填链接+出邀请一次完成（动作走 enterCinema，见 MainActivity）。 */
+
+/** 本进程里已对哪条剪贴板链接说了「不了」——同一条不再问，换了新链接才再问。 */
+private var dismissedClipUrl: String? = null
+
+/** 从一段文本里抽出第一条 http(s) 链接（正则与放映厅的粘贴芯片共用）。 */
+private fun extractClipUrl(text: String): String? =
+    clipUrlRegex.find(text)?.value?.trimEnd('，', ',', ')', '）', '》', '>', '。', '.')
+
 data class HomeSession(
     /** 圆内标题：放映厅已开 / 正在分享 / 语音连麦中 / 等对方加入。 */
     val label: String,
@@ -95,6 +110,8 @@ fun HomeScreen(
     lastSummary: String?,
     /** 非空 = 会话进行中、人退到了首页：圆钮变身 + 圆下停止钮 + 「进入观看」隐藏。 */
     session: HomeSession? = null,
+    /** 方案C：点浮卡「开厅一起看」——带这条链接去开厅（MainActivity 的 enterCinema）。 */
+    onWatchUrl: (String) -> Unit = {},
 ) {
     // 横屏（含平板、折叠屏展开）单独一套排法，见下面 wideHome 的两处分支。
     // 判据用**屏幕**长宽比，不用某一块容器的：信息卡那边也要同一个结论，
@@ -106,8 +123,88 @@ fun HomeScreen(
     val micGranted = context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
         PackageManager.PERMISSION_GRANTED
 
+    /* 方案C 检测：每次回到首页瞄一眼剪贴板（runCatching 兜住没有剪贴板服务的设备）。
+       - 只在空闲会话下问 —— 正在分享时圆钮已变身，别再叠一张卡；
+       - 自己厅的邀请（trycloudflare）不问：朋友复制着邀请链接进来，该走的是
+         「进入观看」，不是开自己的厅把邀请页当影片加载；
+       - 点「不了」记下这条，同一条不再骚扰；换了新链接（又一个新决定）才再问。
+       安卓 12+ 读剪贴板系统会弹一次"已从剪贴板粘贴"提示，那是系统规则，不是 App 偷看。 */
+    var clipCardUrl by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(session == null) {
+        // key 用"会话是否空闲"而不是 Unit：关厅回到首页这一刻（session 翻回 null）
+        // 也要检测 —— 看完关掉厅、想起刚复制的链接，是常见路径。
+        if (session != null) return@LaunchedEffect
+        val found = runCatching {
+            val cm = context.getSystemService(android.content.ClipboardManager::class.java)
+            cm?.primaryClip?.let { c ->
+                (0 until c.itemCount).asSequence()
+                    .mapNotNull { c.getItemAt(it)?.text?.toString() }
+                    .firstNotNullOfOrNull(::extractClipUrl)
+            }
+        }.getOrNull()
+        if (found != null && found != dismissedClipUrl) clipCardUrl = found
+    }
+
     PageScaffold {
         Headline("双人票", "把你的屏幕，变成你和朋友的私人影院。")
+
+        /* 剪贴板浮卡（方案C）：放标题下面、圆钮上面 —— 它是当下最可能的意图，
+           但不该盖住入口本身。点「开厅一起看」= enterCinema：厅、邀请、页面一次到位。 */
+        if (clipCardUrl != null && session == null) {
+            GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
+                Column(
+                    Modifier.fillMaxWidth().padding(GlassDimens.sp3),
+                    verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            Modifier.height(7.dp).width(7.dp).clip(CircleShape)
+                                .background(Ink.Live),
+                        )
+                        Spacer(Modifier.width(7.dp))
+                        Text(
+                            "发现剪贴板里有一条链接",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Ink.TextHi,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    Text(
+                        clipCardUrl!!,
+                        fontSize = 11.5.sp,
+                        color = Ink.TextMid,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
+                        PrimaryPill(
+                            "开厅一起看 →",
+                            onClick = {
+                                val u = clipCardUrl ?: return@PrimaryPill
+                                dismissedClipUrl = u
+                                clipCardUrl = null
+                                onWatchUrl(u)
+                            },
+                            backdrop,
+                            Modifier.weight(1f),
+                            height = 44.dp,
+                        )
+                        PrimaryPill(
+                            "不了",
+                            onClick = {
+                                dismissedClipUrl = clipCardUrl
+                                clipCardUrl = null
+                            },
+                            backdrop,
+                            Modifier.weight(0.42f),
+                            filled = false,
+                            height = 44.dp,
+                        )
+                    }
+                }
+            }
+        }
 
         // 圆形双入口（效果图 home-orbs-pastel3.html 方案 2：丁香紫 × 樱花粉）。
         // 按用户要求：只改这两个圆的效果，页面其余部分保持原样。

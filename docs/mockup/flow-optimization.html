@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>双人票 · 看片流程优化提案（三方案）</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: "PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;
+    background: linear-gradient(165deg,#f6f3fa 0%, #eef3f7 55%, #f3eef6 100%);
+    color:#3a3550; min-height:100vh; padding:48px 24px 80px;
+  }
+  .wrap { max-width:1180px; margin:0 auto; }
+  h1 { font-size:30px; font-weight:700; letter-spacing:.5px; }
+  .sub { color:#8a8598; font-size:15px; margin-top:8px; line-height:1.7; }
+  .sub b { color:#6f6a85; }
+  section { margin-top:64px; }
+  h2 { font-size:21px; font-weight:700; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  h2 .tag { font-size:12px; font-weight:600; padding:3px 10px; border-radius:99px; white-space:nowrap; }
+  .tag.now  { background:#fbe3e3; color:#c26a6a; }
+  .tag.ok   { background:#dff3ea; color:#3f8f70; }
+  .tag.mix  { background:#e7e3f7; color:#6f5bb5; }
+  .desc { color:#6f6a85; font-size:14px; line-height:1.8; margin-top:10px; max-width:880px; }
+  .desc b { color:#4a4460; }
+
+  /* ── 流程条 ── */
+  .flow { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:18px; }
+  .step {
+    display:flex; align-items:center; gap:8px;
+    background:rgba(255,255,255,.66); border:1px solid rgba(255,255,255,.85);
+    box-shadow:0 4px 14px rgba(90,70,140,.08);
+    padding:9px 14px 9px 10px; border-radius:99px; font-size:13.5px; font-weight:600; color:#4a4460;
+  }
+  .step i {
+    font-style:normal; width:22px; height:22px; border-radius:50%;
+    background:#cfc4ec; color:#fff; font-size:12px; font-weight:700;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .step.cut { background:#f9ecec; border-color:#f3d4d4; color:#c26a6a; text-decoration:line-through; }
+  .step.cut i { background:#e5a3a3; }
+  .step.cut::after { content:"省掉"; font-size:11px; color:#c26a6a; text-decoration:none; font-weight:700; }
+  .arrow { color:#b9b2cc; font-size:15px; }
+  .arrow.new { color:#3f8f70; font-weight:700; }
+  .step.new { background:#dff3ea; border-color:#bfe4d4; }
+  .step.new i { background:#5fae8d; }
+
+  /* ── 手机框 ── */
+  .row { display:flex; flex-wrap:wrap; gap:36px; margin-top:26px; align-items:flex-start; }
+  .shot { display:flex; flex-direction:column; gap:12px; }
+  .shot .cap { font-size:13px; color:#6f6a85; text-align:center; line-height:1.6; }
+  .shot .cap b { color:#4a4460; }
+  .phone {
+    width:300px; height:640px; border-radius:40px; position:relative; overflow:hidden;
+    background:linear-gradient(160deg,#f2eef8,#e9f0f4);
+    border:1px solid rgba(255,255,255,.9);
+    box-shadow:0 24px 60px rgba(90,70,140,.16), inset 0 1px 0 rgba(255,255,255,.9);
+  }
+  /* 壁纸（粉彩光斑，扁平） */
+  .blob { position:absolute; border-radius:50%; filter:blur(2px); opacity:.55; }
+  .b1 { width:230px; height:230px; left:-60px; top:-40px;  background:radial-gradient(circle at 35% 35%,#e5d8f7,#cbb6ee); }
+  .b2 { width:200px; height:200px; right:-50px; top:120px; background:radial-gradient(circle at 40% 40%,#fad7e4,#f2b3cd); }
+  .b3 { width:190px; height:190px; left:-40px; bottom:60px; background:radial-gradient(circle at 45% 45%,#d4f0e2,#aedeC8); }
+  .b4 { width:150px; height:150px; right:-30px; bottom:-30px; background:radial-gradient(circle at 45% 45%,#fbe7c9,#f4d5a0); }
+  .scrim { position:absolute; inset:0; background:linear-gradient(180deg, rgba(30,25,50,.10), rgba(30,25,50,.02) 30%, rgba(30,25,50,.16)); }
+
+  .statusbar { position:relative; z-index:5; display:flex; justify-content:space-between; padding:14px 22px 0; font-size:11.5px; font-weight:600; color:#5a5470; }
+  .page { position:relative; z-index:4; height:calc(100% - 26px); display:flex; flex-direction:column; padding:10px 16px 16px; }
+
+  /* 玻璃件 */
+  .glass {
+    background:rgba(255,255,255,.55); border:1px solid rgba(255,255,255,.78);
+    border-radius:18px; box-shadow:0 8px 22px rgba(90,70,140,.10), inset 0 1px 0 rgba(255,255,255,.85);
+    backdrop-filter:blur(14px);
+  }
+  .pill { border-radius:99px; }
+
+  /* 首页圆钮 */
+  .home-top { margin-top:26px; text-align:center; }
+  .home-top .t { font-size:17px; font-weight:700; color:#443e5e; }
+  .home-top .s { font-size:11.5px; color:#8a8598; margin-top:3px; }
+  .orbs { display:flex; justify-content:center; align-items:center; gap:20px; margin-top:38px; }
+  .orb {
+    border-radius:50%; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    color:#fff; text-align:center; gap:2px;
+    box-shadow:inset 0 2px 6px rgba(255,255,255,.55), inset 0 -10px 22px rgba(80,55,140,.18), 0 10px 26px rgba(90,70,140,.16);
+  }
+  .orb .em { font-size:26px; line-height:1; }
+  .orb .lb { font-size:14.5px; font-weight:700; letter-spacing:1px; }
+  .orb-main { width:168px; height:168px; background:linear-gradient(150deg,#cdbaf0 0%, #a98fe6 100%); }
+  .orb-main .em { font-size:34px; margin-bottom:4px; }
+  .orb-main .lb { font-size:17px; }
+  .orb-sub  { width:118px; height:118px; background:linear-gradient(150deg,#f8cede 0%, #eda3c6 100%); }
+  .orb-sub .lb { font-size:12.5px; }
+  .orb-sub .em { font-size:20px; }
+  .home-note { margin-top:16px; text-align:center; font-size:11px; color:#9a94ac; line-height:1.7; }
+  .home-link { margin-top:auto; text-align:center; font-size:12.5px; color:#7b6fb0; font-weight:600; padding:10px; }
+  .home-link u { text-decoration:none; border-bottom:1.5px solid rgba(123,111,176,.4); padding-bottom:2px; }
+
+  /* 剪贴板浮卡（方案C） */
+  .clip {
+    position:absolute; z-index:9; left:14px; right:14px; top:44px;
+    background:rgba(255,255,255,.72); border:1px solid rgba(255,255,255,.9);
+    border-radius:20px; padding:14px 16px; backdrop-filter:blur(16px);
+    box-shadow:0 14px 34px rgba(70,50,130,.20);
+  }
+  .clip .r1 { display:flex; align-items:center; gap:8px; font-size:12px; color:#6f6a85; }
+  .clip .r1 .dot { width:7px; height:7px; border-radius:50%; background:#5fae8d; }
+  .clip .url { margin-top:7px; font-size:12px; color:#4a4460; background:rgba(120,100,180,.08); border-radius:10px; padding:8px 10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+  .clip .btns { display:flex; gap:8px; margin-top:10px; }
+  .btn-go {
+    flex:1; background:linear-gradient(140deg,#8fcbb0,#5fae8d); color:#fff; border-radius:12px;
+    font-size:13.5px; font-weight:700; text-align:center; padding:9px 0;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.4);
+  }
+  .btn-no { width:74px; background:rgba(120,110,150,.10); color:#7a7490; border-radius:12px; font-size:13px; font-weight:600; text-align:center; padding:9px 0; }
+
+  /* 厅内首屏（方案A/B） */
+  .cin-top { display:flex; align-items:center; gap:8px; margin-top:6px; }
+  .cin-back { width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#5a5470; font-size:15px; }
+  .cin-title { font-size:14.5px; font-weight:700; color:#443e5e; flex:1; }
+  .mode { font-size:10.5px; font-weight:700; padding:5px 10px; border-radius:99px; background:rgba(120,100,180,.12); color:#6f5bb5; }
+  .addr { display:flex; align-items:center; gap:8px; margin-top:14px; padding:0 10px 0 14px; height:48px; border-radius:15px;
+          background:rgba(255,255,255,.78); border:1.5px solid #b9a5ec; box-shadow:0 6px 18px rgba(120,95,190,.18); }
+  .addr .cur { width:2px; height:20px; background:#7b5fd0; border-radius:1px; animation:blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity:0; } }
+  .addr .ph { font-size:13px; color:#a49dbb; flex:1; }
+  .addr .go { background:linear-gradient(140deg,#9d86e0,#7b5fd0); color:#fff; font-size:13px; font-weight:700; padding:8px 16px; border-radius:11px; }
+  .chips { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
+  .chip { font-size:11.5px; font-weight:600; color:#5a5470; padding:7px 12px; border-radius:99px;
+          background:rgba(255,255,255,.6); border:1px solid rgba(255,255,255,.85); box-shadow:0 3px 10px rgba(90,70,140,.08); }
+  .chip.hl { background:rgba(169,143,230,.16); border-color:rgba(169,143,230,.35); color:#6f5bb5; }
+  .invite { margin-top:14px; padding:12px 14px; }
+  .invite .cap2 { font-size:11px; color:#8a8598; }
+  .invite .lnk { margin-top:6px; display:flex; align-items:center; gap:8px; }
+  .invite .u { flex:1; font-size:11.5px; font-weight:600; color:#4a4460; background:rgba(120,100,180,.08); border-radius:9px; padding:8px 10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .invite .cp { font-size:11px; font-weight:700; color:#fff; background:linear-gradient(140deg,#9d86e0,#7b5fd0); border-radius:9px; padding:8px 12px; }
+  .kbd { margin-top:auto; border-radius:18px 18px 0 0; background:rgba(238,236,246,.92); border:1px solid rgba(255,255,255,.8); padding:10px 8px 12px; }
+  .krow { display:flex; gap:5px; justify-content:center; margin-bottom:6px; }
+  .key { width:26px; height:34px; border-radius:7px; background:#fff; box-shadow:0 1px 2px rgba(90,70,140,.15); font-size:12px; color:#4a4460; display:flex; align-items:center; justify-content:center; font-weight:600; }
+  .key.sp { width:150px; }
+  .hint { position:relative; z-index:4; margin-top:auto; font-size:11.5px; color:#7a7490; background:rgba(255,255,255,.65); border:1px solid rgba(255,255,255,.8); border-radius:12px; padding:9px 12px; line-height:1.6; }
+
+  /* 对比表 */
+  table { border-collapse:collapse; margin-top:20px; width:100%; max-width:980px; background:rgba(255,255,255,.6); border-radius:16px; overflow:hidden; box-shadow:0 8px 24px rgba(90,70,140,.08); }
+  th,td { padding:13px 16px; font-size:13.5px; text-align:left; border-bottom:1px solid rgba(120,100,180,.10); line-height:1.6; vertical-align:top; }
+  th { background:rgba(169,143,230,.12); color:#4a4460; font-size:12.5px; letter-spacing:1px; }
+  td b { color:#4a4460; }
+  .n { display:inline-flex; min-width:26px; height:26px; border-radius:99px; background:#efeaf9; color:#6f5bb5; font-weight:700; font-size:13px; align-items:center; justify-content:center; padding:0 8px; }
+  .n.win { background:#dff3ea; color:#3f8f70; }
+  tr.rec td { background:rgba(169,143,230,.07); }
+
+  .note { margin-top:14px; font-size:12.5px; color:#8a8598; line-height:1.8; max-width:880px; }
+  .note b { color:#6f5bb5; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>看片要 5 步，能不能再少点？</h1>
+  <p class="sub">现状病根：每一层都让你做一个<b>不需要现场决定的决定</b>。下面三个方案，从「小改」到「一步直达」，互相不冲突、可以叠着做。</p>
+
+  <!-- ═══════════ 现状 ═══════════ -->
+  <section>
+    <h2>现状：放一部片子要点 5 下 <span class="tag now">5 步 · 2 步纯过渡</span></h2>
+    <div class="flow">
+      <div class="step"><i>1</i>首页 · 分享画面</div><span class="arrow">→</span>
+      <div class="step cut"><i>2</i>选「同步放映」</div><span class="arrow">→</span>
+      <div class="step cut"><i>3</i>引导页 · 打开网站</div><span class="arrow">→</span>
+      <div class="step"><i>4</i>输入网址</div><span class="arrow">→</span>
+      <div class="step"><i>5</i>点「打开」</div>
+    </div>
+    <p class="desc">
+      第 2 步和第 3 步是<b>纯过渡页</b>：选类型页只在你犹豫时才有用，引导页只是把地址栏藏了一层。
+      「分享我的屏幕」也一样要白过一次第 2 步。排版不舒服的根源也在这——
+      <b>真正要用的东西（地址栏）永远不在你眼前</b>。
+    </p>
+  </section>
+
+  <!-- ═══════════ 方案 A ═══════════ -->
+  <section>
+    <h2>方案 A · 进厅即输入 <span class="tag mix">改动最小 · 5 步 → 3 步</span></h2>
+    <p class="desc">
+      删掉引导页这一层：点完「同步放映」<b>直接落在地址栏聚焦、键盘弹起的状态</b>。
+      引导页里那点内容（收藏夹、粘贴、测试流）压缩成地址栏下面的一排小芯片，想用再用，不用就当它不存在。
+      「新标签页」该长什么样？浏览器给出的答案是：<b>光标已经在输入框里闪</b>。
+    </p>
+    <div class="flow">
+      <div class="step"><i>1</i>首页 · 分享画面</div><span class="arrow">→</span>
+      <div class="step"><i>2</i>选「同步放映」</div><span class="arrow new">→</span>
+      <div class="step new"><i>3</i>输入网址 → 回车</div>
+      <span class="arrow" style="align-self:center; color:#8a8598;">&nbsp;&nbsp;（原 3、4、5 步合并成这一屏）</span>
+    </div>
+    <div class="row">
+      <div class="shot">
+        <div class="phone">
+          <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div><div class="blob b4"></div>
+          <div class="scrim"></div>
+          <div class="statusbar"><span>19:30</span><span>▲ ●●● ▮</span></div>
+          <div class="page">
+            <div class="cin-top">
+              <div class="cin-back glass">‹</div>
+              <div class="cin-title">放映厅</div>
+              <div class="mode">放映 | 浏览</div>
+            </div>
+            <div class="addr">
+              <span class="cur"></span>
+              <span class="ph">输入网址，一起看</span>
+              <span class="go">打开</span>
+            </div>
+            <div class="chips">
+              <span class="chip">📋 粘贴</span>
+              <span class="chip hl">🕐 上次 · 策驰影院</span>
+              <span class="chip hl">⭐ 收藏夹 (3)</span>
+            </div>
+            <div class="invite glass">
+              <div class="cap2">朋友的邀请链接（先发给他，慢慢挑片）</div>
+              <div class="lnk"><span class="u">https://xxx.trycloudflare.com/?k=6SM4…</span><span class="cp">复制</span></div>
+            </div>
+            <div class="hint">💡 键盘直接弹起，光标已在地址栏 —— 打开网站的动作不需要单独一步</div>
+            <div class="kbd">
+              <div class="krow"><span class="key">w</span><span class="key">w</span><span class="key">w</span><span class="key">.</span><span class="key">†</span><span class="key">i</span><span class="key">c</span><span class="key">h</span><span class="key">i</span></div>
+              <div class="krow"><span class="key">a</span><span class="key">s</span><span class="key">d</span><span class="key">f</span><span class="key">g</span><span class="key">h</span><span class="key">j</span><span class="key">k</span></div>
+              <div class="krow"><span class="key">z</span><span class="key">x</span><span class="key">c</span><span class="key">v</span><span class="key">b</span><span class="key">n</span><span class="key">m</span></div>
+              <div class="krow"><span class="key sp">空格</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="cap"><b>进厅第一屏</b>：地址栏已聚焦 · 键盘已弹起<br>「粘贴 / 上次 / 收藏」一键直达，邀请链接常驻可见</div>
+      </div>
+    </div>
+    <p class="note"><b>代价</b>：第一次用的朋友少了「这是干嘛的」说明 —— 解法：说明文字压进地址栏下方一行小字，不再占一整页。</p>
+  </section>
+
+  <!-- ═══════════ 方案 B ═══════════ -->
+  <section>
+    <h2>方案 B · 首页直接说人话 <span class="tag mix">5 步 → 2 步 · 连「选类型」也省掉</span></h2>
+    <p class="desc">
+      现在首页那颗圆叫「分享画面」—— 你得点进去才知道还能选「同步放映」。
+      <b>把类型写进圆钮的名字里</b>，选择页就没必要存在了：
+      大圆「一起看片」（点进去 = 方案 A 那个即输屏），小圆「分享屏幕」（点进去直接是系统授权页）。
+      想投屏给对方看？也是一下。两个名字都自带解释，不认识的人也点不错。
+    </p>
+    <div class="flow">
+      <div class="step new"><i>1</i>首页 · 点「一起看片」</div><span class="arrow new">→</span>
+      <div class="step new"><i>2</i>输入网址 → 回车</div>
+      <span class="arrow" style="align-self:center; color:#8a8598;">&nbsp;&nbsp;（选类型页整个删掉）</span>
+    </div>
+    <div class="row">
+      <div class="shot">
+        <div class="phone">
+          <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div><div class="blob b4"></div>
+          <div class="scrim"></div>
+          <div class="statusbar"><span>19:30</span><span>▲ ●●● ▮</span></div>
+          <div class="page">
+            <div class="home-top">
+              <div class="t">双人票</div>
+              <div class="s">一起看，就像坐在一起</div>
+            </div>
+            <div class="orbs">
+              <div class="orb orb-main">
+                <span class="em">🎬</span>
+                <span class="lb">一起看片</span>
+                <span style="font-size:10.5px; opacity:.85;">粘上链接就行</span>
+              </div>
+              <div class="orb orb-sub">
+                <span class="em">📱</span>
+                <span class="lb">分享屏幕</span>
+              </div>
+            </div>
+            <div class="home-note">一起看片 = 对方手机播原画，不占你屏幕、还能回消息<br>分享屏幕 = 对方同步看到你手机上的一切（每次需系统授权）</div>
+            <div class="home-link"><u>收到链接了？点这里去观看 →</u></div>
+            <div class="home-link" style="padding-top:0; font-size:11px; color:#9a94ac;">分享设置</div>
+          </div>
+        </div>
+        <div class="cap"><b>新首页</b>：圆钮名字 = 作用<br>「一起看片」点进去直接是地址栏（方案 A 的屏）<br>「分享屏幕」点进去直接是授权页 —— 各省一步</div>
+      </div>
+      <div class="shot">
+        <div class="phone">
+          <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div><div class="blob b4"></div>
+          <div class="scrim"></div>
+          <div class="statusbar"><span>19:30</span><span>▲ ●●● ▮</span></div>
+          <div class="page">
+            <div class="cin-top">
+              <div class="cin-back glass">‹</div>
+              <div class="cin-title">放映厅</div>
+              <div class="mode">放映 | 浏览</div>
+            </div>
+            <div class="addr">
+              <span class="cur"></span>
+              <span class="ph">已填入你复制的链接</span>
+              <span class="go">打开</span>
+            </div>
+            <div class="chips">
+              <span class="chip hl">🕐 上次 · 策驰影院</span>
+              <span class="chip">⭐ 收藏夹 (3)</span>
+            </div>
+            <div class="invite glass">
+              <div class="cap2">朋友已收到邀请 · 等他进来</div>
+              <div class="lnk"><span class="u">https://xxx.trycloudflare.com/?k=6SM4…</span><span class="cp">复制</span></div>
+            </div>
+            <div class="hint">🔗 打开 App 之前复制过链接？进来就自动填好了 —— 按「打开」直接开演</div>
+            <div class="kbd" style="opacity:.55;">
+              <div class="krow"><span class="key">1</span><span class="key">2</span><span class="key">3</span><span class="key">4</span><span class="key">5</span><span class="key">6</span><span class="key">7</span><span class="key">8</span></div>
+              <div class="krow"><span class="key">q</span><span class="key">w</span><span class="key">e</span><span class="key">r</span><span class="key">t</span><span class="key">y</span><span class="key">u</span><span class="key">i</span></div>
+              <div class="krow"><span class="key sp">空格</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="cap"><b>点开之后</b>：厅已开好、邀请链接已就绪<br>若剪贴板里有链接会自动填入（见方案 C）</div>
+      </div>
+    </div>
+    <p class="note">
+      <b>为什么敢删选类型页</b>：当初合并两个入口，是怕用户「点之前分不清两种模式的区别」。
+      但圆钮直接写上「一起看片 / 分享屏幕」后，区别已经在名字里了 —— 选择发生在按下那一刻，不再需要单独一页。
+      原来选类型页里的「声音档」设置挪进「分享设置」页和厅内顶栏。
+    </p>
+  </section>
+
+  <!-- ═══════════ 方案 C ═══════════ -->
+  <section>
+    <h2>方案 C · 链接感应 <span class="tag ok">叠加在 B 上 · 最少 1 步</span></h2>
+    <p class="desc">
+      看片的真实起点往往不是「打开 App」，而是「我在豆瓣/B站/浏览器里<b>复制了一条链接</b>」。
+      这是最好的捷径入口：打开 App 时发现剪贴板里有一条网址，就浮出一张卡 ——
+      <b>点一下，开厅、填链接、出邀请，一气呵成</b>。不点就当没看见，绝不上来就抢剪贴板（安卓会弹读取提示，首用给一次说明）。
+    </p>
+    <div class="flow">
+      <div class="step new"><i>0</i>（在别的 App 复制链接）</div><span class="arrow new">→</span>
+      <div class="step new"><i>1</i>打开双人票</div><span class="arrow new">→</span>
+      <div class="step new"><i>2</i>点「开厅一起看」</div>
+      <span class="arrow" style="align-self:center; color:#8a8598;">&nbsp;&nbsp;＝ 发邀请 + 加载影片，一次完成</span>
+    </div>
+    <div class="row">
+      <div class="shot">
+        <div class="phone">
+          <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div><div class="blob b4"></div>
+          <div class="scrim"></div>
+          <div class="clip">
+            <div class="r1"><span class="dot"></span>发现剪贴板里有一条链接</div>
+            <div class="url">https://www.360kan.com/cover/…成化十四年.html</div>
+            <div class="btns"><span class="btn-go">开厅一起看 →</span><span class="btn-no">不了</span></div>
+          </div>
+          <div class="statusbar" style="margin-top:64px;"><span></span><span></span></div>
+          <div class="page" style="opacity:.9;">
+            <div class="home-top">
+              <div class="t">双人票</div>
+              <div class="s">一起看，就像坐在一起</div>
+            </div>
+            <div class="orbs" style="opacity:.5;">
+              <div class="orb orb-main"><span class="em">🎬</span><span class="lb">一起看片</span></div>
+              <div class="orb orb-sub"><span class="em">📱</span><span class="lb">分享屏幕</span></div>
+            </div>
+            <div class="home-link"><u>收到链接了？点这里去观看 →</u></div>
+          </div>
+        </div>
+        <div class="cap"><b>打开 App 的瞬间</b>：剪贴板有链接 → 浮卡询问<br>点一下 = 开厅 + 填链接 + 出邀请</div>
+      </div>
+      <div class="shot">
+        <div class="phone">
+          <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div><div class="blob b4"></div>
+          <div class="scrim"></div>
+          <div class="statusbar"><span>19:30</span><span>▲ ●●● ▮</span></div>
+          <div class="page">
+            <div class="cin-top">
+              <div class="cin-back glass">‹</div>
+              <div class="cin-title">放映厅 · 正在打开影片</div>
+              <div class="mode">放映 | 浏览</div>
+            </div>
+            <div class="addr">
+              <span style="font-size:12px; color:#7b5fd0;">⟳</span>
+              <span class="ph" style="color:#4a4460; font-weight:600;">www.360kan.com/cover/…成化十四年</span>
+              <span class="go" style="opacity:.45;">…</span>
+            </div>
+            <div class="invite glass">
+              <div class="cap2">① 先把邀请发给朋友（他点开就进厅）</div>
+              <div class="lnk"><span class="u">https://xxx.trycloudflare.com/?k=6SM4…</span><span class="cp">复制</span></div>
+            </div>
+            <div class="hint" style="margin-top:18px;">🎬 页面加载中…嗅到片源后会自动问你要不要「开始放映」，<br>或者点开页面自己按播放也一样</div>
+          </div>
+        </div>
+        <div class="cap"><b>点完之后</b>：链接已在加载、邀请卡已就绪<br>你要做的只剩「把邀请发给朋友」这一件事</div>
+      </div>
+    </div>
+    <p class="note"><b>分寸感</b>：只在「剪贴板确实是网址」时出现；点「不了」后本次不再问；没有读取权限时完全静默，退化成方案 B。</p>
+  </section>
+
+  <!-- ═══════════ 对比 ═══════════ -->
+  <section>
+    <h2>三案对比 · 我的推荐是 B + C</h2>
+    <table>
+      <tr><th style="width:19%;">方案</th><th style="width:13%;">看片步骤</th><th style="width:13%;">投屏步骤</th><th>动了什么</th><th style="width:30%;">代价 / 风险</th></tr>
+      <tr>
+        <td><b>现状</b></td>
+        <td><span class="n">5</span></td><td><span class="n">3</span></td>
+        <td>—</td><td>每层都要做一次「其实不用现在做」的决定</td>
+      </tr>
+      <tr>
+        <td><b>A · 进厅即输入</b></td>
+        <td><span class="n">3</span></td><td><span class="n">3</span></td>
+        <td>删引导页；地址栏直接聚焦；收藏/粘贴/上次收成一行芯片</td>
+        <td>最小。第一次用的人少了说明页（压成一行小字）</td>
+      </tr>
+      <tr class="rec">
+        <td><b>B · 首页说人话</b></td>
+        <td><span class="n">2</span></td><td><span class="n win">1</span></td>
+        <td>圆钮改名「一起看片 / 分享屏幕」，选类型页删除；「进入观看」降为底部文字链</td>
+        <td>首页双圆布局变动（可先出效果图微调）；声音档要挪家</td>
+      </tr>
+      <tr class="rec">
+        <td><b>C · 链接感应</b>（叠在 B 上）</td>
+        <td><span class="n win">1~2</span></td><td><span class="n">1</span></td>
+        <td>剪贴板检测浮卡：点一下 = 开厅+填链接+出邀请</td>
+        <td>要处理剪贴板权限提示；「不了」之后不再骚扰</td>
+      </tr>
+    </table>
+    <p class="note">
+      <b>推荐 B + C 一起做</b>：B 把「每层一次多余决定」的结构问题解决掉，C 把「手里已经有链接」这个最高频场景压到一步。
+      A 是 B 的一部分（B 的「一起看片」点进去就是 A 那个屏），做 B 自然包含 A。
+      「分享我的屏幕」在 B 里也顺带解决：从三步变一步（点圆 → 授权）。
+    </p>
+  </section>
+
+  <!-- ═══════════ 待确认 ═══════════ -->
+  <section>
+    <h2>动手前，三件事请你拍板</h2>
+    <table>
+      <tr><th style="width:30%;">问题</th><th>选项</th></tr>
+      <tr><td><b>① 首页布局</b></td>
+        <td>现在两颗圆大小相近。方案 B 改成「大圆（一起看片）+ 小圆（分享屏幕）」突出主场景 —— 接受大小分主次，还是两颗一样大只改名字？</td></tr>
+      <tr><td><b>② 「进入观看」降级</b></td>
+        <td>对方一般点你发的链接直接进来，首页那颗「进入观看」圆钮用得少。降成底部一行文字链可以吗？（手动粘链接的兜底功能还在）</td></tr>
+      <tr><td><b>③ 选类型页的去留</b></td>
+        <td>彻底删掉，还是保留在「分享设置」里当说明页？我倾向删 —— 名字已经把区别说清了。</td></tr>
+    </table>
+    <p class="note">定了方向我再改代码，一次到位。效果图里任何一处看着不顺（圆的大小、文案、浮卡出现的位置），直接说，我改完图再动代码。</p>
+  </section>
+
+</div>
+</body>
+</html>

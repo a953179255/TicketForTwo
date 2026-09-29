@@ -228,8 +228,8 @@ fun CinemaScreen(
     val context = LocalContext.current
     /* 空哨兵 "" = 厅里还没打开过网页。以前这里默认塞一条 file:///android_asset
        彩条测试页 —— 正式 App 里用户第一眼看到的是工程测试卡（2026-09-29 用户反馈）。
-       现在没页就是没页：引导页（见 showLobby）是唯一空态，地址栏输入/收藏/分享链接
-       之前 WebView 里什么都不加载。 */
+       现在没页就是没页：一行快捷芯片（粘贴/上次/收藏夹）+ 深色待放屏（方案A），
+       WebView 什么都不加载。 */
     var pageUrl by remember { mutableStateOf(initialUrl?.takeIf { it.isNotBlank() } ?: "") }
     var inputUrl by remember { mutableStateOf(pageUrl) }
     /**
@@ -292,13 +292,12 @@ fun CinemaScreen(
     /* 退回目标是否已经落到过眼里 —— 落地之后再出现的导航是用户自己点的（认它），
        没落地就跳走才是"被弹走"（继续连退）。见 onPageStarted 的 when。 */
     var backSawTarget by remember { mutableStateOf(false) }
-    /* 引导首页：还没打开过任何网页且在浏览模式 → 显示目的驱动的操作卡。
-       它就是浏览器的"新标签页"，不是盖在测试页上的浮层 —— 空厅只有这一个空态。
-       用户点任意入口（或递进来一条链接）后进浏览器，引导不再出现。 */
-    var lobbyDismissed by remember { mutableStateOf(false) }
+    /* 「上次一起看」（方案A）：上一次程序化打开的完整地址，落盘持久化 ——
+       比收藏夹更常走的一条：上次看了一半的站，进厅点一下就回去。 */
+    var recentUrl by remember { mutableStateOf<String?>(null) }
 
-    /* 「打开网站」的动作 = 撤下引导页 + 聚焦地址栏并弹键盘（像浏览器点开新标签页）。
-       聚焦必须等地址行真的上屏：lobbyDismissed 写下后要过一帧组合才有那个节点。 */
+    /* 聚焦地址栏并弹键盘（方案A"进厅即输"就靠这一下）。
+       聚焦必须等地址行真的上屏：拨了 seq 之后要过一帧组合才有那个节点。 */
     val addrFocus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     var addrFocusSeq by remember { mutableStateOf(0) }
@@ -321,11 +320,12 @@ fun CinemaScreen(
         // 新的一场还没片：别把上一场的放映模式带进来
         if (CallSession.cinema.value == null) theaterMode.value = false
     }
-    /* 引导首页显示条件：还没打开过任何网页、没在放映模式。它就是浏览器的
-       "新标签页"，不是盖在测试页上的浮层 —— 空厅只有这一个空态；递进来一条
-       链接、点开收藏、输入网址之后都不再出现（theater 下甲板的「开始放映」
-       是屏幕分享入口，不能被引导页挡住，所以仅浏览模式显示）。 */
-    val showLobby = !lobbyDismissed && pageUrl.isEmpty() && !theater
+    /* 进厅即输（方案A，2026-09-29 用户拍板）：引导页撤掉，空厅落地就是地址栏聚焦 +
+       键盘弹起 —— 跟浏览器点开新标签页一个感觉。只拨一次：带着片回厅（pageUrl 非空）、
+       递链接进来（initialUrl 非空）、已落在放映模式（地址行不在屏上）都不弹键盘。 */
+    LaunchedEffect(Unit) {
+        if (pageUrl.isEmpty() && !theater) addrFocusSeq++
+    }
     /** 房主这一侧播放器的位置/时长/标题 —— 直接复用 watch 那套探针，形状一样。 */
     var player by remember { mutableStateOf<com.ticketfortwo.app.watch.WatchState?>(null) }
     /** 方向盘给不给对方。会话里那份是真值，这里只是本地即时反馈（点下去先亮起来）。 */
@@ -342,9 +342,11 @@ fun CinemaScreen(
     /* 首次读收藏必须挪到 IO：SharedPreferences 首次访问会在调用线程同步等磁盘，
        组合发生在主线程 —— 本仓 lastConnected/quality 已经踩过同款（双人票 ANR 注释）。 */
     LaunchedEffect(Unit) {
-        favs = withContext(Dispatchers.IO) {
-            favPrefs.getStringSet("set", emptySet())!!.toList()
+        val loaded = withContext(Dispatchers.IO) {
+            favPrefs.getStringSet("set", emptySet())!!.toList() to favPrefs.getString("recent", null)
         }
+        favs = loaded.first
+        recentUrl = loaded.second
     }
     var showFavs by remember { mutableStateOf(false) }
     fun persistFavs() {
@@ -377,6 +379,33 @@ fun CinemaScreen(
             reloadSeq++
         }
         note = "打开收藏"
+    }
+    fun openRecent(u: String) {
+        val norm = normalizeUrl(u)
+        if (norm != pageUrl) {
+            inputUrl = norm
+            pageUrl = norm
+        } else {
+            reloadSeq++
+        }
+        note = "打开上次一起看的站"
+    }
+    /* 方案A 快捷芯片「粘贴」：把剪贴板里的链接填进地址栏 —— 不自动打开，
+       让人过目一眼再按「打开」，猜错比多按一下更贵。没有链接就明说。 */
+    fun pasteFromClip() {
+        val text = runCatching {
+            val cm = context.getSystemService(android.content.ClipboardManager::class.java)
+            cm?.primaryClip?.let { c ->
+                (0 until c.itemCount).joinToString("\n") { c.getItemAt(it)?.text?.toString().orEmpty() }
+            }
+        }.getOrNull().orEmpty()
+        val found = clipUrlRegex.find(text)?.value?.trimEnd('，', ',', ')', '）', '》', '>', '。')
+        if (found == null) {
+            note = "剪贴板里没有链接"
+        } else {
+            inputUrl = found
+            note = "已填入剪贴板的链接，点「打开」"
+        }
     }
 
     val sniffer = remember { SnifferState() }
@@ -689,6 +718,9 @@ fun CinemaScreen(
         }
         webView.loadUrl(pageUrl)
         cinemaLastPageUrl = pageUrl   // 给 openCinema 的"回厅接片"留导航记忆
+        // 「上次一起看」落盘（方案A 的"上次"芯片）：进程重启也在。只记程序化打开
+        // 这一下（地址栏/芯片/递链接）—— 站内点跳不算，用户语义是"我上次开的站"。
+        favPrefs.edit().putString("recent", pageUrl).apply()
     }
 
     // 厅已经开着的时候又来了一条分享（singleTop + onNewIntent）：换片，不重开 Activity。
@@ -1138,13 +1170,23 @@ fun CinemaScreen(
                 ) {
                     // key(webGen)：AndroidView 的 factory 只在节点入组合时跑一次，
                     // 换代后不换 key 的话它抓着的还是旧（已 destroy）实例。
-                    if (pageUrl.isEmpty()) EmptyStage("在右侧地址栏输入网址，一起看", Modifier.fillMaxSize())
+                    if (pageUrl.isEmpty()) EmptyStage("在右侧地址栏输入网址，一起看；下面有粘贴 / 上次 / 收藏夹", Modifier.fillMaxSize())
                     else key(webGen) {
                         AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
                     }
                 }
                 Column(Modifier.width(320.dp).fillMaxHeight()) {
                     addressRow(Modifier)
+                    /* 横屏同样给快捷芯片（方案A）：右栏进厅即输，芯片就在地址行下面。 */
+                    if (pageUrl.isEmpty()) {
+                        RoomShortcuts(
+                            backdrop = backdrop,
+                            recentUrl = recentUrl,
+                            onPaste = { pasteFromClip() },
+                            onRecent = { openRecent(it) },
+                            onFavorites = { showFavs = true },
+                        )
+                    }
                     actionRow()
                     /* weight(1f, fill = false)：让卡片**贴着内容长**，但最多只到栏底。
                        给满 weight(1f) 的实测结果是下面一大块空黑玻璃
@@ -1159,17 +1201,21 @@ fun CinemaScreen(
                每次切换 AndroidView 都整棵 detach/reattach，Chromium 重挂黑闪一两帧、
                再叠加页面重排 = 用户实测的"切换闪烁"。切模式只改这一份节点的布局
                约束（300dp ↔ 填满），视口变化由页内 resize 重钉兜底；节点不动，画面就不闪。 */
-            if (showLobby) {
-                CinemaLobby(
-                    backdrop = backdrop,
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                    onOpenSite = { lobbyDismissed = true; addrFocusSeq++ },
-                    onFavorites = { lobbyDismissed = true; showFavs = true },
-                )
-            } else {
             if (!theater) {
                 addressRow(Modifier)
                 actionRow()
+                /* 方案A：空厅的快捷芯片行 —— 粘贴 / 上次一起看 / 收藏夹。
+                   引导页删掉后，原来那两张操作卡的目的全压进这一行：
+                   每颗都是一下就到位，不存在"先撤引导再聚焦"的中间步。 */
+                if (pageUrl.isEmpty()) {
+                    RoomShortcuts(
+                        backdrop = backdrop,
+                        recentUrl = recentUrl,
+                        onPaste = { pasteFromClip() },
+                        onRecent = { openRecent(it) },
+                        onFavorites = { showFavs = true },
+                    )
+                }
             }
             Box(
                 if (theater) Modifier.height(300.dp) else Modifier.weight(1f)
@@ -1177,7 +1223,7 @@ fun CinemaScreen(
                 // 没打开网页就不挂 WebView：空厅是一块深色的"待放"屏，不是白板
                 if (pageUrl.isEmpty()) EmptyStage(
                     if (theater) "还没选片 —— 去「浏览」打开一个视频页，或直接分享你的屏幕"
-                    else "在上方地址栏输入网址，或点「收藏夹」挑一个常去的站",
+                    else "输入网址就能一起看；上面有「粘贴 / 上次 / 收藏夹」",
                     Modifier.fillMaxSize(),
                 )
                 else key(webGen) {
@@ -1327,7 +1373,6 @@ fun CinemaScreen(
                    这两个条件一叠加，整张卡直接消失，屏幕上只剩一块黑 —— 量具默认收起之后
                    第一时间就踩到了（截图实测）。 */
                 panel(Modifier)
-            }
             }
         }
     }
@@ -1950,89 +1995,59 @@ private fun EmptyStage(hint: String, modifier: Modifier = Modifier) {
     }
 }
 
-/**
- * 引导首页：空厅的唯一空态（= 浏览器的新标签页）。坐在壁纸上，和全厅同一套玻璃语言
- * —— GlassPanel 圆徽 + LiquidGlassButton 操作卡（扁平色卡被用户点名"UI 不一致"）。
- * 「打开网站」不打开任何页面：撤下引导、聚焦地址栏，等人输入 —— 空厅里不存在
- * 兜底网页，彩条测试页只从面板里那颗明确标注的「本地测试页」入口才够得着。
- */
+/* ── 方案A：空厅快捷芯片 ──
+   引导页（原 CinemaLobby）删掉的依据：它存在的意义只有"递一次地址栏焦点"，
+   而这件事现在进厅落地就发生（进厅即聚焦+键盘）。原来那两张操作卡的目的
+   （打开网站 / 回收藏）压成一行芯片贴着地址栏 —— 每颗一下到位，不再有中间步。 */
+
+/** 空厅的快捷芯片行：粘贴 / 上次一起看 / 收藏夹。放不下就横滑（动作行同一策略）。 */
 @Composable
-private fun CinemaLobby(
+private fun RoomShortcuts(
     backdrop: LayerBackdrop,
-    modifier: Modifier = Modifier,
-    onOpenSite: () -> Unit,
+    recentUrl: String?,
+    onPaste: () -> Unit,
+    onRecent: (String) -> Unit,
     onFavorites: () -> Unit,
 ) {
-    Column(
-        modifier.fillMaxWidth().padding(horizontal = GlassDimens.screenH),
-        horizontalAlignment = Alignment.CenterHorizontally,
+    Row(
+        Modifier.fillMaxWidth()
+            .padding(horizontal = GlassDimens.screenH, vertical = 6.dp)
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Spacer(Modifier.height(38.dp))
-        // 品牌圆徽：与甲板圆键同一块玻璃（GlassPanel 圆形）
-        GlassPanel(
-            backdrop = backdrop,
-            radius = 30.dp,
-            surfaceAlpha = 0.12f,
-            shape = CircleShape,
-            modifier = Modifier.height(64.dp).width(64.dp),
-        ) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("🎬", fontSize = 28.sp)
-            }
+        ShortcutChip("📋 粘贴", backdrop, onClick = onPaste)
+        if (recentUrl != null) {
+            ShortcutChip("🕐 上次 · " + shortSite(recentUrl), backdrop) { onRecent(recentUrl) }
         }
-        Spacer(Modifier.height(14.dp))
-        Text("双人放映厅", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = Ink.TextHi)
-        Spacer(Modifier.height(5.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.height(6.dp).width(6.dp).clip(RoundedCornerShape(3.dp))
-                    .background(Ink.Live),
-            )
-            Spacer(Modifier.width(6.dp))
-            Text("厅已开 · 等对方进来", fontSize = 12.sp, color = Ink.TextMid)
-        }
-        Spacer(Modifier.height(24.dp))
-        LobbyAction("🌐", "打开网站", "输入地址，一起看想看的片子", hot = true, backdrop = backdrop, onClick = onOpenSite)
-        Spacer(Modifier.height(10.dp))
-        LobbyAction("⭐", "收藏夹", "快速回到之前看过的站点", backdrop = backdrop, onClick = onFavorites)
+        ShortcutChip("⭐ 收藏夹", backdrop, onClick = onFavorites)
     }
 }
 
-/** 引导页的一格操作卡：LiquidGlassButton（与甲板 DockBtn/圆键同一按压液感），hot = 主操作绿染。 */
+/** 一颗快捷芯片：LiquidGlassButton（与甲板/动作行同一按压液感，禁裸 clickable+ripple）。 */
 @Composable
-private fun LobbyAction(
-    icon: String,
-    title: String,
-    subtitle: String,
+private fun ShortcutChip(
+    text: String,
     backdrop: LayerBackdrop,
-    hot: Boolean = false,
     onClick: () -> Unit,
 ) {
     LiquidGlassButton(
         onClick = onClick,
         backdrop = backdrop,
-        modifier = Modifier.fillMaxWidth().height(64.dp),
-        shape = RoundedCornerShape(16.dp),
-        surfaceColor = if (hot) Ink.Live.copy(alpha = 0.12f) else null,
-        contentAlignment = Alignment.CenterStart,
+        modifier = Modifier.height(34.dp),
+        shape = RoundedCornerShape(percent = 50),
+        contentAlignment = Alignment.Center,
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp),
-        ) {
-            Box(
-                Modifier.height(40.dp).width(40.dp).clip(RoundedCornerShape(12.dp))
-                    .background(Color(0x14FFFFFF)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(icon, fontSize = 17.sp)
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextHi)
-                Text(subtitle, fontSize = 11.5.sp, color = Ink.TextMid, modifier = Modifier.padding(top = 1.dp))
-            }
-            Text("›", fontSize = 16.sp, color = Ink.TextLow)
-        }
+        Text(text, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Ink.TextHi)
     }
 }
+
+/** 「上次」芯片的短标签：去掉 scheme 和 www，只留站点主体（360kan.com/xxx → 360kan.com）。 */
+private fun shortSite(url: String): String =
+    url.trim()
+        .removePrefix("https://")
+        .removePrefix("http://")
+        .removePrefix("www.")
+        .substringBefore('/')
+
+/** 从一段文本里抽出第一条 http(s) 链接（粘贴芯片 / 首页剪贴板浮卡共用）。 */
+internal val clipUrlRegex = Regex("""https?://\S+""")
