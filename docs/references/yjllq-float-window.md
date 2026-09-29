@@ -178,3 +178,46 @@
 8. 候选列表 UI（条目 + 时长异步回填 + 排序 + 「播它」）
 9. 浮窗「换片」入口复用同一个列表
 10. 与「A 的开关 + 同页迷你窗」合并落地
+
+---
+
+## 10. 「浮窗出现慢、加载画面更慢」排查记录（2026-09-30，提交 e7a049c）
+
+用户反馈：放映中最小化，浮窗很久才出现，出现后画面还要再等。
+
+### 打点方法（以后直接复用）
+`FloatPlayerService.mark(tag)` 以 `FloatPlayer.startMs`（请求启动那一瞬）为 +0ms，
+打服务各段耗时；再挂 `AnalyticsListener` 打 LOAD 开始/完成（dataType、耗时、字节、uri）、
+清单就位、首帧、READY、挑档结果。日志 tag = `FloatPlay`。
+
+### 实测原始分解（t2test / mux 测试流 / 网速 ~1.5MB/s）
+```
++493ms   窗口挂上        ← 其实很快
++725ms   清单就位         ← 124ms，快
++4935ms  首段下载完成      ← 4219ms 下 6.5MB ❌ 网速瓶颈
++10166ms 首帧
+```
+两个真问题：
+1. **窗口 0.5 秒就挂上了，但深底压深壁纸几乎看不见** —— 感知成"窗很慢才出"。
+2. **慢的真身是下载**：播放器选了 1080p 档（分片 6.5~13.5MB），1.5MB/s 下一个分片 4~8 秒。
+
+### 修复三件套
+- **占位提示**："正在接入画面…" 即刻显示，首帧淡出；播放失败改显原因。
+- **缓冲门槛 2500/5000 → 500/500**（media3 1.8 合并成 `setBufferDurationsMs`，
+  旧的 `setBufferForPlaybackMs` 已删除）。
+- **服务端自挑低档变体**（关键）：后台拉 master 清单，按窗宽预算挑档
+  （≤960 宽里带宽最高 → 本例选中 848x480/0.84Mbps，分片 <1MB），失败回落原地址；
+  host 把**全部候选**一起传（页面嗅探常给变体清单，从它看不出档位）。
+
+### 关键坑：media3 的 maxVideoSize 对 HLS 初始变体选择无效
+约束 1280x720 明确进了选择器（`trackSelector.parameters.maxVideoWidth` 打印可见），
+但仍选中 url_8=1080p。**结论：约束不可信，必须自己挑档**（url 前缀即可判断选了哪档：
+url_8=fhd / url_6=hq(480p) / url_0=hd）。
+
+### media3 1.8 API 挪位记录
+- `MediaLoadData` → `androidx.media3.exoplayer.source.MediaLoadData`，字段是 `dataType` 不是 `loadType`
+- `AnalyticsListener.onLoadCompleted(EventTime, LoadEventInfo, MediaLoadData)`（耗时在 LoadEventInfo）
+- `DefaultLoadControl.Builder.setBufferForPlaybackMs` 已删 → `setBufferDurationsMs(min,max,forPlayback,afterRebuffer)`
+
+### 结果
+挑档成功 → 首帧 **+3048ms**（原 10.2s，快 3.4 倍）；窗口含占位即出。
