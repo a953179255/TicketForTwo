@@ -51,6 +51,7 @@ import com.ticketfortwo.app.cinema.CinemaProbe
 import com.ticketfortwo.app.cinema.CinemaSync
 import com.ticketfortwo.app.cinema.FloatPlayer
 import com.ticketfortwo.app.cinema.FloatRequest
+import com.ticketfortwo.app.cinema.MediaDuration
 import com.ticketfortwo.app.cinema.MediaSniffer
 import com.ticketfortwo.app.cinema.SRC_PAGE
 import com.ticketfortwo.app.cinema.SnifferState
@@ -271,6 +272,10 @@ fun CinemaScreen(
        这类无害按钮平铺在同一排、一点就生效 —— 误触的代价是把对方直接踢回等候屏
        （2026-09-29 用户拍板要加确认）。 */
     var askCloseRoom by remember { mutableStateOf(false) }
+    /** 「换片」候选列表（浮窗上点换片、或手挑候选时弹出）。 */
+    var askPickList by remember { mutableStateOf(false) }
+    /** 顶替询问：浮窗正在播，又选了另一条 —— 换不换由房主定（2026-09-30 定案）。 */
+    var pickTarget by remember { mutableStateOf<MediaSniffer.Hit?>(null) }
     fun persistFavs() {
         favPrefs.edit().putStringSet("set", favs.toSet()).apply()
     }
@@ -339,10 +344,13 @@ fun CinemaScreen(
     val float by FloatPlayer.state.collectAsState()
     var commander by remember { mutableStateOf(Commander.Page) }
 
-    /** 起浮窗：先立新、后废旧 —— 网页那个照旧播着，等浮窗**真的播起来**才停它。 */
-    fun openFloat() {
-        val h = CinemaProbe.bestOf(hits)
-        if (h == null) {
+    /**
+     * 起浮窗：先立新、后废旧 —— 网页那个照旧播着，等浮窗**真的播起来**才停它。
+     * [h] 为空时自动挑最优候选（CinemaProbe.bestOf）。
+     */
+    fun openFloat(h: MediaSniffer.Hit?) {
+        val hit = h ?: CinemaProbe.bestOf(hits)
+        if (hit == null) {
             note = "还没嗅到能播的地址 —— 先在这页把视频点成播放"
             return
         }
@@ -351,14 +359,19 @@ fun CinemaScreen(
         FloatPlayer.start(
             context,
             FloatRequest(
-                url = h.url,
-                title = MediaSniffer.hostLabel(h.url),
-                referer = h.referer,
-                cookie = h.cookie,
-                userAgent = h.userAgent,
+                url = hit.url,
+                title = MediaSniffer.hostLabel(hit.url),
+                referer = hit.referer,
+                cookie = hit.cookie,
+                userAgent = hit.userAgent,
                 startPosMs = startAt,
             ),
         )
+    }
+
+    /** 从候选列表选一条：浮窗已在播就要**先问一句**（顶替），否则直接起窗。 */
+    fun requestPlay(h: MediaSniffer.Hit) {
+        if (float.active) pickTarget = h else openFloat(h)
     }
 
     /* WebView 从 CinemaBrowser 领取（进程级存活），但 **clients 每次进屏都重装**：
@@ -525,6 +538,8 @@ fun CinemaScreen(
     // 否则会隔着遮罩退网页/离厅（审查 A3-5）
     BackHandler(enabled = showFavs) { showFavs = false }
     BackHandler(enabled = askCloseRoom) { askCloseRoom = false }
+    BackHandler(enabled = askPickList) { askPickList = false }
+    BackHandler(enabled = pickTarget != null) { pickTarget = null }
 
     /* 退回目标的安顿窗口：onPageStarted 落到目标 ≠ 站点安顿了 —— 页面可能紧接着
        又把自己 replace 成广告。窗口内出现新导航即视为"被弹走"（见 onPageStarted
@@ -654,8 +669,15 @@ fun CinemaScreen(
             webView.evaluateJavascript(MediaSniffer.probeJs()) { raw ->
                 val p = CinemaProbe.parsePageProbe(raw) ?: return@evaluateJavascript
                 probe = p
-                sniffer.observePageProbe(p)
+                sniffer.observePageProbe(p, pageUrl)
                 hits = sniffer.snapshot()
+                /* 网页自己报的时长是最准的（就是正在播的那条）—— 候选列表里正在播的
+                   那条直接用它，不用等清单解析（清单有时只给一个时间窗，会偏短）。 */
+                if (p.durationSec > 1.0 && !p.isBlob && p.currentSrc.isNotBlank() &&
+                    !durations.containsKey(p.currentSrc)
+                ) {
+                    durations = durations + (p.currentSrc to (p.durationSec * 1000).toLong())
+                }
                 if (p.resources.isNotEmpty() || p.currentSrc.isNotBlank()) {
                     Log.i(
                         "Cinema",
@@ -777,6 +799,38 @@ fun CinemaScreen(
        但声音和进度必须继续，否则观众那边会以为房主暂停了。 */
     LaunchedEffect(screenShared, float.active) {
         if (float.active) FloatPlayer.setHidden(screenShared)
+    }
+
+    /* 候选时长：异步回填。
+       一页里常有正片/预告/广告好几条，光看地址分不清谁是谁 —— **时长是最直观的分辨依据**
+       （2026-09-30 用户要求，对标雨见的候选列表）。探测要联网，所以：
+        - 先出条目、时长后填（列表不卡）；
+        - 每条只探一次，结果按 URL 记住，重进不重复问；
+        - 拿不到就是拿不到，界面显示"未知"，不编数字。 */
+    var durations by remember { mutableStateOf(emptyMap<String, Long>()) }
+    LaunchedEffect(showPanel, hits.size) {
+        if (!showPanel) return@LaunchedEffect
+        val todo = hits
+            .filter { MediaSniffer.playable(it.kind) && it.url.startsWith("http", true) }
+            .filter { !durations.containsKey(it.url) }
+            .take(8)                       // 一屏够用就行，别为几十条埋点也去联网
+        if (todo.isEmpty()) return@LaunchedEffect
+        withContext(Dispatchers.IO) {
+            todo.forEach { h ->
+                val ms = MediaDuration.probe(h)
+                if (ms != null) {
+                    withContext(Dispatchers.Main.immediate) {
+                        durations = durations + (h.url to ms)
+                    }
+                }
+            }
+        }
+    }
+
+    /* 浮窗上点「换片」：把候选列表弹出来（同一个列表，选中即走交接/顶替流程）。 */
+    DisposableEffect(Unit) {
+        FloatPlayer.onPickRequest = { askPickList = true }
+        onDispose { FloatPlayer.onPickRequest = null }
     }
 
     // 观众的放映请求落到这个 WebView 上（它才是播放器）。
@@ -990,7 +1044,7 @@ fun CinemaScreen(
                     runCatching { context.startActivity(FloatPlayer.openOverlaySettings(context)) }
                     note = "要在桌面/别的应用上也看到小窗，得先在设置里允许「显示在其他应用上层」—— 打开后回来再点一次「浮窗播」"
                 }
-                else -> openFloat()
+                else -> openFloat(null)
             }
         }, backdrop)
         // 浏览器后退：广告/自动跳转后一步步退回上一页（与系统返回键同一行为，
@@ -1043,6 +1097,9 @@ fun CinemaScreen(
         onCopyInvite = copyInvite,
         onShare = shareInviteAction,
         onPick = { h -> screen(h) },
+        durations = durations,
+        playingUrl = probe?.currentSrc,
+        onFloatPick = { h -> requestPlay(h) },
         onTestUrl = { u ->
             inputUrl = u
             if (u == pageUrl) reloadSeq++ else pageUrl = u
@@ -1294,6 +1351,175 @@ fun CinemaScreen(
         }
     }
 
+    /* 顶替询问：浮窗正在播，又点了另一条 —— 换不换由房主定（2026-09-30 定案，
+       不静默顶替）。同一个窗换源，不开第二个窗。 */
+    if (pickTarget != null) {
+        val h = pickTarget!!
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color(0xA6000000))
+                .clickable { pickTarget = null },
+            contentAlignment = Alignment.Center,
+        ) {
+            GlassCardPanel(
+                backdrop,
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 28.dp)
+                    .clickable { },
+            ) {
+                Column(Modifier.padding(18.dp)) {
+                    Text(
+                        "换到这个视频？",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Ink.TextHi,
+                    )
+                    Box(Modifier.height(6.dp))
+                    Text(
+                        "浮窗现在播的是「${float.title.ifBlank { "当前这条" }}」",
+                        fontSize = 12.5.sp,
+                        color = Ink.TextMid,
+                        lineHeight = 18.sp,
+                    )
+                    Text(
+                        "${fmtDuration(durations[h.url])} · ${MediaSniffer.shorten(h.url, 40)}",
+                        fontSize = 11.5.sp,
+                        color = Ink.TextLow,
+                        lineHeight = 17.sp,
+                    )
+                    Box(Modifier.height(16.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        LiquidGlassButton(
+                            onClick = { pickTarget = null },
+                            backdrop = backdrop,
+                            modifier = Modifier.weight(1f).height(46.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            contentAlignment = Alignment.Center,
+                        ) { Text("继续播旧的", fontSize = 14.sp, color = Ink.TextHi) }
+                        LiquidGlassButton(
+                            onClick = {
+                                pickTarget = null
+                                FloatPlayer.replace(
+                                    FloatRequest(
+                                        url = h.url,
+                                        title = MediaSniffer.hostLabel(h.url),
+                                        referer = h.referer,
+                                        cookie = h.cookie,
+                                        userAgent = h.userAgent,
+                                    ),
+                                )
+                                note = "浮窗换片了"
+                            },
+                            backdrop = backdrop,
+                            modifier = Modifier.weight(1f).height(46.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            surfaceColor = Ink.Live.copy(alpha = 0.20f),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                "换它",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Ink.Live,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* 「换片」候选列表：全列 + 标时长（浮窗上点换片、或主动手挑时弹）。 */
+    if (askPickList) {
+        val ranked = rankedCandidates(hits, probe?.currentSrc, durations)
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color(0xA6000000))
+                .clickable { askPickList = false },
+            contentAlignment = Alignment.Center,
+        ) {
+            GlassCardPanel(
+                backdrop,
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp)
+                    .clickable { },
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("换到哪个？", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextHi)
+                    Box(Modifier.height(4.dp))
+                    Text(
+                        "最长的多半是正片，十几秒的基本是广告",
+                        fontSize = 11.sp,
+                        color = Ink.TextLow,
+                    )
+                    Box(Modifier.height(10.dp))
+                    if (ranked.isEmpty()) {
+                        Text(
+                            "还没嗅到能播的地址 —— 回到网页把视频点成播放再试",
+                            fontSize = 12.5.sp,
+                            color = Ink.TextMid,
+                            lineHeight = 18.sp,
+                        )
+                    }
+                    ranked.forEach { h ->
+                        val dur = durations[h.url]
+                        val cur = h.url == probe?.currentSrc
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { askPickList = false; requestPlay(h) }
+                                .padding(vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                fmtDuration(dur),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (cur) Ink.Live else Ink.TextHi,
+                            )
+                            Box(Modifier.width(8.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    MediaSniffer.shorten(h.url, 44),
+                                    fontSize = 11.sp,
+                                    color = Ink.TextMid,
+                                    maxLines = 1,
+                                )
+                                Text(
+                                    "${h.kind.name.take(4)} · ${MediaDuration.hint(dur)}" +
+                                        if (cur) " · 网页正在播" else "",
+                                    fontSize = 10.sp,
+                                    color = Ink.TextLow,
+                                )
+                            }
+                            Text(
+                                if (float.active) "换它" else "播它",
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Ink.Live,
+                                modifier = Modifier.padding(start = 6.dp),
+                            )
+                        }
+                    }
+                    Box(Modifier.height(8.dp))
+                    Text(
+                        "关闭",
+                        fontSize = 12.5.sp,
+                        color = Ink.TextMid,
+                        modifier = Modifier
+                            .align(Alignment.End)
+                            .clickable { askPickList = false }
+                            .padding(6.dp),
+                    )
+                }
+            }
+        }
+    }
+
     /* 收厅二次确认：动作行与甲板底坞两处入口共用一个。
        文案说清后果（对方会退回等候屏）+ 给退路（你这边还能重新放映）。 */
     if (askCloseRoom) {
@@ -1487,6 +1713,12 @@ private fun CinemaPanel(
     /** 系统分享面板（与复制并列的第二条邀请通道）。 */
     onShare: () -> Unit,
     onPick: (MediaSniffer.Hit) -> Unit,
+    /** 候选时长（异步回填；没回来的条目显示"未知"）。 */
+    durations: Map<String, Long>,
+    /** 网页里当前正在播的那条地址（用于把"正在播"置顶并标出来）。 */
+    playingUrl: String?,
+    /** 把这一条挂到浮窗里播（自己看；与 onPick 的"放给对方"是两条出路）。 */
+    onFloatPick: (MediaSniffer.Hit) -> Unit,
     /** 三颗测试用胶囊的目标地址。它们从主操作行挪进「展开嗅探」，见 CinemaScreen 的排布注释。 */
     onTestUrl: (String) -> Unit,
 ) {
@@ -1700,7 +1932,20 @@ private fun CinemaPanel(
                         fontSize = 10.5.sp,
                         color = Ink.TextLow,
                     )
-                    playable.forEach { h ->
+                    /* 候选列表：全列 + 标时长 —— 一页里常有正片/预告/广告好几条，
+                       光看地址分不清谁是谁，时长是最直观的分辨依据（2026-09-30 用户要求）。
+                       正在播的置顶、其余按时长降序；时长异步回填，没回来前显示"未知"。 */
+                    val ranked = rankedCandidates(hits, playingUrl, durations)
+                    if (ranked.isNotEmpty()) {
+                        Text(
+                            "嗅到 ${ranked.size} 条 · 最长的多半是正片，十几秒的基本是广告",
+                            fontSize = 10.sp,
+                            color = Ink.TextLow,
+                        )
+                    }
+                    ranked.forEach { h ->
+                        val dur = durations[h.url]
+                        val cur = h.url == playingUrl
                         Row(
                             Modifier
                                 .fillMaxWidth()
@@ -1708,17 +1953,42 @@ private fun CinemaPanel(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                "${h.kind.name.take(4)} · ${h.hits}次 · ${if (h.sources and SRC_PAGE != 0) "页面" else "请求"}",
-                                fontSize = 10.sp,
-                                color = Ink.TextLow,
+                                fmtDuration(dur),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (cur) Ink.Live else Ink.TextHi,
                             )
-                            Box(Modifier.width(8.dp))
+                            Box(Modifier.width(7.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    MediaSniffer.shorten(h.url, 52),
+                                    fontSize = 10.5.sp,
+                                    color = Ink.TextMid,
+                                    maxLines = 1,
+                                )
+                                Text(
+                                    "${h.kind.name.take(4)} · ${MediaDuration.hint(dur)}" +
+                                        if (cur) " · 网页正在播" else "",
+                                    fontSize = 9.5.sp,
+                                    color = Ink.TextLow,
+                                )
+                            }
+                            // 两条出路：放给对方（放映）/ 自己挂浮窗看
                             Text(
-                                MediaSniffer.shorten(h.url, 58),
-                                fontSize = 10.5.sp,
-                                color = Ink.TextMid,
-                                maxLines = 2,
-                                modifier = Modifier.weight(1f).clickable { onPick(h) },
+                                "放映",
+                                fontSize = 11.sp,
+                                color = Ink.TextHi,
+                                modifier = Modifier
+                                    .clickable { onPick(h) }
+                                    .padding(horizontal = 5.dp),
+                            )
+                            Text(
+                                "浮窗",
+                                fontSize = 11.sp,
+                                color = Ink.Live,
+                                modifier = Modifier
+                                    .clickable { onFloatPick(h) }
+                                    .padding(horizontal = 5.dp),
                             )
                         }
                     }
@@ -1782,6 +2052,40 @@ private fun androidx.compose.foundation.layout.BoxScope.FullscreenHint(text: Str
  * 所以任一时刻只有一方是指挥官，广播只读它的读数，另一方必须停。
  */
 private enum class Commander { Page, Float }
+
+/** 毫秒 → "1:52:30" / "1:24" / "未知"。拿不到就老实说未知，不编数字。 */
+private fun fmtDuration(ms: Long?): String {
+    if (ms == null || ms <= 0) return "未知"
+    val total = ms / 1000
+    val h = total / 3600
+    val m = (total % 3600) / 60
+    val s = total % 60
+    return if (h > 0) {
+        "%d:%02d:%02d".format(h, m, s)
+    } else {
+        "%d:%02d".format(m, s)
+    }
+}
+
+/**
+ * 候选排序：**正在网页里播的置顶**，其余按时长从长到短。
+ *
+ * 为什么按时长：正片通常最长，广告通常十几秒 —— 用户要靠时长分辨谁是谁，
+ * 那列表就该把"最像正片的"排在最上面（2026-09-30 用户要求）。
+ * 时长还没回填完的排在已确定的后面（值为 -1），回填后列表自己会重排。
+ */
+private fun rankedCandidates(
+    hits: List<MediaSniffer.Hit>,
+    playingUrl: String?,
+    durations: Map<String, Long>,
+): List<MediaSniffer.Hit> = hits
+    .filter { MediaSniffer.playable(it.kind) && it.url.startsWith("http", ignoreCase = true) }
+    .sortedWith(
+        compareByDescending<MediaSniffer.Hit> { it.url == playingUrl }
+            .thenByDescending { durations[it.url] ?: -1L }
+            .thenByDescending { MediaSniffer.score(it) },
+    )
+    .take(8)
 
 /**
  * 厅回来接片用的恢复点（见 CinemaScreen 的 pendingRestore）。

@@ -193,8 +193,25 @@ class FloatPlayerService : android.app.Service() {
         val w = dp(WIN_W_DP)
         val h = dp(WIN_H_DP) + dp(BAR_H_DP)
 
+        val radius = dp(14).toFloat()
         val root = FrameLayout(this).apply {
-            setBackgroundColor(0xE6101116.toInt())
+            /* 圆角（2026-09-30 用户反馈：直角四角不好看）。
+               两层都要：背景画圆角色块 + 轮廓裁剪把里面方角的视频一起切圆，
+               只做背景的话 PlayerView 的直角会从圆角底下探出来。 */
+            val bg = android.graphics.drawable.GradientDrawable().apply {
+                setColor(0xE6101116.toInt())
+                cornerRadius = radius
+                // 一圈极淡的描边，浮在亮壁纸上时才看得出边界
+                setStroke(1, 0x33FFFFFF)
+            }
+            background = bg
+            outlineProvider = object : android.view.ViewOutlineProvider() {
+                override fun getOutline(view: android.view.View, outline: android.graphics.Outline) {
+                    outline.setRoundRect(0, 0, view.width, view.height, radius)
+                }
+            }
+            clipToOutline = true
+            elevation = dp(8).toFloat()
         }
         val pv = PlayerView(this).apply {
             player = exo
@@ -226,6 +243,20 @@ class FloatPlayerService : android.app.Service() {
         titleView = t
         bar.addView(t)
 
+        /* 换片：回到放映厅里挑 —— 列表在 App 内（浮窗只有 170dp 宽，塞不下一张列表），
+           所以这里只是发一个请求，由界面弹出来。 */
+        val pick = TextView(this).apply {
+            text = "换片"
+            setTextColor(0xFF9EE8B8.toInt())
+            textSize = 11f
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.END or Gravity.CENTER_VERTICAL,
+            ).apply { marginEnd = dp(62) }
+            setOnClickListener { FloatPlayer.onPickRequest?.invoke() }
+        }
+        bar.addView(pick)
         val close = TextView(this).apply {
             text = "×"
             setTextColor(0xFFFFFFFF.toInt())

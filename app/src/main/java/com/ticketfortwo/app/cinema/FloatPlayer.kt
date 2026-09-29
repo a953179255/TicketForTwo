@@ -89,6 +89,13 @@ object FloatPlayer {
     /** 换片：同一个窗、同一个播放器实例换源（不做第二个窗 —— 两个窗会抢声音和焦点）。 */
     fun replace(req: FloatRequest) = service?.replace(req)
 
+    /**
+     * 浮窗控制条上点「换片」的回调。
+     * 由放映厅界面挂上（把候选列表弹出来）；没挂上时（比如界面已退）什么都不做 ——
+     * 浮窗不该在那种时候自己弹出列表。
+     */
+    var onPickRequest: (() -> Unit)? = null
+
     /** 系统是否允许画在其他应用之上。 */
     fun canDrawOverlays(context: Context): Boolean =
         android.provider.Settings.canDrawOverlays(context)
