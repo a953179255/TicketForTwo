@@ -10,12 +10,15 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -937,6 +940,57 @@ fun CinemaScreen(
      * 依赖它们的脚本改成先点「展开嗅探」（scripts/drive_cinema_*.py 已同步）。 */
     val wide = LocalConfiguration.current.let { it.screenWidthDp > it.screenHeightDp }
 
+    /** 收起/唤出浮窗：无权限先把用户领去系统设置（安卓规定只能他自己在设置里开）。 */
+    fun toggleFloat() {
+        when {
+            float.active -> closeFloat()
+            !FloatPlayer.canDrawOverlays(context) -> {
+                runCatching { context.startActivity(FloatPlayer.openOverlaySettings(context)) }
+                note = "要在桌面/别的应用上也看到小窗，得先在设置里允许「显示在其他应用上层」—— 打开后回来再点一次「浮窗播」"
+            }
+            else -> openFloat(null)
+        }
+    }
+
+    /**
+     * 开始放映 / 请求收厅。
+     *
+     * 放映/收厅：房主确认才切 —— 嗅探有认错的时候（广告分片、预告片），
+     * 自动切等于把误判直接端给对方。
+     */
+    fun startOrAskClose() {
+        if (cinema != null) {
+            askCloseRoom = true     // 二次确认（唯一会中断放映的动作）
+            return
+        }
+        val h = CinemaProbe.bestOf(hits)
+        if (h != null) {
+            screen(h)
+        } else {
+            val pv = player
+            // 分开说三种"没候选"，每种都给出下一步：
+            // ① 嗅到的只是本机文件地址；② 页面有播放器但没在放；③ 真的什么都没有。
+            // ② 是最常见的一种（11 站样本里"没嗅到"的四站中两站如此：B 站、Vimeo
+            // 都是按下播放才去取流，没有请求就没有可嗅的地址）—— 那就替他点上。
+            note = when {
+                CinemaProbe.localOnly(hits) != null ->
+                    "嗅到的是本机文件地址（file://），对方播不了 —— 打开一个网页里的播放器再试"
+                pv != null && !pv.playing -> {
+                    webView.post {
+                        webView.evaluateJavascript(
+                            WatchSync.jsFor(WatchCmd.Play, pv.posMs, pv.durMs),
+                            null,
+                        )
+                    }
+                    "这页还没播 —— 先替你点上播放，等它开始取流再按一次「开始放映」"
+                }
+                else ->
+                    "还没嗅到地址 —— 先在这页把视频点成播放（多数站点是按了播放才去取流），" +
+                        "再按开始放映"
+            }
+        }
+    }
+
     val addressRow: @Composable (Modifier) -> Unit = { rowModifier -> Row(
         rowModifier.fillMaxWidth().padding(horizontal = GlassDimens.screenH, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -996,66 +1050,16 @@ fun CinemaScreen(
     }
 
     val actionRow: @Composable () -> Unit = { Row(
-        /* 这一排原来是不滚动的五颗胶囊：屏宽不够时**最后一颗「开始放映」整个被切到屏外**
-           （uiautomator 里根本找不到它，实测点不到 —— 主操作按钮看不见，等于这一屏没有主操作）。
-           现在按重要度排序 + 允许横滑：主操作永远在最左边看得见的位置，调试用的排到最后。 */
+        /* 这一排**只放浏览器自己的动作**（后退/收藏夹/嗅探）——
+           「开始放映」「分享我的屏幕」「浮窗播」是厅的动作，按 2026-09-30 定稿挪进
+           底部控制卡（CinemaPanel 顶部）……
+           原来这排是五颗不滚动的胶囊，屏宽不够时最后一颗被切出屏外（2026-09-29
+           实测点不到），改成横滑后主操作看得见了，但"两类动作混在一排"依旧 ——
+           这次按"谁拥有它"分家，浏览器行不再滚也放得下。 */
         Modifier.fillMaxWidth().padding(start = GlassDimens.screenH, bottom = 4.dp)
             .horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        // 放映/收厅：房主确认才切 —— 嗅探有认错的时候（广告分片、预告片），
-        // 自动切等于把误判直接端给对方。
-        GlassTextButton(if (cinema == null) "开始放映" else "收厅", onClick = {
-            if (cinema != null) {
-                askCloseRoom = true     // 二次确认（唯一会中断放映的动作）
-            } else {
-                val h = CinemaProbe.bestOf(hits)
-                if (h != null) {
-                    screen(h)
-                } else {
-                    val pv = player
-                    // 分开说三种"没候选"，每种都给出下一步：
-                    // ① 嗅到的只是本机文件地址；② 页面有播放器但没在放；③ 真的什么都没有。
-                    // ② 是最常见的一种（11 站样本里"没嗅到"的四站中两站如此：B 站、Vimeo
-                    // 都是按下播放才去取流，没有请求就没有可嗅的地址）—— 那就替他点上。
-                    note = when {
-                        CinemaProbe.localOnly(hits) != null ->
-                            "嗅到的是本机文件地址（file://），对方播不了 —— 打开一个网页里的播放器再试"
-                        pv != null && !pv.playing -> {
-                            webView.post {
-                                webView.evaluateJavascript(
-                                    WatchSync.jsFor(WatchCmd.Play, pv.posMs, pv.durMs),
-                                    null,
-                                )
-                            }
-                            "这页还没播 —— 先替你点上播放，等它开始取流再按一次「开始放映」"
-                        }
-                        else ->
-                            "还没嗅到地址 —— 先在这页把视频点成播放（多数站点是按了播放才去取流），" +
-                                "再按开始放映"
-                    }
-                }
-            }
-        }, backdrop)
-        // 分享我的屏幕：厅先开（只语音）再切投屏的入口。首页圆钮在厅开着时是
-        // "回到放映厅"，ShareKind 进不去 —— 这条 v2.1 主路径的入口落在这里；
-        // 授权后留在厅里接着选片。已经在投屏就藏起来（没有第二件事可做）。
-        if (!screenShared) {
-            GlassTextButton("分享我的屏幕", onClick = onStartShare, backdrop)
-        }
-        /* 浮窗播：另起一个播放器播"嗅探到的地址" —— 换页、回主界面、回桌面都照播
-           （对标雨见的嗅探即浮窗）。收起时把进度拨回网页播放器（反向交接）。 */
-        GlassTextButton(if (float.active) "收起浮窗" else "浮窗播", onClick = {
-            when {
-                float.active -> closeFloat()
-                // 悬浮窗权限只能用户自己在系统设置里开，我们只能把路指过去
-                !FloatPlayer.canDrawOverlays(context) -> {
-                    runCatching { context.startActivity(FloatPlayer.openOverlaySettings(context)) }
-                    note = "要在桌面/别的应用上也看到小窗，得先在设置里允许「显示在其他应用上层」—— 打开后回来再点一次「浮窗播」"
-                }
-                else -> openFloat(null)
-            }
-        }, backdrop)
         // 浏览器后退：广告/自动跳转后一步步退回上一页（与系统返回键同一行为，
         // 没有这颗按钮时用户只能重开链接 —— 2026-09-28 用户反馈）
         // 可用性 = 原生历史 或 自家记录（广告 replace 吃掉原生历史时按钮不许灰死 ——
@@ -1109,6 +1113,10 @@ fun CinemaScreen(
         durations = durations,
         playingUrl = probe?.currentSrc,
         onFloatPick = { h -> requestPlay(h) },
+        onStartScreening = { startOrAskClose() },
+        onStartShare = onStartShare,
+        floatActive = float.active,
+        onToggleFloat = { toggleFloat() },
         onTestUrl = { u ->
             inputUrl = u
             if (u == pageUrl) reloadSeq++ else pageUrl = u
@@ -1728,6 +1736,13 @@ private fun CinemaPanel(
     playingUrl: String?,
     /** 把这一条挂到浮窗里播（自己看；与 onPick 的"放给对方"是两条出路）。 */
     onFloatPick: (MediaSniffer.Hit) -> Unit,
+    /** 厅的动作（2026-09-30 定稿挪到这里）：开始放映/请求收厅（含二次确认路由）。 */
+    onStartScreening: () -> Unit,
+    /** 「分享我的屏幕」入口（v2.1 主路径：厅先开再切投屏）。 */
+    onStartShare: () -> Unit,
+    /** 浮窗是否在播（决定按钮是「浮窗播」还是「收起浮窗」）。 */
+    floatActive: Boolean,
+    onToggleFloat: () -> Unit,
     /** 三颗测试用胶囊的目标地址。它们从主操作行挪进「展开嗅探」，见 CinemaScreen 的排布注释。 */
     onTestUrl: (String) -> Unit,
 ) {
@@ -1793,6 +1808,32 @@ private fun CinemaPanel(
                     )
                     .padding(horizontal = 16.dp, vertical = 10.dp),
             ) {
+                /* 厅的动作行（2026-09-30 定稿）：开始放映 / 分享我的屏幕 / 浮窗播。
+                   原来它们跟浏览器动作（后退/收藏夹）混在地址栏下面那一排 —— 两类
+                   身份挤一起，而且"收厅"这种破坏性动作跟"收藏夹"平铺。按"谁拥有它"
+                   分家：浏览器动作跟地址栏，厅的动作收进这张底部控制卡。
+                   允许横滑：窄屏时保证第一颗（主操作）永远看得见。 */
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    GlassTextButton(
+                        if (cinema == null) "开始放映" else "收厅",
+                        onClick = onStartScreening,
+                        backdrop,
+                    )
+                    if (!screenShared) {
+                        GlassTextButton("分享我的屏幕", onClick = onStartShare, backdrop)
+                    }
+                    GlassTextButton(
+                        if (floatActive) "收起浮窗" else "浮窗播",
+                        onClick = onToggleFloat,
+                        backdrop,
+                    )
+                }
                 /* 邀请行放在两个分支**之外**、面板最顶上。原来它写在"还没选片"分支里：
                    按下「开始放映」后整个分支被换掉，复制入口随之消失 —— 中途拉人
                    只能先收厅（用户实测反馈）。参考三家开源项目的共同做法：邀请入口
@@ -2112,22 +2153,59 @@ private data class CinemaResume(
 /* ── 放映模式（方案B）的四块小件 ──────────────────────────────── */
 
 /**
- * 顶栏「浏览 | 放映」模式开关。
+ * 顶栏「浏览 | 放映」模式开关 —— 玻璃胶囊 + 滑块。
  *
- * 原来是两颗并列按钮 —— 看着像两个独立功能，看不出是同一件事的两面
- * （2026-09-29 用户反馈）。改成分段开关：一块滑块在两态间滑动，选中态染绿，
- * 与设置页的分段控件同一套液态玻璃语言。
- *
- * 顺序按"浏览在前"：进厅默认就是浏览态，开关停在左边是"还没开始"的自然位置。
+ * 样式跟**顶栏**走（2026-09-30 用户反馈）：之前套的是设置页分段控件那套深色底，
+ * 放在液态玻璃顶栏里像贴了块别的东西。现在整个开关本身就是一块小玻璃
+ * （GlassPanel 同款折射/描边），滑块是玻璃上的一粒高亮胶囊 —— 放映态染绿。
  */
 @Composable
 private fun ModeSeg(theater: Boolean, backdrop: LayerBackdrop, onTheater: () -> Unit, onBrowse: () -> Unit) {
-    SegmentRow(
-        options = listOf("浏览", "放映"),
-        selected = if (theater) 1 else 0,
-        // 分段控件是等宽铺满的，这里只要两个字的宽度 —— 定宽，别把顶栏撑开
-        modifier = Modifier.width(132.dp),
-    ) { idx -> if (idx == 1) onTheater() else onBrowse() }
+    val knobX by animateDpAsState(if (theater) 66.dp else 2.dp, label = "modeKnob")
+    val knobShape = RoundedCornerShape(24.dp)
+    GlassPanel(
+        backdrop = backdrop,
+        radius = 17.dp,
+        surfaceAlpha = 0.16f,
+        shape = RoundedCornerShape(50),
+        modifier = Modifier.height(34.dp).width(128.dp),
+    ) {
+        Box(Modifier.fillMaxSize().padding(2.dp)) {
+            Box(
+                Modifier
+                    .offset(x = knobX)
+                    .size(width = 60.dp, height = 28.dp)
+                    .clip(knobShape)
+                    .background(
+                        if (theater) Ink.Live.copy(alpha = 0.34f)
+                        else Color.White.copy(alpha = 0.20f),
+                    )
+                    .border(
+                        1.dp,
+                        if (theater) Ink.Live.copy(alpha = 0.55f)
+                        else Color.White.copy(alpha = 0.30f),
+                        knobShape,
+                    ),
+            )
+            Row(Modifier.fillMaxSize()) {
+                SegLabel("浏览", theater, Modifier.weight(1f).clickable { onBrowse() })
+                SegLabel("放映", !theater, Modifier.weight(1f).clickable { onTheater() })
+            }
+        }
+    }
+}
+
+/** 开关的两格标签：选中白加粗，未选中中灰；整格可点（不只字可点）。 */
+@Composable
+private fun SegLabel(label: String, on: Boolean, modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxHeight(), contentAlignment = Alignment.Center) {
+        Text(
+            label,
+            fontSize = 12.sp,
+            fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (on) Color.White else Ink.TextMid,
+        )
+    }
 }
 
 @Composable
