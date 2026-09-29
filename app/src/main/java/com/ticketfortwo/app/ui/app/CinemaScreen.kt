@@ -4,8 +4,10 @@ import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.MutableContextWrapper
 import android.util.Log
 import android.view.View
+import android.view.ViewGroup
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -179,6 +181,69 @@ private const val UNPIN_VIDEO_JS =
 var cinemaLastPageUrl: String? = null
 
 /**
+ * 进程级 WebView 持有者：放映厅的浏览器**整场只活一只**，离厅/覆盖层卸载都不销毁。
+ *
+ * 为什么必须持有：这屏是"离屏即毁"的（路由独立 Page、覆盖层整屏卸载），WebView
+ * 跟着组合生灭 ⇒ 重进厅必重载。重载本身不致命，致命的是**恢复接力**：页面回到 0，
+ * 要靠"站点记忆/恢复点"把进度拨回来 —— 而 HLS 这类懒加载页面**暂停着就没有元数据**
+ * （dur=0），恢复点"等 durMs>0 才拨"永远等不到 ⇒ 重进厅卡死 0:00、观众进度跟着
+ * 循环（2026-09-29 用户实测，模拟器复现：24 秒 dur=0s 不恢复）。页面不销毁，
+ * 这一切都不发生：离厅时电影在后台继续放（观众那边本来就该继续看），回来原地还在。
+ *
+ * 后退劫持的那组状态（访问栈、退回目标、连退计数、落地标记）也住在这里：它们描述
+ * "这只浏览器的访问史"，跟页面实例同寿 —— 用组合态的话重进就丢栈。用 mutableStateOf
+ * （进程级组合状态）：onPageStarted/browserBack 在回调里写、按钮可用性在组合里读，都能订阅。
+ *
+ * Activity 配了 configChanges（orientation|screenSize|…，见 Manifest），进程存活期
+ * Activity 不会重建 ⇒ 持有 Activity context 是安全的；仍用 MutableContextWrapper
+ * 包一层按需换绑 base，防将来有未覆盖的配置变化换掉 Activity。
+ */
+private object CinemaBrowser {
+    var webView: WebView? = null
+
+    /** 页面**实际**加载到的地址（loadUrl 与 onPageStarted 都写）—— 供"同页免重载"判断。 */
+    var loadedUrl: String? = null
+
+    var navStack by mutableStateOf(listOf<String>())
+    var backTarget by mutableStateOf<String?>(null)
+    var backBounces by mutableStateOf(0)
+    var backSawTarget by mutableStateOf(false)
+    val backSawAt = longArrayOf(0L)
+    val webTouchAt = longArrayOf(0L)
+
+    /** 取当前实例；没有就用 [context]（包一层可换绑的 wrapper）造一只。
+     * 换绑用 setBaseContext（MutableContextWrapper 自带的公开方法）——
+     * 基类的 attachBaseContext 是 protected 且只能调一次，二次调用直接抛
+     * "Base context already set"（实测重进厅即崩，2026-09-29）。 */
+    fun obtain(context: Context): WebView {
+        val kept = webView
+        if (kept != null) {
+            (kept.context as? MutableContextWrapper)?.setBaseContext(context)
+            return kept
+        }
+        return WebView(MutableContextWrapper(context)).also { webView = it }
+    }
+
+    /** 会话散场/换代收尸：页面、媒体、访问史一起清。 */
+    fun destroy() {
+        webView?.let { w ->
+            runCatching {
+                w.stopLoading()
+                w.webChromeClient = null
+                (w.parent as? ViewGroup)?.removeView(w)
+                w.destroy()
+            }
+        }
+        webView = null
+        loadedUrl = null
+        CinemaBrowser.navStack = emptyList()
+        CinemaBrowser.backTarget = null
+        CinemaBrowser.backBounces = 0
+        CinemaBrowser.backSawTarget = false
+    }
+}
+
+/**
  * 等多久就算"对方没给回执"。
  *
  * 观众侧自己有个 8 秒看门狗（没首帧就退回屏幕流并回一条 fail），所以正常路径上
@@ -263,6 +328,22 @@ fun CinemaScreen(
     var canGoBack by remember { mutableStateOf(false) }
     /** 放映状态（会话里那份的本地镜像，只为画 UI）。 */
     val cinema by CallSession.cinema.collectAsState()
+    val sessState by CallSession.state.collectAsState()
+    var sawLiveSession by remember { mutableStateOf(false) }
+    /* 会话散场（Idle）：页面连同媒体一起收掉 —— 不然离厅后电影的声音还在首页外放，
+       WebView 也白占内存。**必须见过非 Idle 才收**：进厅那一刻会话是异步启动的，
+       首次组合看到的 Idle 是"还没开始"而不是"结束了" —— 不加这道门，首次组合
+       就把刚领出来的 WebView 销毁掉（实测：页面永远加载不出、探针全部停摆）。
+       下方所有摸 webView 的循环都带身份护栏（CinemaBrowser.webView === webView），
+       销毁后自然停手，不会往死实例上发 JS。 */
+    LaunchedEffect(sessState) {
+        if (sessState !is CallSession.State.Idle) {
+            sawLiveSession = true
+        } else if (sawLiveSession) {
+            sawLiveSession = false
+            CinemaBrowser.destroy()
+        }
+    }
     /** 现在到底有没有在投屏 —— 决定"分享我的屏幕"这颗入口还画不画。 */
     val screenShared = CallSession.localVideo.collectAsState().value != null
     /** 对方那边到底播出来了没有 —— 没有这条回执时，"正在放映"三个字是半真半假的。 */
@@ -279,19 +360,10 @@ fun CinemaScreen(
             },
         )
     }
-    /* 自家访问记录：WebView 原生历史会被 location.replace() 型的广告跳转吃掉 ——
-       落在广告页上时 canGoBack()=false，「后退」按钮灰死、系统返回直接离厅，
-       用户只剩"重输链接"一条路（2026-09-29 用户反馈）。这里记 onPageStarted
-       见过的每一页，原生历史到头时按访问顺序退回上一页。 */
-    var navStack by remember { mutableStateOf(listOf<String>()) }
-    /* 正在退回哪一页。加载≠落地：页面一到手可能立刻又把自己 replace 成广告
-       （meta refresh / JS 跳转）—— 落点不是目标就从记录里再退一步（最多 4 次），
-       别让用户对着广告链一手一手往回爬。 */
-    var backTarget by remember { mutableStateOf<String?>(null) }
-    var backBounces by remember { mutableStateOf(0) }
-    /* 退回目标是否已经落到过眼里 —— 落地之后再出现的导航是用户自己点的（认它），
-       没落地就跳走才是"被弹走"（继续连退）。见 onPageStarted 的 when。 */
-    var backSawTarget by remember { mutableStateOf(false) }
+    /* 自家访问记录 / 后退劫持状态：**住在 CinemaBrowser 里**（进程级，跟 WebView
+       同寿）。原来它们是组合态 —— 重进厅组合重建，栈就丢了。那组状态描述的是
+       "这只浏览器的访问史"，理应跟页面实例一样跨重进存活；换成进程级 mutableStateOf
+       后，回调里写、组合里读（后退按钮可用性）都照旧订阅。 */
     /* 「上次一起看」（方案A）：上一次程序化打开的完整地址，落盘持久化 ——
        比收藏夹更常走的一条：上次看了一半的站，进厅点一下就回去。 */
     var recentUrl by remember { mutableStateOf<String?>(null) }
@@ -307,11 +379,8 @@ fun CinemaScreen(
         runCatching { addrFocus.requestFocus() }
         keyboard?.show()
     }
-    /* 退回落地时刻 vs 网页内最后一次触摸（longArray 持有，不触发重组）。
-       页面自己落地即跳（跳板 replace）没有触摸；用户点链接一定先摸过屏 ——
-       两者靠这个时间戳区分，谁该被"连退"吃掉一目了然（审查 A3-1/A3-4 的冲突面）。 */
-    val backSawAt = remember { longArrayOf(0L) }
-    val webTouchAt = remember { longArrayOf(0L) }
+    /* 退回落地时刻 vs 网页内最后一次触摸：longArray 也在 CinemaBrowser（非状态，
+       只被回调读写，不驱动 UI）—— 同样要跨重进存活。 */
     /* 放映模式（方案B，2026-09-29 用户选定）：画面钉顶 + 自家控制甲板；
        false = 原来的浏览布局（地址行/动作行/底卡）。进厅时厅里已有片就直接落在
        放映模式，开始放映时打开、收厅时退出；顶栏「放映|浏览」随时切。 */
@@ -410,13 +479,17 @@ fun CinemaScreen(
 
     val sniffer = remember { SnifferState() }
 
+    /* WebView 从 CinemaBrowser 领取（进程级存活），但 **clients 每次进屏都重装**：
+       它们闭包引用的这一屏组合状态（inputUrl/hits/player/…）是组合态 —— 重进后
+       还挂着上一屏的闭包就会写进死状态。apply 块随 remember(webGen) 重跑，
+       恰好完成"同一只 WebView + 全新闭包"的换绑。 */
     val webView = remember(webGen) {
-        WebView(context).apply {
+        CinemaBrowser.obtain(context).apply {
             settings.javaScriptEnabled = true
             // 只记不消费：网页内的触摸时间戳，供退回窗口判"这跳是用户点的还是页面自己跳的"
             setOnTouchListener { _, e ->
                 if (e.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
-                    webTouchAt[0] = android.os.SystemClock.uptimeMillis()
+                    CinemaBrowser.webTouchAt[0] = android.os.SystemClock.uptimeMillis()
                 }
                 false
             }
@@ -453,49 +526,50 @@ fun CinemaScreen(
                     if (!url.isNullOrBlank() && url != "about:blank") {
                         inputUrl = url
                         cinemaLastPageUrl = url
+                        CinemaBrowser.loadedUrl = url   // "实际加载页"跟着走，同页免重载才判得准
                         Log.i("Cinema", "NAV -> $url")
-                        val bt = backTarget
+                        val bt = CinemaBrowser.backTarget
                         when {
                             bt == null -> {
                                 // 回到访问过的页（原生后退会走到）：把栈**截到**那一页。
                                 // 只增不减的话，退过的页在栈里复活，下一步按后退反而
                                 // 跳到刚离开的页 —— 后退变"前进"（审查 A3-1）。
-                                val idx = navStack.indexOfLast { it == url }
-                                navStack = if (idx >= 0) navStack.take(idx + 1) else navStack + url
+                                val idx = CinemaBrowser.navStack.indexOfLast { it == url }
+                                CinemaBrowser.navStack = if (idx >= 0) CinemaBrowser.navStack.take(idx + 1) else CinemaBrowser.navStack + url
                             }
                             url == bt -> {
                                 // 落到退回目标：记下落地时刻，等它安顿（settle 定时器结案）
-                                backSawTarget = true
-                                backSawAt[0] = android.os.SystemClock.uptimeMillis()
+                                CinemaBrowser.backSawTarget = true
+                                CinemaBrowser.backSawAt[0] = android.os.SystemClock.uptimeMillis()
                             }
-                            backSawTarget && webTouchAt[0] > backSawAt[0] -> {
+                            CinemaBrowser.backSawTarget && CinemaBrowser.webTouchAt[0] > CinemaBrowser.backSawAt[0] -> {
                                 // 目标落地**之后**又有网页内触摸 → 这一跳是用户点的链接
                                 // —— 认导航、退出退回窗口（审查 A3-4：退回窗口内点链接
                                 // 不能被 bounce 吃掉）。没有触摸的落地即跳（跳板页
                                 // replace 成广告）走下面的 bounce 继续退（审查 A3-1）。
-                                backTarget = null
-                                backBounces = 0
-                                backSawTarget = false
-                                if (navStack.lastOrNull() != url) navStack = navStack + url
+                                CinemaBrowser.backTarget = null
+                                CinemaBrowser.backBounces = 0
+                                CinemaBrowser.backSawTarget = false
+                                if (CinemaBrowser.navStack.lastOrNull() != url) CinemaBrowser.navStack = CinemaBrowser.navStack + url
                             }
-                            backBounces < 4 && navStack.size >= 2 -> {
+                            CinemaBrowser.backBounces < 4 && CinemaBrowser.navStack.size >= 2 -> {
                                 // 还没落到目标就被弹走（服务端重定向/落地前的 JS 跳转）：
                                 // 从记录里再退一步，最多 4 次
-                                backBounces += 1
-                                backSawTarget = false
-                                val next = navStack[navStack.size - 2]
-                                navStack = navStack.dropLast(1)
-                                backTarget = next
-                                Log.i("Cinema", "后退被弹走，继续退到 $next（第 $backBounces 次）")
+                                CinemaBrowser.backBounces += 1
+                                CinemaBrowser.backSawTarget = false
+                                val next = CinemaBrowser.navStack[CinemaBrowser.navStack.size - 2]
+                                CinemaBrowser.navStack = CinemaBrowser.navStack.dropLast(1)
+                                CinemaBrowser.backTarget = next
+                                Log.i("Cinema", "后退被弹走，继续退到 $next（第 $CinemaBrowser.backBounces 次）")
                                 view?.loadUrl(next)
                             }
                             else -> {
                                 // 退无可退（目标已在记录底部）：认了，把当前页记回去 ——
                                 // 不记的话"广告页"不在记录里，用户会以为后退坏了。
-                                backTarget = null
-                                backBounces = 0
-                                backSawTarget = false
-                                if (navStack.lastOrNull() != url) navStack = navStack + url
+                                CinemaBrowser.backTarget = null
+                                CinemaBrowser.backBounces = 0
+                                CinemaBrowser.backSawTarget = false
+                                if (CinemaBrowser.navStack.lastOrNull() != url) CinemaBrowser.navStack = CinemaBrowser.navStack + url
                             }
                         }
                     }
@@ -525,6 +599,13 @@ fun CinemaScreen(
                         fullScreenView = null
                         fullScreenCallback = null
                         note = "这个网页崩了，已重新打开"
+                        /* 崩掉的这只必须从持有者摘掉并销毁：holder 还挂着它的话，
+                           下一代 obtain 会拿到坏实例（渲染进程已死，不可复用）。 */
+                        if (CinemaBrowser.webView === view) {
+                            runCatching { view?.destroy() }
+                            CinemaBrowser.webView = null
+                            CinemaBrowser.loadedUrl = null
+                        }
                         val cur = cinemaLastPageUrl
                         if (cur != null && cur != pageUrl) {
                             inputUrl = cur
@@ -610,13 +691,13 @@ fun CinemaScreen(
            原生等价、又不受 replace 污染，直接按访问顺序退。
            栈不够（只有一页）时才回原生：SPA 的 pushState 不触发 onPageStarted，
            那些内部历史只有原生认得。 */
-        val stackPrev = navStack.getOrNull(navStack.size - 2)
+        val stackPrev = CinemaBrowser.navStack.getOrNull(CinemaBrowser.navStack.size - 2)
         fun stackStep(): Boolean {
             val prev = stackPrev ?: return false
-            navStack = navStack.dropLast(1)
-            backTarget = prev
-            backBounces = 0
-            backSawTarget = false
+            CinemaBrowser.navStack = CinemaBrowser.navStack.dropLast(1)
+            CinemaBrowser.backTarget = prev
+            CinemaBrowser.backBounces = 0
+            CinemaBrowser.backSawTarget = false
             webView.loadUrl(prev)
             note = "退回上一页"
             return true
@@ -628,7 +709,7 @@ fun CinemaScreen(
                 true
             }
             // 退回途中、记录已到底：这 2.5 秒内按返回不离厅（甩出去一次就够难受了）
-            backTarget != null -> true
+            CinemaBrowser.backTarget != null -> true
             else -> false
         }
     }
@@ -688,24 +769,26 @@ fun CinemaScreen(
     /* 退回目标的安顿窗口：onPageStarted 落到目标 ≠ 站点安顿了 —— 页面可能紧接着
        又把自己 replace 成广告。窗口内出现新导航即视为"被弹走"（见 onPageStarted
        的 bounce 分支），窗口到期没人闹就结案。 */
-    LaunchedEffect(backTarget) {
-        val t = backTarget ?: return@LaunchedEffect
+    LaunchedEffect(CinemaBrowser.backTarget) {
+        val t = CinemaBrowser.backTarget ?: return@LaunchedEffect
         delay(2_500)
-        if (backTarget == t) {
-            backTarget = null
-            backBounces = 0
-            backSawTarget = false
+        if (CinemaBrowser.backTarget == t) {
+            CinemaBrowser.backTarget = null
+            CinemaBrowser.backBounces = 0
+            CinemaBrowser.backSawTarget = false
         }
     }
 
     LaunchedEffect(pageUrl, webGen, reloadSeq) {
+        // 实例换代/会话散场：holder 里的已经不是这一屏领的那只，别往死实例上 loadUrl
+        if (CinemaBrowser.webView !== webView) return@LaunchedEffect
         // 程序化换页/刷新/渲染重建：退回窗口作废 —— 否则这些入口发出的新导航
         // 会被 onPageStarted 的"被弹走"分支吃掉（审查 A3-4：点刷新、开收藏、
         // 崩溃重建都试过会被连退吞掉）。browserBack 的 loadUrl 不改 pageUrl，
         // 不会走到这里，退回窗口照常存活。
-        backTarget = null
-        backBounces = 0
-        backSawTarget = false
+        CinemaBrowser.backTarget = null
+        CinemaBrowser.backBounces = 0
+        CinemaBrowser.backSawTarget = false
         sniffer.clear()
         hits = emptyList()
         probe = null
@@ -716,7 +799,16 @@ fun CinemaScreen(
             cinemaLastPageUrl = null
             return@LaunchedEffect
         }
+        /* 同一页还活着就**别再 loadUrl**：WebView 进程级存活后，重进厅/覆盖层回来
+           都会走到这里 —— 一次 loadUrl 就是一次"从头再来"，电影正在放的时候它就是
+           观众看到的"播放中断、进度循环"。reloadSeq>0 = 用户在地址栏对同一条显式
+           点了「打开」（真刷新语义），照常重载。 */
+        if (reloadSeq == 0 && CinemaBrowser.loadedUrl == pageUrl) {
+            cinemaLastPageUrl = pageUrl
+            return@LaunchedEffect
+        }
         webView.loadUrl(pageUrl)
+        CinemaBrowser.loadedUrl = pageUrl
         cinemaLastPageUrl = pageUrl   // 给 openCinema 的"回厅接片"留导航记忆
         // 「上次一起看」落盘（方案A 的"上次"芯片）：进程重启也在。只记程序化打开
         // 这一下（地址栏/芯片/递链接）—— 站内点跳不算，用户语义是"我上次开的站"。
@@ -776,6 +868,7 @@ fun CinemaScreen(
         var tries = 0
         while (tries < 20) {
             delay(800)
+            if (CinemaBrowser.webView !== webView) return@LaunchedEffect   // 换代/散场护栏
             webView.evaluateJavascript(MediaSniffer.emeReadJs()) { raw ->
                 val r = CinemaProbe.parseEme(raw)
                 // 换页会把 window 上的暂存结果一起冲掉（state=missing）——
@@ -798,6 +891,8 @@ fun CinemaScreen(
     LaunchedEffect(pageUrl, webGen) {
         while (true) {
             delay(2_000)
+            // 实例换代/会话散场：holder 里的已经不是这一屏领的那只，别往死实例上发 JS
+            if (CinemaBrowser.webView !== webView) return@LaunchedEffect
             webView.evaluateJavascript(MediaSniffer.probeJs()) { raw ->
                 val p = CinemaProbe.parsePageProbe(raw) ?: return@evaluateJavascript
                 probe = p
@@ -830,35 +925,47 @@ fun CinemaScreen(
                    拨完的下一轮探针（2 秒后）再把新位置发出去。 */
                 val resume = pendingRestore
                 if (resume != null && cinema != null && pageUrl == resume.url &&
-                    cinemaLastPageUrl == resume.url && w.durMs > 0
+                    cinemaLastPageUrl == resume.url
                 ) {
-                    pendingRestore = null
-                    // 同片才拨：重进接回的那一页可能已经不是离开时那部
-                    //（广告页、换到别的列表），拿旧时长去比一下，对不上就只当没接片。
                     val sameFilm = resume.durMs <= 0 || (w.durMs - resume.durMs) in -15_000..15_000
-                    if (sameFilm && w.posMs < resume.posMs - 3_000) {
-                        // 站点自己的记忆播放没追上离开时的位置才拨，免得两套恢复打架
-                        val target = resume.posMs.coerceAtMost(w.durMs - 1_000).coerceAtLeast(0L)
-                        webView.evaluateJavascript(
-                            WatchSync.jsFor(WatchCmd.Seek(target), w.posMs, w.durMs), null,
-                        )
-                        if (resume.playing) {
-                            webView.evaluateJavascript(
-                                WatchSync.jsFor(WatchCmd.Play, target, w.durMs), null,
-                            )
-                        } else {
-                            // Seek 的 JS 自带 v.play()：暂停着离开的，拨回去也得按住暂停
-                            // ——否则"暂停恢复"会被顺手变成播放并广播出去（审查 A3-3）
-                            webView.evaluateJavascript(
-                                WatchSync.jsFor(WatchCmd.Pause, target, w.durMs), null,
-                            )
+                    if (!sameFilm) {
+                        pendingRestore = null   // 不是同一部片：恢复点作废，别一直悬着
+                    } else if (w.durMs <= 0) {
+                        /* 元数据还没到 —— 先把"该播"拨起来。HLS 这类懒加载页面
+                           **暂停着就永远拿不到 dur**：原来的 durMs>0 门禁等不到人按
+                           播放，重进厅就卡死 0:00（2026-09-29 模拟器复现，24 秒
+                           dur=0s 不恢复）。页面存活时这条路根本不走（同页免重载），
+                           它兜的是覆盖层/崩溃重建这类 WebView 真被换掉的场景。 */
+                        if (resume.playing && !w.playing && w.posMs <= 0) {
+                            webView.evaluateJavascript(WatchSync.jsFor(WatchCmd.Play, 0, 0), null)
                         }
-                        Log.i(
-                            "Cinema",
-                            "厅回来接片：${w.posMs / 1000}s -> ${target / 1000}s" +
-                                if (resume.playing) " 并继续播放" else "",
-                        )
-                        return@evaluateJavascript
+                        return@evaluateJavascript   // 别把 pos=0 广播出去，把观众拽回零
+                    } else {
+                        pendingRestore = null
+                        if (w.posMs < resume.posMs - 3_000) {
+                            // 站点自己的记忆播放没追上离开时的位置才拨，免得两套恢复打架
+                            val target = resume.posMs.coerceAtMost(w.durMs - 1_000).coerceAtLeast(0L)
+                            webView.evaluateJavascript(
+                                WatchSync.jsFor(WatchCmd.Seek(target), w.posMs, w.durMs), null,
+                            )
+                            if (resume.playing) {
+                                webView.evaluateJavascript(
+                                    WatchSync.jsFor(WatchCmd.Play, target, w.durMs), null,
+                                )
+                            } else {
+                                // Seek 的 JS 自带 v.play()：暂停着离开的，拨回去也得按住暂停
+                                // ——否则"暂停恢复"会被顺手变成播放并广播出去（审查 A3-3）
+                                webView.evaluateJavascript(
+                                    WatchSync.jsFor(WatchCmd.Pause, target, w.durMs), null,
+                                )
+                            }
+                            Log.i(
+                                "Cinema",
+                                "厅回来接片：${w.posMs / 1000}s -> ${target / 1000}s" +
+                                    if (resume.playing) " 并继续播放" else "",
+                            )
+                            return@evaluateJavascript
+                        }
                     }
                 }
                 CallSession.publishCinemaProgress(w.posMs, w.durMs, w.playing)
@@ -869,7 +976,8 @@ fun CinemaScreen(
     // 观众的放映请求落到这个 WebView 上（它才是播放器）。
     // 注册/摘除成对：这一屏卸载后还挂着回调，指令就会打到已销毁的 WebView 上。
     DisposableEffect(webView) {
-        CallSession.onCinemaCommand = { cmd ->
+        CallSession.onCinemaCommand = cinemaCmd@{ cmd ->
+            if (CinemaBrowser.webView !== webView) return@cinemaCmd   // 换代/散场护栏
             val p = player?.posMs ?: 0L
             val d = player?.durMs ?: 0L
             // 观众的 Seek 同样自带 play()：房主暂停时被观众拖一下进度不该变成播放
@@ -883,22 +991,18 @@ fun CinemaScreen(
         }
         onDispose {
             CallSession.onCinemaCommand = null
-            /* 把“此刻在哪一页”交回 MainActivity：这一屏是离屏即毁的，而**授权指引、
-               同看、设置这些覆盖层在路由里是独立 Page —— 它们一出现就把本屏整屏
-               卸载**，回来时是全新实例、pageUrl 从 cinemaUrl 起步。cinemaUrl 只在
-               地址栏「打开」/递链接时更新，站内点链接它看不见 —— 不回写的话，
-               厅里点「分享我的屏幕」走完授权回来就被弹回上一个地址
+            /* 把“此刻在哪一页”交回 MainActivity：授权指引、同看、设置这些覆盖层在
+               路由里是独立 Page —— 它们一出现就把本屏整屏卸载，回来时是全新实例。
+               cinemaUrl 只在地址栏「打开」/递链接时更新，站内点链接它看不见 ——
+               不回写的话，厅里点「分享我的屏幕」走完授权回来就被弹回上一个地址
                （E2E 实测：b.html → 授权 → 回来变 a.html，回厅接片也跟着接错）。 */
             onPageLeave(cinemaLastPageUrl ?: pageUrl)
-            /* 退屏/换代时把旧 WebView 收掉：只记得创建、从不 destroy，页面会继续联网、
-               持着 Activity 直到 GC（平台会打 "WebView.destroy() was never called"），
-               autoplay 也没人停。挂在这个 key 上：换代/整屏退出才销毁，横竖屏分支
-               切换是同一个实例、不会误杀（别用 AndroidView onRelease，见 REVIEW-2026-09-27）。 */
-            runCatching {
-                webView.stopLoading()
-                webView.webChromeClient = null
-                webView.destroy()
-            }
+            /* WebView **不再随屏销毁**：进程级持有（CinemaBrowser）。原来这里的
+               destroy 就是"重进厅必重载"的根源 —— 恢复接力（等元数据→拨进度→续播）
+               一旦掉棒，观众看到的就是进度循环/卡 0:00（2026-09-29 用户实测）。
+               离厅只把视图从窗口摘下来，电影在后台继续放 —— 放映不该因为房主
+               回首页看一眼而中断。clients 等下次进屏重装（见 remember(webGen)）。 */
+            runCatching { (webView.parent as? ViewGroup)?.removeView(webView) }
         }
     }
 
@@ -1078,7 +1182,7 @@ fun CinemaScreen(
         // 可用性 = 原生历史 或 自家记录（广告 replace 吃掉原生历史时按钮不许灰死 ——
         // 那正是"回不去上一页"的直接原因，2026-09-29 用户反馈）
         GlassTextButton("后退", onClick = { browserBack() }, backdrop,
-            enabled = canGoBack || navStack.size >= 2)
+            enabled = canGoBack || CinemaBrowser.navStack.size >= 2)
         // 收藏夹：存过的网站一键回来（参考雨见「书签收藏」；本地存储，无服务器）
         GlassTextButton("收藏夹", onClick = { showFavs = true }, backdrop)
         GlassTextButton(if (showPanel) "收起嗅探" else "展开嗅探", onClick = {
