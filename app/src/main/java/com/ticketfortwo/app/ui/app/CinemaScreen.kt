@@ -105,29 +105,51 @@ private val theaterMode = androidx.compose.runtime.mutableStateOf(false)
  */
 private const val PIN_VIDEO_JS =
     """(function(){
-      var vs=[].slice.call(document.querySelectorAll('video'));
-      if(!vs.length) return 'none';
-      var v=vs.sort(function(a,b){var A=a.getBoundingClientRect(),B=b.getBoundingClientRect();
-        return B.width*B.height-A.width*A.height;})[0];
-      if(v.dataset.t2saved!==undefined){
-        var rr=v.getBoundingClientRect(), vw2=window.innerWidth, vh2=window.innerHeight;
-        // 盒子尺寸跟视口对得上才算钉住；对不上（布局换过、视口变了）就重钉一次
-        if(rr.height>0 && Math.abs(rr.height-vh2)<4 && Math.abs(rr.width-vw2)<4)
-          return 'ok|vp='+vw2+'x'+vh2+'|rect='+Math.round(rr.top)+','+Math.round(rr.width)+','+Math.round(rr.height);
+      function pinNow(){
+        var vs=[].slice.call(document.querySelectorAll('video'));
+        if(!vs.length) return 'none';
+        var v=vs.sort(function(a,b){var A=a.getBoundingClientRect(),B=b.getBoundingClientRect();
+          return B.width*B.height-A.width*A.height;})[0];
+        if(v.dataset.t2saved!==undefined){
+          var rr=v.getBoundingClientRect(), vw2=window.innerWidth, vh2=window.innerHeight;
+          // 盒子尺寸跟视口对得上才算钉住；对不上（布局换过、视口变了）就重钉一次
+          if(rr.height>0 && Math.abs(rr.height-vh2)<4 && Math.abs(rr.width-vw2)<4)
+            return 'ok|vp='+vw2+'x'+vh2+'|rs='+(window.__t2pinResizeCount||0);
+        }
+        if(v.dataset.t2saved===undefined) v.dataset.t2saved=v.style.cssText;
+        var vw=window.innerWidth||372, vh=window.innerHeight||0;
+        v.style.setProperty('position','fixed','important');
+        v.style.setProperty('left','0px','important');
+        v.style.setProperty('top','0px','important');
+        v.style.setProperty('width',vw+'px','important');
+        v.style.setProperty('height',(vh>0?vh:300)+'px','important');
+        v.style.setProperty('display','block','important');
+        v.style.setProperty('object-fit','contain','important');
+        v.style.setProperty('background','#000','important');
+        v.style.setProperty('z-index','2147483647','important');
+        var r=v.getBoundingClientRect();
+        return 'fix|vp='+vw+'x'+vh+'|rect='+[Math.round(r.top),Math.round(r.width),Math.round(r.height)].join(',');
       }
-      if(v.dataset.t2saved===undefined) v.dataset.t2saved=v.style.cssText;
-      var vw=window.innerWidth||372, vh=window.innerHeight||0;
-      v.style.setProperty('position','fixed','important');
-      v.style.setProperty('left','0px','important');
-      v.style.setProperty('top','0px','important');
-      v.style.setProperty('width',vw+'px','important');
-      v.style.setProperty('height',(vh>0?vh:300)+'px','important');
-      v.style.setProperty('display','block','important');
-      v.style.setProperty('object-fit','contain','important');
-      v.style.setProperty('background','#000','important');
-      v.style.setProperty('z-index','2147483647','important');
-      var r=v.getBoundingClientRect();
-      return 'fix|vp='+vw+'x'+vh+'|rect='+[Math.round(r.top),Math.round(r.width),Math.round(r.height)].join(',');})()"""
+      window.__t2pin=pinNow;
+      /* 视口一变**当场**重钉：点「开始放映」时布局从浏览态切到300dp的画面框，
+         第一次钉用的还是旧视口高度 —— contain 在旧高度里居中，顶部一条大黑边、
+         画面偏下，要等2秒后的探针自检才恢复（用户实测"刚开始错位一两秒"）。
+         resize 是布局切换的同帧信号；只对"已钉过"的元素重钉（dataset 标记还在），
+         浏览模式与取消钉定后都不受它打扰。 */
+      if(!window.__t2pinResize){
+        window.__t2pinResize=1;
+        window.addEventListener('resize', function(){
+          var all=document.querySelectorAll('video');
+          for(var i=0;i<all.length;i++){
+            if(all[i].dataset && all[i].dataset.t2saved!==undefined){
+              window.__t2pinResizeCount=(window.__t2pinResizeCount||0)+1;
+              pinNow(); return;
+            }
+          }
+        });
+      }
+      return pinNow();
+    })()"""
 
 private const val UNPIN_VIDEO_JS =
     """(function(){
@@ -552,6 +574,18 @@ fun CinemaScreen(
                 // 钉没钉成不能靠猜：结果直接落日志（'ok' / 'none' / JS 异常文本）
                 Log.i("Cinema", "pinVideo($pin) -> $r")
             }
+        }
+    }
+
+    /* 开演/切到放映的第二道保险：screen()/分段开关里的那次 pin 可能跑在布局切换
+       之前（用旧视口高度，contain 居中后顶上出黑边 —— 用户实测"错位一两秒"）。
+       resize 监听是主保险；这里等两帧（布局已落定）再补钉一次，把最坏窗口压到
+       ~32ms 肉眼不可见。 */
+    LaunchedEffect(theater) {
+        if (theater) {
+            androidx.compose.runtime.withFrameNanos { }
+            androidx.compose.runtime.withFrameNanos { }
+            pinVideo(true)
         }
     }
 
