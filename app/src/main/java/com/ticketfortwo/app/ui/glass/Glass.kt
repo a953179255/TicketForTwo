@@ -41,6 +41,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.DpOffset
 import com.kyant.backdrop.highlight.Highlight
 import com.kyant.backdrop.shadow.InnerShadow
@@ -838,6 +840,8 @@ fun CompactGlassField(
      * 放映厅地址栏实测就是这样（框 40 / 按钮 52）。
      */
     boxHeight: androidx.compose.ui.unit.Dp = 40.dp,
+    /** 外部聚焦句柄：放映厅引导页「打开网站」点了之后要把焦点拨进地址栏（弹键盘）。 */
+    focusRequester: FocusRequester? = null,
 ) {
     val interaction = androidx.compose.runtime.remember {
         androidx.compose.foundation.interaction.MutableInteractionSource()
@@ -894,7 +898,9 @@ fun CompactGlassField(
                 keyboardOptions = keyboardOptions,
                 keyboardActions = keyboardActions,
                 interactionSource = interaction,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier),
                 textStyle = MaterialTheme.typography.bodySmall.copy(
                     color = MaterialTheme.colorScheme.onBackground
                 ),

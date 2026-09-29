@@ -74,6 +74,11 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -221,7 +226,11 @@ fun CinemaScreen(
     videoBps: Int = 0,
 ) {
     val context = LocalContext.current
-    var pageUrl by remember { mutableStateOf(initialUrl?.takeIf { it.isNotBlank() } ?: CINEMA_TEST_LOCAL) }
+    /* 空哨兵 "" = 厅里还没打开过网页。以前这里默认塞一条 file:///android_asset
+       彩条测试页 —— 正式 App 里用户第一眼看到的是工程测试卡（2026-09-29 用户反馈）。
+       现在没页就是没页：引导页（见 showLobby）是唯一空态，地址栏输入/收藏/分享链接
+       之前 WebView 里什么都不加载。 */
+    var pageUrl by remember { mutableStateOf(initialUrl?.takeIf { it.isNotBlank() } ?: "") }
     var inputUrl by remember { mutableStateOf(pageUrl) }
     /**
      * 同一地址重复点「打开」= 真刷新。pageUrl 是加载 effect 的 key，值不变 effect
@@ -283,9 +292,22 @@ fun CinemaScreen(
     /* 退回目标是否已经落到过眼里 —— 落地之后再出现的导航是用户自己点的（认它），
        没落地就跳走才是"被弹走"（继续连退）。见 onPageStarted 的 when。 */
     var backSawTarget by remember { mutableStateOf(false) }
-    /* 引导首页（方案A）：pageUrl 还是默认 test.html 且没在放映 → 显示目的驱动的
-       操作卡替代彩条 WebView；用户点任意入口后进浏览器，引导不再出现。 */
+    /* 引导首页：还没打开过任何网页且在浏览模式 → 显示目的驱动的操作卡。
+       它就是浏览器的"新标签页"，不是盖在测试页上的浮层 —— 空厅只有这一个空态。
+       用户点任意入口（或递进来一条链接）后进浏览器，引导不再出现。 */
     var lobbyDismissed by remember { mutableStateOf(false) }
+
+    /* 「打开网站」的动作 = 撤下引导页 + 聚焦地址栏并弹键盘（像浏览器点开新标签页）。
+       聚焦必须等地址行真的上屏：lobbyDismissed 写下后要过一帧组合才有那个节点。 */
+    val addrFocus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    var addrFocusSeq by remember { mutableStateOf(0) }
+    LaunchedEffect(addrFocusSeq) {
+        if (addrFocusSeq == 0) return@LaunchedEffect
+        withFrameNanos { }
+        runCatching { addrFocus.requestFocus() }
+        keyboard?.show()
+    }
     /* 退回落地时刻 vs 网页内最后一次触摸（longArray 持有，不触发重组）。
        页面自己落地即跳（跳板 replace）没有触摸；用户点链接一定先摸过屏 ——
        两者靠这个时间戳区分，谁该被"连退"吃掉一目了然（审查 A3-1/A3-4 的冲突面）。 */
@@ -299,10 +321,11 @@ fun CinemaScreen(
         // 新的一场还没片：别把上一场的放映模式带进来
         if (CallSession.cinema.value == null) theaterMode.value = false
     }
-    /* 引导首页（方案A）：pageUrl 还是默认 test.html 且没在放映 → 显示目的驱动的
-       操作卡替代彩条 WebView；用户点任意入口后进浏览器，引导不再出现。 */
-    val showLobby = !lobbyDismissed && pageUrl == CINEMA_TEST_LOCAL && !theater
-
+    /* 引导首页显示条件：还没打开过任何网页、没在放映模式。它就是浏览器的
+       "新标签页"，不是盖在测试页上的浮层 —— 空厅只有这一个空态；递进来一条
+       链接、点开收藏、输入网址之后都不再出现（theater 下甲板的「开始放映」
+       是屏幕分享入口，不能被引导页挡住，所以仅浏览模式显示）。 */
+    val showLobby = !lobbyDismissed && pageUrl.isEmpty() && !theater
     /** 房主这一侧播放器的位置/时长/标题 —— 直接复用 watch 那套探针，形状一样。 */
     var player by remember { mutableStateOf<com.ticketfortwo.app.watch.WatchState?>(null) }
     /** 方向盘给不给对方。会话里那份是真值，这里只是本地即时反馈（点下去先亮起来）。 */
@@ -329,6 +352,10 @@ fun CinemaScreen(
     }
     fun toggleFav() {
         val u = cinemaLastPageUrl ?: pageUrl
+        if (u.isBlank()) {
+            note = "还没有打开网页，没什么可收藏的"
+            return
+        }
         val exist = favs.firstOrNull { it.substringBefore('␟') == u }
         if (exist != null) {
             favs = favs - exist
@@ -368,6 +395,9 @@ fun CinemaScreen(
             settings.mediaPlaybackRequiresUserGesture = false
             settings.cacheMode = WebSettings.LOAD_DEFAULT
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+            // WebView 自带白底：页面真正画出第一帧之前整块是白的，深色厅里开新页
+            // 就闪一记白光。改透明，让底下深色容器透上来（页面自己的底色照常生效）。
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
             // 不少站点看到 UA 里的 " wv" 就拒绝服务
             runCatching { settings.userAgentString = settings.userAgentString.replace(" wv", "") }
             webViewClient = object : WebViewClient() {
@@ -650,6 +680,13 @@ fun CinemaScreen(
         sniffer.clear()
         hits = emptyList()
         probe = null
+        // 空哨兵 "" = 还没有网页：什么都不加载，连"离页记忆"都不许留 ——
+        // cinemaLastPageUrl 是跨场次的全局量，上一场残留的旧地址会冒充"当前页"，
+        // ★收藏/回厅接片全被污染。空厅进门先清账。
+        if (pageUrl.isEmpty()) {
+            cinemaLastPageUrl = null
+            return@LaunchedEffect
+        }
         webView.loadUrl(pageUrl)
         cinemaLastPageUrl = pageUrl   // 给 openCinema 的"回厅接片"留导航记忆
     }
@@ -904,6 +941,10 @@ fun CinemaScreen(
             value = inputUrl,
             onValueChange = { inputUrl = it },
             label = "地址",
+            // 空厅（引导页撤下、还没输入）不再是冷冰冰的白框：告诉用户这里打网址
+            placeholder = "输入网址，一起看",
+            // 「打开网站」入口把焦点拨进来 —— 句柄挂在这一行唯一的输入框上
+            focusRequester = addrFocus,
             // 权重给到 1f 之外还要留缝：不加 weight 时限宽的行为是"文字压在按钮下面"，
             // 实测长 URL 会一路顶到「打开」按钮底下，看着像按钮粘在字上。
             //
@@ -1097,7 +1138,8 @@ fun CinemaScreen(
                 ) {
                     // key(webGen)：AndroidView 的 factory 只在节点入组合时跑一次，
                     // 换代后不换 key 的话它抓着的还是旧（已 destroy）实例。
-                    key(webGen) {
+                    if (pageUrl.isEmpty()) EmptyStage("在右侧地址栏输入网址，一起看", Modifier.fillMaxSize())
+                    else key(webGen) {
                         AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
                     }
                 }
@@ -1121,7 +1163,7 @@ fun CinemaScreen(
                 CinemaLobby(
                     backdrop = backdrop,
                     modifier = Modifier.weight(1f).fillMaxWidth(),
-                    onOpenSite = { lobbyDismissed = true },
+                    onOpenSite = { lobbyDismissed = true; addrFocusSeq++ },
                     onFavorites = { lobbyDismissed = true; showFavs = true },
                 )
             } else {
@@ -1132,7 +1174,13 @@ fun CinemaScreen(
             Box(
                 if (theater) Modifier.height(300.dp) else Modifier.weight(1f)
             ) {
-                key(webGen) {
+                // 没打开网页就不挂 WebView：空厅是一块深色的"待放"屏，不是白板
+                if (pageUrl.isEmpty()) EmptyStage(
+                    if (theater) "还没选片 —— 去「浏览」打开一个视频页，或直接分享你的屏幕"
+                    else "在上方地址栏输入网址，或点「收藏夹」挑一个常去的站",
+                    Modifier.fillMaxSize(),
+                )
+                else key(webGen) {
                     AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
                 }
             }
@@ -1878,8 +1926,36 @@ private fun TheaterTrack(frac: Float, enabled: Boolean, onSeek: (Float) -> Unit)
     }
 }
 
-/* ── 放映模式（方案B）引导首页：还没打开网页时替代彩条 WebView ─────────── */
+/* ── 引导首页（浏览模式的"新标签页"）与空态屏 ─────────────────────────── */
 
+/**
+ * 空厅的"待放"屏：还没打开任何网页时替住 WebView 的位置 —— 深色底 + 一句去哪儿的指引。
+ * 以前这里默认加载 file:///android_asset 彩条测试页，正式 App 第一眼是工程测试卡
+ * （2026-09-29 用户反馈）；现在空就是空，只有这一块安静的深色屏。
+ */
+@Composable
+private fun EmptyStage(hint: String, modifier: Modifier = Modifier) {
+    Box(
+        modifier.background(Color(0xFF0B0E12)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            hint,
+            fontSize = 12.sp,
+            color = Ink.TextLow,
+            textAlign = TextAlign.Center,
+            lineHeight = 18.sp,
+            modifier = Modifier.padding(horizontal = 28.dp),
+        )
+    }
+}
+
+/**
+ * 引导首页：空厅的唯一空态（= 浏览器的新标签页）。坐在壁纸上，和全厅同一套玻璃语言
+ * —— GlassPanel 圆徽 + LiquidGlassButton 操作卡（扁平色卡被用户点名"UI 不一致"）。
+ * 「打开网站」不打开任何页面：撤下引导、聚焦地址栏，等人输入 —— 空厅里不存在
+ * 兜底网页，彩条测试页只从面板里那颗明确标注的「本地测试页」入口才够得着。
+ */
 @Composable
 private fun CinemaLobby(
     backdrop: LayerBackdrop,
@@ -1888,25 +1964,24 @@ private fun CinemaLobby(
     onFavorites: () -> Unit,
 ) {
     Column(
-        modifier
-            .fillMaxSize()
-            .background(Color(0xF00B0E12)),
+        modifier.fillMaxWidth().padding(horizontal = GlassDimens.screenH),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Spacer(Modifier.height(28.dp))
-        // 🎬 品牌图标
-        Box(
-            Modifier
-                .height(56.dp)
-                .width(56.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(Ink.Live.copy(alpha = 0.12f)),
-            contentAlignment = Alignment.Center,
+        Spacer(Modifier.height(38.dp))
+        // 品牌圆徽：与甲板圆键同一块玻璃（GlassPanel 圆形）
+        GlassPanel(
+            backdrop = backdrop,
+            radius = 30.dp,
+            surfaceAlpha = 0.12f,
+            shape = CircleShape,
+            modifier = Modifier.height(64.dp).width(64.dp),
         ) {
-            Text("🎬", fontSize = 26.sp)
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("🎬", fontSize = 28.sp)
+            }
         }
-        Spacer(Modifier.height(15.dp))
-        Text("双人放映厅", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Ink.TextHi)
+        Spacer(Modifier.height(14.dp))
+        Text("双人放映厅", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = Ink.TextHi)
         Spacer(Modifier.height(5.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
@@ -1916,14 +1991,14 @@ private fun CinemaLobby(
             Spacer(Modifier.width(6.dp))
             Text("厅已开 · 等对方进来", fontSize = 12.sp, color = Ink.TextMid)
         }
-        Spacer(Modifier.height(26.dp))
-        // 三颗目的驱动的操作入口
+        Spacer(Modifier.height(24.dp))
         LobbyAction("🌐", "打开网站", "输入地址，一起看想看的片子", hot = true, backdrop = backdrop, onClick = onOpenSite)
-        Spacer(Modifier.height(9.dp))
+        Spacer(Modifier.height(10.dp))
         LobbyAction("⭐", "收藏夹", "快速回到之前看过的站点", backdrop = backdrop, onClick = onFavorites)
     }
 }
 
+/** 引导页的一格操作卡：LiquidGlassButton（与甲板 DockBtn/圆键同一按压液感），hot = 主操作绿染。 */
 @Composable
 private fun LobbyAction(
     icon: String,
@@ -1933,17 +2008,20 @@ private fun LobbyAction(
     hot: Boolean = false,
     onClick: () -> Unit,
 ) {
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(if (hot) Ink.Live.copy(alpha = 0.09f) else Color(0x0FFFFFFF))
-            .clickable(onClick = onClick)
-            .padding(13.dp),
+    LiquidGlassButton(
+        onClick = onClick,
+        backdrop = backdrop,
+        modifier = Modifier.fillMaxWidth().height(64.dp),
+        shape = RoundedCornerShape(16.dp),
+        surfaceColor = if (hot) Ink.Live.copy(alpha = 0.12f) else null,
+        contentAlignment = Alignment.CenterStart,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp),
+        ) {
             Box(
-                Modifier.height(40.dp).width(40.dp).clip(RoundedCornerShape(11.dp))
+                Modifier.height(40.dp).width(40.dp).clip(RoundedCornerShape(12.dp))
                     .background(Color(0x14FFFFFF)),
                 contentAlignment = Alignment.Center,
             ) {
@@ -1954,7 +2032,7 @@ private fun LobbyAction(
                 Text(title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextHi)
                 Text(subtitle, fontSize = 11.5.sp, color = Ink.TextMid, modifier = Modifier.padding(top = 1.dp))
             }
-            Text("›", fontSize = 15.sp, color = Color(0xFF5C6670))
+            Text("›", fontSize = 16.sp, color = Ink.TextLow)
         }
     }
 }
