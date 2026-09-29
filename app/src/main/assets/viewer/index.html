@@ -679,6 +679,10 @@ function askToPlay(title, body){
  */
 function reportEnded(s){
   closedByUs = true;
+  /* 房主收摊时放映层也要一起收：bye 只关了屏幕通道，本地播的片源没人停 ——
+     会继续有声播下去、方案B卡片还亮着，5 秒后陈旧判定又弹第二条收场话
+     （两条提示同屏打架，审查 A2-1）。failed=false：bye 是正常收场，不补回执。 */
+  if (cine) { cineDown('房主结束了分享', false); }
   if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
   stopWatch();      // 广播源已经没了，同看条留着就是一根拔了线的音量键
   try { if (pc) pc.close(); } catch (e) {}
@@ -962,6 +966,7 @@ function onCinema(f) {
 
 function loadLocal(st) {
   stopLocalPlayer();
+  cineAwaitTap = false;   // 上一条片源的"等点击"不许短路这一条的看门狗（审查 A2-6）
   cineReady = false;
   lv.classList.remove('hide'); lvBadge.classList.remove('hide');
   paintCtlForCine(true);
@@ -1103,7 +1108,12 @@ function cineDown(reason, failed, code, ver) {
   bWanted = false; syncBCards();
   /* 收厅不是失败，别把它报成"对方放不出来" —— 那样房主会以为自己的选路有问题。 */
   if (failed !== false) cineAck(false, code, (reason || 'unknown') + '（' + diag + '）', v);
-  $('topRight').textContent = gotVideo ? '画面已到' : '语音已通';
+  /* 放映层收场时屏幕层可能早已 failed —— 屏幕层的失败提示在放映中被抑制过
+     （见 pc.onconnectionstatechange），这里不补就永远没人弹、topRight 还在
+     说"画面已到"的假话（审查 A2-2）。 */
+  const pcDead = pc && pc.connectionState === 'failed';
+  $('topRight').textContent = pcDead ? '连接失败' : (gotVideo ? '画面已到' : '语音已通');
+  if (pcDead) { reportFailure('failed'); return; }
   if (reason) cineNote(reason + ' —— 退回看对方屏幕');
 }
 
@@ -1165,6 +1175,11 @@ function paintCine(drift) {
     fill.style.width = (dur > 0 ? Math.min(100, Math.max(0, cur / dur * 100)) : 0) + '%';
   }
   if (track) track.style.opacity = cine.allow ? '1' : '.4';
+  // 没权限时三颗键置灰 —— 之前只压暗轨道、键永远可点，点了才被静默吞（审查 A2-3）
+  ['cBack', 'cPlay', 'cFwd'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !cine.allow;
+  });
   /* 没出画面之前不报时间：显示一个"0:00 / 10:34"会让人以为进度坏了，
      其实只是还没接上；Δ 也一样 —— 没同步过时它是个几千毫秒的假数字。 */
   document.getElementById('cTime').textContent = cineReady
@@ -1214,6 +1229,7 @@ function paintBCine() {
   $id('bPlay').textContent = $id('cPlay').textContent;
   $id('bBack').disabled = $id('cBack').disabled;
   $id('bFwd').disabled = $id('cFwd').disabled;
+  $id('bPlay').disabled = $id('cPlay').disabled;
   const m = /(\d+)\s*ms/.exec(d);
   $id('bLat').textContent = m ? m[1] + 'ms' : '—';
   $id('bFps').textContent = $id('sFps').textContent;
@@ -1229,6 +1245,7 @@ function armSoundOnce(){
 function unMuteCine(){
   if (!cineNeedSound) return;
   cineNeedSound = false;
+  cineAwaitTap = false;   // 点画面开声音 = 用户已经在交互，看门狗恢复工作
   lv.muted = false;
   runCute(() => lv.play());
   paintCine();

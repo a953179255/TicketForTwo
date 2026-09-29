@@ -448,9 +448,13 @@ object CallSession {
                 it.onStoppedBySystem = { reason ->
                     note("系统停止画面：$reason（厅里继续语音）")
                     runCatching { it.stopCapture() }
-                    if (capture === it) capture = null
-                    localVideoTrack = null
-                    _localVideo.value = null
+                    /* 共享引用只在"停的就是当前这一路"时清 —— 旧控制器的回调
+                       晚到会把**新轨**的引用踩掉（审查 A1-3 附带项）。 */
+                    if (capture === it) {
+                        capture = null
+                        localVideoTrack = null
+                        _localVideo.value = null
+                    }
                 }
                 capture = it
             }
@@ -523,9 +527,12 @@ object CallSession {
             c.onStoppedBySystem = { reason ->
                 note("系统停止画面：$reason（厅里继续语音）")
                 runCatching { c.stopCapture() }
-                if (capture === c) capture = null
-                localVideoTrack = null
-                _localVideo.value = null
+                // 同上：晚到的旧回调不许踩掉新轨的引用（审查 A1-3 附带项）
+                if (capture === c) {
+                    capture = null
+                    localVideoTrack = null
+                    _localVideo.value = null
+                }
             }
             capture = c
         }
@@ -1032,6 +1039,13 @@ object CallSession {
         }
         if (old.videoEnabled && !q.videoEnabled && localVideoTrack != null) {
             runCatching { capture?.stopCapture() }
+            /* 与系统收回路径同款收尾（审查 A1-3）：
+               不 release 的话转向监听 / SurfaceTexture 线程永远留在进程里，
+               而 capture=null 让 stop() 里的 release 永远够不着；
+               旧 sender 不从连接上摘掉，下次开画面 addTrack 会开出**第二条**视频 m-line。 */
+            runCatching { capture?.release() }
+            videoSender?.let { s -> peer?.removeLocalVideoSender(s) }
+            videoSender = null
             capture = null
             localVideoTrack = null
             _localVideo.value = null

@@ -28,14 +28,43 @@ def key_back():
 def logcat():
     return adb("logcat", "-d", "-v", "brief", "-s", "CallSession:V", "ScreenShare:V").stdout
 def dialog():
-    for _ in range(10):
+    """系统投屏弹窗：这张镜像的文案随 locale 中英不定（实测切过 zh-Hans-CN 后
+    全中文），按键驱动到"共享真的起来"。Android16 这版确认页只有单应用分支：
+    「下一步」→ 选应用 → 点完直接开共享**并把该应用顶到前台** —— 必须把自己
+    App 拉回来，后面「邀请页就绪」的断言才成立（卡在弹窗上时按返回会把整个
+    流程退到桌面，之后全链路雪崩 —— 2026-09-29 实测）。"""
+    order = ["我知道了，继续", "允许", "Allow", "Next", "下一步",
+             "Share entire screen", "共享整个屏幕", "整个屏幕",
+             "Start now", "立即开始", "Share screen", "共享屏幕", "开始共享",
+             "Share one app", "共享一个应用", "Choose app"]
+    apps = ["时钟", "日历", "相机", "Chrome"]
+    last_hit, same = None, 0
+    for _ in range(30):
         ts = texts()
-        if any("Share one app" in t for t in ts):
-            A.tap_text(S, "Share one app"); time.sleep(1.5)
-            if not A.tap_text(S, "Share entire screen"): return "no-entire"
-            time.sleep(1.5); A.tap_text(S, "Share screen"); time.sleep(3.5); return "ok"
-        if any(t in ("Allow", "允许") for t in ts):
-            tap("Allow") or tap("允许"); time.sleep(1.6); continue
+        if any("选择要分享的应用" in t for t in ts):
+            got = next((a for a in apps if a in ts), None)
+            if got:
+                A.tap_text(S, got); time.sleep(2.0)
+            A.sh("-s", S, "shell", "am", "start", "-n", PKG + "/.MainActivity")
+            time.sleep(3.0)
+            if any(t in ("开始放映", "打开") for t in texts()):
+                return "ok"
+            continue
+        hit = next((k for k in order if k in ts), None)
+        if hit:
+            if hit == last_hit:
+                same += 1
+                if same >= 3:          # 推进不了的键（单选行/置灰）跳过
+                    order = [k for k in order if k != hit]
+                    hit, same, last_hit = None, 0
+            else:
+                same, last_hit = 0, hit
+            if hit:
+                A.tap_text(S, hit); time.sleep(1.6)
+                if hit in ("Share screen", "Start now", "立即开始"):
+                    time.sleep(2.0)
+                    return "ok"
+                continue
         time.sleep(1.0)
     return "no-dialog"
 fails = []
@@ -70,10 +99,14 @@ tap("正在分享"); time.sleep(2.5)
 check("回到会话屏", has("把这条发给朋友"))
 key_back(); time.sleep(1)
 check("再次回首页", wait_has("正在分享", 8))
-check("进分享设置", tap("分享设置") and wait_has("分享画质", 8))
+# 等设置页真实存在的节点：'分享画质' 是**首页**那行摘要（Screens.kt 里 home 的
+# lastSummary 行），设置页上根本没有它 —— 这就是 REVIEW 里记的"脚本等待目标写错"
+check("进分享设置", tap("分享设置") and wait_has("码率上限", 8))
 before = logcat()
-tap("1080p"); time.sleep(1.5)
-tap("8.0 Mbps"); time.sleep(2)
+# 必须点一个**不同于当前**的档才会有热改日志（默认值会被上一轮留在1080p）；
+# 码率那排是自定义输入框、没有"8.0 Mbps"按钮（脚本旧断言的等待目标又错了一处）。
+tap("720p") or tap("1080p")
+time.sleep(2)
 after = logcat()
 check("logcat 有热改记录", ("热改采集" in after and "热改采集" not in before) or ("码率上限" in after and "码率上限" not in before))
 adb("shell", "input", "keyevent", "4"); time.sleep(1.5)

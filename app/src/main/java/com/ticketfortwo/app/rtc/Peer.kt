@@ -134,6 +134,15 @@ class Peer(
         )
     }
 
+    /**
+     * 关画面后把旧的视频 sender 从连接上摘掉 —— 不摘的话，下次开画面
+     * `addTrack` 会开出**第二条**视频 m-line（旧 sender 的 track 还挂着非 null，
+     * 上层没法复用它），协商里多一条废轨（审查 A1-3）。
+     */
+    fun removeLocalVideoSender(sender: org.webrtc.RtpSender) {
+        runCatching { pc?.removeTrack(sender) }
+    }
+
     /** 房主侧：发起 offer。 */
     fun startOffer() {
         if (pc == null) open()

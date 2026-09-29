@@ -359,10 +359,15 @@ fun CallScreen(
                 // 生效 —— 权限收回头时手势和镜像条按钮同一标准（REVIEW P3-15）。
                 onStep = { delta ->
                     when {
-                        cinema != null ->
-                            if (cinemaAllowed) onCinemaCmd(com.ticketfortwo.app.cinema.CinemaSync.Cmd.Step(delta))
-                        watch != null ->
-                            if (watchAllowed) onWatchCmd("step", delta)
+                        cinema != null -> {
+                            if (!cinemaAllowed) false
+                            else { onCinemaCmd(com.ticketfortwo.app.cinema.CinemaSync.Cmd.Step(delta)); true }
+                        }
+                        watch != null -> {
+                            if (!watchAllowed) false
+                            else { onWatchCmd("step", delta); true }
+                        }
+                        else -> false
                     }
                 },
             )
@@ -391,6 +396,10 @@ fun CallScreen(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
+                .pointerInput(Unit) {
+                    // 交互续命：落在顶栏上的按下/拖动重置收起倒计时（审查 A4-2），被动观察不消费。
+                    awaitPointerEventScope { while (true) { awaitPointerEvent(); chromeTick++ } }
+                }
                 // 状态栏安全区：原来固定 top=36dp 是按普通状态栏猜的，
                 // 大状态栏/挖孔屏上顶栏会顶进图标堆里（REVIEW-2026-09-27 P3）
                 .statusBarsPadding()
@@ -449,6 +458,10 @@ fun CallScreen(
                 onCmd = onWatchCmd,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
+                    .pointerInput(Unit) {
+                        // 交互续命：拖动进度/点按钮时重置收起倒计时（审查 A4-2）
+                        awaitPointerEventScope { while (true) { awaitPointerEvent(); chromeTick++ } }
+                    }
                     // 三键导航时岛整体上移，横条必须跟着加同样的 inset，层间距才不变
                     .navigationBarsPadding()
                     .padding(bottom = GlassDimens.islandBottom + 84.dp),
@@ -467,6 +480,10 @@ fun CallScreen(
                 onCmd = onCinemaCmd,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
+                    .pointerInput(Unit) {
+                        // 交互续命：拖动进度/点按钮时重置收起倒计时（审查 A4-2）
+                        awaitPointerEventScope { while (true) { awaitPointerEvent(); chromeTick++ } }
+                    }
                     .navigationBarsPadding()
                     .padding(bottom = GlassDimens.islandBottom + 84.dp),
             )
@@ -580,8 +597,11 @@ private fun CinemaMirrorBar(
                拖动只表达意图：落点交给房主裁决、再以广播回来（Cmd.Seek，与网页版
                同一条路）；拖动中的位置先画在本地，手感不发木。没拿到方向盘
                （allowed=false）时不接手势 —— 和三颗圆钮同一规则。 */
+            // 声明在 if 外：时间行（无轨道时也渲染）要读它。
+            // 不 key 在 state 上：State 每 2 秒广播必变，拖到一半被重建，
+            // 预览钮跳回广播位、再也不跟手（审查 A4-3）——拖完由 onDragEnd 复位
+            var dragFrac by remember { mutableFloatStateOf(-1f) }
             if (state.durMs > 0) {
-                var dragFrac by remember(state) { mutableFloatStateOf(-1f) }
                 val idle = (shownPosMs.toFloat() / state.durMs).coerceIn(0f, 1f)
                 val frac = if (dragFrac >= 0f) dragFrac else idle
                 Box(
@@ -637,7 +657,9 @@ private fun CinemaMirrorBar(
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    cs.formatTime(shownPosMs) + " / " + cs.formatTime(state.durMs),
+                    cs.formatTime(
+                        if (dragFrac >= 0f && state.durMs > 0) (dragFrac * state.durMs).toLong() else shownPosMs,
+                    ) + " / " + cs.formatTime(state.durMs),
                     fontSize = 11.sp,
                     color = Ink.TextMid,
                     modifier = Modifier.weight(1f),

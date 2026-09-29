@@ -26,6 +26,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,10 +63,19 @@ fun ViewerGestureLayer(
      * 横滑 ±10 秒（±10_000ms）。阈值 96 与网页端 `Math.abs(dx) > 96` 对齐；
      * 调用方负责门禁（无条/没权限时不生效）。一划只触发一次。
      */
-    onStep: (Long) -> Unit = { },
+    onStep: (Long) -> Boolean = { false },
 ) {
     val context = LocalContext.current
     val screenH = LocalConfiguration.current.screenHeightDp.toFloat()
+
+    /* 捕获保鲜（审查 A4-1）：pointerInput(Unit) 的 handler 协程在**第一次收到指针**
+       那一刻就绑死 lambda 实例 —— onStep/onVolume/screenH 是组合期的参数/值闭包，
+       首触时房主还没开同看/放映的话，之后横滑永远按旧门禁走、HUD 却照常弹，
+       竖滑的步长也停在转屏前的屏高。rememberUpdatedState 读到的永远是最新值。 */
+    val stepState = rememberUpdatedState(onStep)
+    val volumeState = rememberUpdatedState(onVolume)
+    val toggleState = rememberUpdatedState(onToggleChrome)
+    val screenHState = rememberUpdatedState(screenH)
 
     // 谁改的谁还原。挂在卸载上而不是挂在"观看中=false"上：
     // 实测过状态机停在 Ended 时 watching 仍算 true，于是亮度一直留在 10%，
@@ -137,7 +147,7 @@ fun ViewerGestureLayer(
             .pointerInput(Unit) {
                 detectVerticalDragGestures { change, dy ->
                     change.consume()
-                    val delta = -dy / screenH / 1.6f          // 划满一屏 ≈ 62% 行程
+                    val delta = -dy / screenHState.value / 1.6f  // 划满一屏 ≈ 62% 行程
                     if (change.position.x < size.width * 0.5f) {
                         val v = (brightness + delta).coerceIn(0.02f, 1f)
                         applyBrightness(v)
@@ -145,13 +155,13 @@ fun ViewerGestureLayer(
                     } else {
                         val v = (volume + delta).coerceIn(0f, 1f)
                         volume = v
-                        onVolume(v)
+                        volumeState.value(v)
                         hudKind = 1; hudValue = v; hudTick++
                     }
                 }
             }
             .pointerInput(Unit) {
-                detectTapGestures(onTap = { onToggleChrome() })
+                detectTapGestures(onTap = { toggleState.value() })
             }
             // 横滑 ±10（REVIEW P3-15）：横屏看片时不必先唤出控件再找小按钮。
             // 阈值与网页端同为 96；一划一档，触发后本次手势不再重复触发。
@@ -166,10 +176,14 @@ fun ViewerGestureLayer(
                     if (!fired && kotlin.math.abs(accX) > 96.dp.toPx()) {
                         fired = true
                         val delta = if (accX > 0) 10_000L else -10_000L
-                        onStep(delta)
-                        hudKind = 2
-                        hudValue = if (accX > 0) 1f else -1f
-                        hudTick++
+                        // 命令真发出去了才弹 HUD —— 无条/没权限时静默吞掉还报"快进10秒"
+                        // 等于骗人（审查 A4-4）
+                        val did = stepState.value(delta)
+                        if (did) {
+                            hudKind = 2
+                            hudValue = if (accX > 0) 1f else -1f
+                            hudTick++
+                        }
                         change.consume()
                     } else if (fired) {
                         change.consume()

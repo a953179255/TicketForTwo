@@ -332,13 +332,21 @@ private fun AppRouter(backdrop: LayerBackdrop) {
         if (state is CallSession.State.Connected) {
             withContext(Dispatchers.IO) { context.prefs().markConnected() }
         }
-        /* 「已离开放映厅」只属于**开厅那一次**：会话散场、或者新会话开起来
-           （Preparing = 只连麦/分享屏幕那两条流程的开头），这个意图就作废。
-           不清的后果：下一场等人时也会绕过「把这条发给朋友」——而那一屏在
-           那些流程里是对的（尤其"只连麦"，它的停止钮就该叫「结束连麦」）。 */
-        if (state is CallSession.State.Idle || state is CallSession.State.Preparing) {
+        /* 「已离开放映厅」只属于**上一场**：会话散场（Idle）时作废 ——
+           不清的后果：下一场等人时也会绕过「把这条发给朋友」。
+           以前连 Preparing 一起清，但 Preparing 是**这一场自己的**开场：
+           进厅几秒内点返回（state 还在 Idle）立住的"回首页"意图，几秒后被
+           Preparing 到来清掉，人被弹进邀请屏而不是带卡片的首页（审查 A1-2）——
+           陈旧意图本来就必经 Idle，只认 Idle 就够。 */
+        if (state is CallSession.State.Idle) {
             leftCinemaFlag.value = false
             leftCallFlag.value = false
+            /* 会话散场时把还挂着的覆盖层一起收掉：通知栏点「停止」后 state 走到 Idle，
+               但 showCinema/showWatch 停在原地 —— 界面还写着「厅已开 · 等对方进来」
+               而邀请链接早就没了（审查 A1-4）。 */
+            showCinema = false
+            showWatch = false
+            showConsent = false
         }
     }
 
@@ -611,14 +619,27 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     val isHost = role == UiRole.Host
     val stop = { CallSession.stop(context); viewerIntent = false; paste = "" }
 
-    /** 从放映厅回来了、厅还开着、正停在"等人加入" —— 这一格该回首页，见 [leftCinema]。 */
-    val roomBehind = leftCinema && isHost && state is CallSession.State.WaitingViewer
+    /** 从放映厅回来了、厅还开着、正停在"等人加入" —— 这一格该回首页，见 [leftCinema]。
+        Connecting/Preparing 必须算进来：开厅/直连的过渡态里"人在首页"这个事实不消失，
+        少了它们，观众一进来或网络一抖，人会被从首页拽进全屏进度页（审查 A1-1/A1-2）。 */
+    val roomBehind = leftCinema && isHost && (
+        state is CallSession.State.WaitingViewer ||
+            state is CallSession.State.Connecting ||
+            state is CallSession.State.Preparing
+        )
 
     /**
      * 会话进行中按返回退到了首页 —— 分享/连麦/邀请屏都算（[leftCallFlag]）。
      * 此时已在家，系统返回键要能照常退出 App，所以返回处理器在这里必须让位。
+     * 状态集合与 [roomBehind] 同理含 Connecting/Preparing（审查 A1-1/A1-2）；
+     * Failed 刻意排除 —— 失败页有自己的"重试/停止"，用户得看见它。
      */
-    val sessionBehind = leftCall && isHost && (state is CallSession.State.WaitingViewer || state is CallSession.State.Connected)
+    val sessionBehind = leftCall && isHost && (
+        state is CallSession.State.WaitingViewer ||
+            state is CallSession.State.Connected ||
+            state is CallSession.State.Connecting ||
+            state is CallSession.State.Preparing
+        )
 
     // 系统返回键：二级页面返回上一级，而不是把 App 整个退出去。
     // BackHandler 后注册的优先级更高，所以从最深的页面向浅注册。
@@ -743,10 +764,12 @@ private fun AppRouter(backdrop: LayerBackdrop) {
         showConsent -> Page.Consent
 
         // 放映厅：独立的页面意图，不要求"正在分享"，所以排在 Watch 前面。
-        showCinema -> Page.Cinema
+        // 但 Failed 不让位 —— 隧道中途死了要在放映厅里也能看见失败页
+        // （下面的 Failed 分支排在观众路由之后，条件放行才轮得到它，审查 A1-5）。
+        showCinema && state !is CallSession.State.Failed -> Page.Cinema
 
         // 一起看：分享期间的覆盖层，盖在会话屏之上（它成立的前提就是"我还在分享"）
-        showWatch -> Page.Watch
+        showWatch && state !is CallSession.State.Failed -> Page.Watch
 
         // ── 观众：App 内收看（与房主的 CallSession 互斥）──
         viewerState is ViewerSession.State.Connected -> Page.ViewerCall

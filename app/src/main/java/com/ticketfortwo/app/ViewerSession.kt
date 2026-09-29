@@ -205,6 +205,9 @@ object ViewerSession {
      * 窗口里还会 `ws?.close()` 关掉**新会话**刚建的 socket（REVIEW-2026-09-27 P2）。
      */
     private var rescueJob: kotlinx.coroutines.Job? = null
+    /** enableMic 的 8 秒兜底计时：不入字段就没人取消 —— 上一场的计时器会把
+        下一场的 _micPending 提前清掉并弹出假提示（审查 A5-9）。 */
+    private var micGuardJob: kotlinx.coroutines.Job? = null
 
     /**
      * ICE 正在抖（DISCONNECTED→自愈中）。**不改 state**：路由只认 state，
@@ -401,6 +404,7 @@ object ViewerSession {
         lastWsUrl = null
         reconnecting = false
         rescueJob?.cancel(); rescueJob = null
+        micGuardJob?.cancel(); micGuardJob = null
         staleJob?.cancel(); staleJob = null
         statsJob?.cancel(); statsJob = null
         _netRtt.value = null
@@ -424,6 +428,7 @@ object ViewerSession {
         pendingRemoteCandidates.clear()
         _remoteVideo.value = null
         _contentLandscape.value = null
+        _contentSize.value = null
         _micMuted.value = true
         /* 同看/放映厅那两条状态也得清。
          * 原来漏了：退出观看后 `_cinema` 还留着上一条，回到首页再进来时
@@ -562,6 +567,11 @@ object ViewerSession {
                 val f = obj.optString("f")
                 val st = com.ticketfortwo.app.cinema.CinemaSync.parseState(f)
                 _cinema.value = st
+                /* 每条广播落一行位置：镜像条会自动收起、dump 在视频解码时还会间歇
+                   拿不到 —— UI 判据两头都不可靠（E2E ⑩b 反复误报就是它）。 */
+                if (st != null) {
+                    Log.i(TAG, "观众收到放映 pos=${st.posMs / 1000}s play=${st.playing}")
+                }
                 _cinemaAllowed.value = st != null &&
                     com.ticketfortwo.app.cinema.CinemaSync.allowsControl(f)
                 /* 主动告诉房主"这条在 App 里不走本地播放"。
@@ -740,7 +750,8 @@ object ViewerSession {
         note("正在把麦克风加进这条连接…")
         // 房主版本太旧会不认识观众发来的 offer，于是永远等不到 answer。
         // 给 8 秒：到点就把状态说破，别让人对着一个亮着的麦克风图标说话。
-        scope.launch {
+        micGuardJob?.cancel()
+        micGuardJob = scope.launch {
             delay(8_000)
             if (_micPending.value) {
                 _micPending.value = false
@@ -777,7 +788,36 @@ object ViewerSession {
         ws?.send(text)
     }
 
+    /**
+     * 终态收尾：抢救协程、两条轮询、麦克风源 —— end/fail 只关 ws+pc 的话，
+     * Failed/Ended 屏上（用户不按返回、切后台）麦克风源与 stale/stats 轮询会一直
+     * 跑到进程死，rescueJob 还会把终态改回 Connected（审查 A5-2/A5-4）。
+     * stop() 保持自己的全量复位，不动。
+     */
+    private fun releaseAfterTerminal() {
+        rescueJob?.cancel(); rescueJob = null
+        staleJob?.cancel(); staleJob = null
+        statsJob?.cancel(); statsJob = null
+        micGuardJob?.cancel(); micGuardJob = null
+        lastWsUrl = null
+        everOpened = false
+        runCatching { peer?.close() }
+        peer = null
+        runCatching { audioTrack?.dispose() }
+        audioTrack = null
+        runCatching { audioSource?.dispose() }
+        audioSource = null
+        _micLive.value = false
+        _micPending.value = false
+        _remoteVideo.value = null
+    }
+
     private fun fail(reason: String, verdict: com.ticketfortwo.app.rtc.Verdict? = null) {
+        /* 终态守卫：排队中的 bye（scope.launch 转发）或迟到的 SdpObserver 失败回调
+           不许把已定的结局改写 —— Failed↔Ended 互覆盖会丢掉重试按钮，或给正常
+           收场安上红屏+换网络建议（审查 A5-7）。 */
+        if (_state.value is State.Ended || _state.value is State.Idle) return
+        releaseAfterTerminal()
         note(reason)
         runCatching { ws?.close() }
         ws = null
@@ -794,6 +834,7 @@ object ViewerSession {
         /* stop() 已经把人送回首页之后，抢救协程/关闭回调还可能迟到一步 ——
            再把 Idle 改成 Ended，会把用户从首页拽回结束页（REVIEW-2026-09-27 P2）。 */
         if (_state.value is State.Idle) return
+        releaseAfterTerminal()
         note(reason)
         wsOpen = false
         runCatching { ws?.close() }
