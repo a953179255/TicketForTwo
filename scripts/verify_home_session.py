@@ -105,7 +105,8 @@ check("进分享设置", tap("分享设置") and wait_has("码率上限", 8))
 before = logcat()
 # 必须点一个**不同于当前**的档才会有热改日志（默认值会被上一轮留在1080p）；
 # 码率那排是自定义输入框、没有"8.0 Mbps"按钮（脚本旧断言的等待目标又错了一处）。
-tap("720p") or tap("1080p")
+# 档位默认值会被上一轮带走，"点一个"可能点在已选中的档上等于没换 —— 两档都点
+tap("720p"); time.sleep(1.2); tap("1080p")
 time.sleep(2)
 after = logcat()
 check("logcat 有热改记录", ("热改采集" in after and "热改采集" not in before) or ("码率上限" in after and "码率上限" not in before))

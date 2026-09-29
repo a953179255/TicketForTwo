@@ -1105,18 +1105,25 @@ fun CinemaScreen(
                     panel(Modifier.weight(1f, fill = false))
                 }
             }
-        } else if (theater) {
-            /* ── 放映模式（方案B）：画面钉顶 + 自家控制甲板 ──
-               分享端看片不再只有"浏览器原生播放器 + 全屏"两套 UI：
-               地址行/动作行/底卡在这里让位，要找片按顶栏「浏览」随时切回去。 */
-            Box(Modifier.fillMaxWidth().height(300.dp).padding(horizontal = GlassDimens.screenH)) {
+        } else {
+            /* 竖屏的浏览/放映**共用同一个 WebView 节点** —— 分支里各挂一个的话，
+               每次切换 AndroidView 都整棵 detach/reattach，Chromium 重挂黑闪一两帧、
+               再叠加页面重排 = 用户实测的"切换闪烁"。切模式只改这一份节点的布局
+               约束（300dp ↔ 填满），视口变化由页内 resize 重钉兜底；节点不动，画面就不闪。 */
+            if (!theater) {
+                addressRow(Modifier)
+                actionRow()
+            }
+            Box(
+                if (theater) Modifier.height(300.dp) else Modifier.weight(1f)
+            ) {
                 key(webGen) {
                     AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
                 }
             }
             /* 甲板装进玻璃卡：裸文本浮在壁纸上读不清（真机截图实测），
                和厅里其他卡片同一套玻璃语言。 */
-            GlassPanel(
+            if (theater) { GlassPanel(
                 backdrop = backdrop,
                 modifier = Modifier
                     .weight(1f)
@@ -1250,25 +1257,14 @@ fun CinemaScreen(
                 }
                 }
             }
-        } else {
-            addressRow(Modifier)
-            actionRow()
-            Box(
-                Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .padding(horizontal = GlassDimens.screenH),
-            ) {
-                key(webGen) {
-                    AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
-                }
+            } else {
+                /* 这张卡**一直在**：它是厅的控制面（邀请、放映状态、方向盘开关），
+                   「收起嗅探」收的只是量具那几行，不是整张卡。
+                   原来写成 `if (showPanel || cinema != null)`，于是"默认收着量具 + 还没选片"
+                   这两个条件一叠加，整张卡直接消失，屏幕上只剩一块黑 —— 量具默认收起之后
+                   第一时间就踩到了（截图实测）。 */
+                panel(Modifier)
             }
-            /* 这张卡**一直在**：它是厅的控制面（邀请、放映状态、方向盘开关），
-               「收起嗅探」收的只是量具那几行，不是整张卡。
-               原来写成 `if (showPanel || cinema != null)`，于是"默认收着量具 + 还没选片"
-               这两个条件一叠加，整张卡直接消失，屏幕上只剩一块黑 —— 量具默认收起之后
-               第一时间就踩到了（截图实测）。 */
-            panel(Modifier)
         }
     }
 
