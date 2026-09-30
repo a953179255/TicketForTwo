@@ -39,6 +39,8 @@ data class FloatState(
     val durMs: Long = 0L,
     /** 视图临时藏起来（正在分享屏幕时）—— 播放与进度**照旧**，只是不显示。 */
     val hidden: Boolean = false,
+    /** 预热态：1×1 窗口在屏上、播放器已在播，但还没亮出来（show 时才转 active）。 */
+    val prewarm: Boolean = false,
     /**
      * 元数据已到且真的在播。
      * 交接的判据就是这个：不能刚调了 play() 就认为它起来了（HLS 常常要缓冲一两秒），
@@ -68,6 +70,44 @@ object FloatPlayer {
 
     /** 浮窗启动时刻（uptimeMillis）：服务侧各段耗时都相对它打点（排查"启动慢"）。 */
     var startMs: Long = 0L
+
+    /**
+     * **预热起浮窗**（放映中调）：窗口以 1×1 透明态建出、播放器静音真播 ——
+     * 画面流进真实 TextureView（系统天然消费，不会像裸离屏 Surface 那样
+     * 把解码器队列憋死 → DECODING_FAILED）。此时 active 仍是 false，界面无感。
+     */
+    fun prewarm(context: Context, req: FloatRequest) {
+        startMs = android.os.SystemClock.uptimeMillis()
+        android.util.Log.i("FloatPlay", "+0ms 预热起浮窗(1x1)")
+        context.startForegroundService(
+            Intent(context, FloatPlayerService::class.java)
+                .setAction(FloatPlayerService.ACTION_PREWARM)
+                .putExtrasFor(req),
+        )
+    }
+
+    /** 预热已就绪时把窗口放大显示（HOME/手动"浮窗播"）。返回 false = 没有预热，调用方走冷启动。 */
+    fun show(context: Context): Boolean {
+        if (!state.value.prewarm) return false
+        context.startService(
+            Intent(context, FloatPlayerService::class.java)
+                .setAction(FloatPlayerService.ACTION_SHOW),
+        )
+        return true
+    }
+
+    /** 预热播放器跟随页面进度（内部节流）—— 目标分片永远在缓冲覆盖内。 */
+    fun reseek(posMs: Long) = service?.reseek(posMs)
+
+    private fun Intent.putExtrasFor(req: FloatRequest): Intent = apply {
+        putExtra(FloatPlayerService.EXTRA_URL, req.url)
+        putExtra(FloatPlayerService.EXTRA_TITLE, req.title)
+        putExtra(FloatPlayerService.EXTRA_REFERER, req.referer)
+        putExtra(FloatPlayerService.EXTRA_COOKIE, req.cookie)
+        putExtra(FloatPlayerService.EXTRA_UA, req.userAgent)
+        putExtra(FloatPlayerService.EXTRA_POS, req.startPosMs)
+        putExtra(FloatPlayerService.EXTRA_CANDIDATES, req.candidates.toTypedArray())
+    }
 
     fun start(context: Context, req: FloatRequest) {
         startMs = android.os.SystemClock.uptimeMillis()

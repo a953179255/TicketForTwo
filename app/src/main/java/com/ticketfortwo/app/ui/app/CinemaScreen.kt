@@ -54,6 +54,7 @@ import com.ticketfortwo.app.cinema.CinemaProbe
 import com.ticketfortwo.app.cinema.CinemaSync
 import com.ticketfortwo.app.cinema.FloatPlayer
 import com.ticketfortwo.app.cinema.FloatRequest
+import com.ticketfortwo.app.cinema.FloatWarmer
 import com.ticketfortwo.app.cinema.MediaDuration
 import com.ticketfortwo.app.cinema.MediaSniffer
 import com.ticketfortwo.app.cinema.SRC_PAGE
@@ -354,6 +355,11 @@ fun CinemaScreen(
      * [h] 为空时自动挑最优候选（CinemaProbe.bestOf）。
      */
     fun openFloat(h: MediaSniffer.Hit?) {
+        // 预热窗已在（放映中建的 1×1 窗 + 静音在播）→ 直接拉起，省掉整段起播
+        if (FloatPlayer.show(context)) {
+            note = "浮窗继续播（预热秒开）"
+            return
+        }
         val hit = h ?: CinemaProbe.bestOf(hits)
         if (hit == null) {
             note = "还没嗅到能播的地址 —— 先在这页把视频点成播放"
@@ -705,6 +711,10 @@ fun CinemaScreen(
                    拽回 0 并暂停（REVIEW-2026-09-27 P1）；本地 player 也保留上一条好值。 */
                 if (!w.found) return@evaluateJavascript
                 player = w
+                /* 预热跟随（内部节流）：把预热的浮窗播放器起播点挪到页面当前进度 ——
+                   HOME 那一刻目标分片已在缓冲里，首帧只剩解码时间（否则 seek 后
+                   目标位置的分片是现下的，起播→首帧仍要 3 秒）。 */
+                FloatPlayer.reseek(w.posMs)
                 // 放映模式：探针顺路确保画面还钉着（换页/崩溃重建后 JS 标记没了，
                 // 这里每轮都会重新钉一次；PIN_VIDEO_JS 内部按 dataset 去重）
                 if (theater) pinVideo(true)
@@ -820,6 +830,49 @@ fun CinemaScreen(
         if (theater && float.active && appResumed) {
             closeFloat()
             note = "放映时画面已经全屏，浮窗收起来了"
+        }
+    }
+
+    /* ── 浮窗预热（雨见给的启发，见 yjllq-float-window.md §2/§10）──
+       雨见弹窗早（页面还在播就弹），加载和页面播放**并行**，所以"用着挺不错"；
+       我们按 HOME 才起窗，3 秒网络等待全在等待路径上。改法：放映中就把播放器建好、
+       低档挑好、清单备好 —— HOME 一按服务直接上屏（打点里会看到"接预热播放器"）。
+       预热的播放器不播（playWhenReady=false）：不出声、不抢画面，只干活。
+       换片/收厅/退出放映/离屏都要释放，防泄漏。 */
+    val warmTarget = if (theater && cinema != null) {
+        CinemaProbe.bestOf(hits)?.url
+    } else {
+        null
+    }
+    LaunchedEffect(warmTarget) {
+        val target = warmTarget
+        if (target == null) {
+            // 退出放映/收厅：把预热窗停掉（没预热时空跑一次 startService 无副作用，但先省）
+            if (FloatPlayer.state.value.prewarm || FloatPlayer.state.value.active) {
+                FloatPlayer.stop(context)
+            }
+            return@LaunchedEffect
+        }
+        val h = hits.firstOrNull { it.url == target } ?: return@LaunchedEffect
+        // 幂等：服务端已有 session 会忽略这次请求
+        FloatPlayer.prewarm(
+            context,
+            FloatRequest(
+                url = h.url,
+                title = MediaSniffer.hostLabel(h.url),
+                referer = h.referer,
+                cookie = h.cookie,
+                userAgent = h.userAgent,
+                candidates = hits
+                    .filter { MediaSniffer.playable(it.kind) && it.url.startsWith("http", true) }
+                    .map { it.url },
+            ),
+        )
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            val st = FloatPlayer.state.value
+            if (st.prewarm) FloatPlayer.stop(context)
         }
     }
 
