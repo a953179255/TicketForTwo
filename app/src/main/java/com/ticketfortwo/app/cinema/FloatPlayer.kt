@@ -86,12 +86,16 @@ object FloatPlayer {
         )
     }
 
-    /** 预热已就绪时把窗口放大显示（HOME/手动"浮窗播"）。返回 false = 没有预热，调用方走冷启动。 */
-    fun show(context: Context): Boolean {
+    /**
+     * 预热已就绪时把窗口放大显示（HOME/手动"浮窗播"）。返回 false = 没有预热，调用方走冷启动。
+     * @param seekMs 从这个位置接（自播交棒时带自播的位置；null = 用预热跟随到的位置）
+     */
+    fun show(context: Context, seekMs: Long? = null): Boolean {
         if (!state.value.prewarm) return false
         context.startService(
             Intent(context, FloatPlayerService::class.java)
-                .setAction(FloatPlayerService.ACTION_SHOW),
+                .setAction(FloatPlayerService.ACTION_SHOW)
+                .putExtra(FloatPlayerService.EXTRA_POS, seekMs ?: -1L),
         )
         return true
     }

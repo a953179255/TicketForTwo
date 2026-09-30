@@ -103,7 +103,7 @@ class FloatPlayerService : android.app.Service() {
             ACTION_STOP -> { teardown(); stopSelf(); return START_NOT_STICKY }
             ACTION_SHOW -> {
                 mark("SHOW 拉起预热窗")
-                showPrewarmed()
+                showPrewarmed(intent.getLongExtra(EXTRA_POS, -1L))
                 return START_NOT_STICKY
             }
             ACTION_PREWARM -> { mark("收到预热指令"); prewarm(
@@ -210,7 +210,7 @@ class FloatPlayerService : android.app.Service() {
     }
 
     /** SHOW：把 1×1 预热窗放大成真浮窗，恢复声音、点亮 active。 */
-    private fun showPrewarmed() {
+    private fun showPrewarmed(seekMs: Long = -1L) {
         val ov = overlay ?: return mark("SHOW 无窗口，忽略")
         val lp = windowLp ?: return
         if (!inPrewarm) return mark("SHOW 无预热 session，忽略")
@@ -220,6 +220,8 @@ class FloatPlayerService : android.app.Service() {
         (ov as? FrameLayout)?.let { applyGlassLook(it, dp(14).toFloat()) }
         runCatching { wm?.updateViewLayout(ov, lp) }
         player?.volume = 1f
+        // 自播交棒：从调用方给的位置接（预热窗平时跟随网页 pos，交棒时要按自播位置来）
+        if (seekMs > 0) runCatching { player?.seekTo(seekMs) }
         FloatPlayer.update { it.copy(active = true, prewarm = false) }
         mark("预热窗已拉起 size=${SIZES[sizeIdx]}")
     }

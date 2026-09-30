@@ -45,6 +45,8 @@ object FloatWarmer {
         headers: Map<String, String>,
         userAgent: String?,
         muted: Boolean = false,
+        maxVideoW: Int = 1280,
+        maxVideoH: Int = 720,
     ): ExoPlayer {
         val ds = DefaultHttpDataSource.Factory()
             .setDefaultRequestProperties(headers)
@@ -52,7 +54,7 @@ object FloatWarmer {
         if (!userAgent.isNullOrBlank()) ds.setUserAgent(userAgent)
         val trackSelector = DefaultTrackSelector(context).apply {
             // 约束保留作兜底：对 HLS 初始选择实测无效（见 §10），主力是 pickVariant 自挑
-            parameters = parameters.buildUpon().setMaxVideoSize(1280, 720).build()
+            parameters = parameters.buildUpon().setMaxVideoSize(maxVideoW, maxVideoH).build()
         }
         val exo = ExoPlayer.Builder(context)
             .setTrackSelector(trackSelector)
@@ -90,12 +92,16 @@ object FloatWarmer {
      * 从多个候选里找出 master 并挑低档变体；全是变体/拉不到就用第一条原样返回。
      * 页面嗅探常常给的是**变体清单**（看不出码率），master 才有完整的档位表 —— 所以逐个试。
      */
-    fun pickVariant(urls: List<String>, headers: Map<String, String>): String {
+    fun pickVariant(
+        urls: List<String>,
+        headers: Map<String, String>,
+        budgetPx: Int = 960,
+    ): String {
         val first = urls.firstOrNull().orEmpty()
         var fallback = first
         for (u in urls.distinct()) {
             if (u.isBlank()) continue
-            val r = resolveVariant(u, headers)
+            val r = resolveVariant(u, headers, budgetPx)
             if (r != u) {
                 Log.i("FloatPlay", "挑档成功 ${u.substringAfterLast('/')} -> ${r.substringAfterLast('/')}")
                 return r
@@ -117,7 +123,11 @@ object FloatWarmer {
      * 为什么必须自己挑：media3 的 maxVideoSize 约束**实测对 HLS 初始变体选择无效**
      * （约束进选择器日志可见，仍选 1080p —— 13.5MB/片在慢网下要下 8 秒）。
      */
-    private fun resolveVariant(url: String, headers: Map<String, String>): String {
+    private fun resolveVariant(
+        url: String,
+        headers: Map<String, String>,
+        budgetPx: Int = 960,
+    ): String {
         if (!url.contains(".m3u8", ignoreCase = true)) return url
         val text = runCatching { fetchText(url, headers) }.getOrNull() ?: return url
         if (!text.contains("#EXT-X-STREAM-INF")) return url   // 已经是变体清单
@@ -134,8 +144,9 @@ object FloatWarmer {
             variants += Triple(w, bw, abs)
         }
         if (variants.isEmpty()) return url
-        val chosen = variants.filter { it.first <= 960 }.maxByOrNull { it.second }
-            ?: variants.filter { it.first <= 1280 }.maxByOrNull { it.second }
+        // 第一档：预算内最高带宽；退一档：预算 ×4/3 内最高带宽；再没有就原样
+        val chosen = variants.filter { it.first <= budgetPx }.maxByOrNull { it.second }
+            ?: variants.filter { it.first <= budgetPx * 4 / 3 }.maxByOrNull { it.second }
             ?: return url
         return chosen.third
     }

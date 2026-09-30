@@ -49,6 +49,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.ticketfortwo.app.CallSession
 import com.ticketfortwo.app.VoiceMode
+import com.ticketfortwo.app.bpsLabel
 import com.ticketfortwo.app.cinema.CinemaDebug
 import com.ticketfortwo.app.cinema.CinemaProbe
 import com.ticketfortwo.app.cinema.CinemaSync
@@ -57,6 +58,7 @@ import com.ticketfortwo.app.cinema.FloatRequest
 import com.ticketfortwo.app.cinema.FloatWarmer
 import com.ticketfortwo.app.cinema.MediaDuration
 import com.ticketfortwo.app.cinema.MediaSniffer
+import com.ticketfortwo.app.cinema.TheaterPlayer
 import com.ticketfortwo.app.cinema.SRC_PAGE
 import com.ticketfortwo.app.cinema.SnifferState
 import com.ticketfortwo.app.watch.WatchCmd
@@ -347,6 +349,10 @@ fun CinemaScreen(
        "进度循环"同源）。所以这里显式记一个 commander，广播只读它的读数。 */
     val float by FloatPlayer.state.collectAsState()
     var commander by remember { mutableStateOf(Commander.Page) }
+    /* 画面自播（2B）状态：放映态画面由 TheaterPlayer 接管（网页退居幕后交地址）。 */
+    val tp by TheaterPlayer.state.collectAsState()
+    /** 点画面弹出的自播控制条（3 秒自动隐）。 */
+    var showTctl by remember { mutableStateOf(false) }
     /* 候选时长（URL → 毫秒）：异步回填，先出条目、时长后填。 */
     var durations by remember { mutableStateOf(emptyMap<String, Long>()) }
 
@@ -354,9 +360,9 @@ fun CinemaScreen(
      * 起浮窗：先立新、后废旧 —— 网页那个照旧播着，等浮窗**真的播起来**才停它。
      * [h] 为空时自动挑最优候选（CinemaProbe.bestOf）。
      */
-    fun openFloat(h: MediaSniffer.Hit?) {
+    fun openFloat(h: MediaSniffer.Hit?, startPos: Long? = null) {
         // 预热窗已在（放映中建的 1×1 窗 + 静音在播）→ 直接拉起，省掉整段起播
-        if (FloatPlayer.show(context)) {
+        if (FloatPlayer.show(context, startPos)) {
             note = "浮窗继续播（预热秒开）"
             return
         }
@@ -365,7 +371,7 @@ fun CinemaScreen(
             note = "还没嗅到能播的地址 —— 先在这页把视频点成播放"
             return
         }
-        val startAt = player?.posMs ?: 0L
+        val startAt = startPos ?: (player?.posMs ?: 0L)
         note = "浮窗起播中…"
         FloatPlayer.start(
             context,
@@ -448,6 +454,30 @@ fun CinemaScreen(
         CinemaBrowser.obtain(context).also { CinemaBrowser.install(it, host) }
     }
 
+    /** 起画面自播（2B）：挑档按放映预算 1920，从 posMs 接。幂等（在播就忽略）。 */
+    fun startTheater(h: MediaSniffer.Hit, posMs: Long = player?.posMs ?: 0L) {
+        val headers = buildMap {
+            h.referer?.takeIf { it.isNotBlank() }?.let { put("Referer", it) }
+            h.cookie?.takeIf { it.isNotBlank() }?.let { put("Cookie", it) }
+        }
+        TheaterPlayer.start(
+            context = context,
+            url = h.url,
+            candidates = hits
+                .filter { MediaSniffer.playable(it.kind) && it.url.startsWith("http", true) }
+                .map { it.url },
+            headers = headers,
+            userAgent = h.userAgent,
+            posMs = posMs,
+        )
+    }
+
+    /** 换片时的自播切换：先停旧流，再按新片从头起（stop 后 start 才不会被幂等挡掉）。 */
+    fun replaceTheater(h: MediaSniffer.Hit) {
+        TheaterPlayer.stop()
+        startTheater(h, posMs = 0L)
+    }
+
     /** 关浮窗：反向交接 —— 把浮窗的进度拨回网页播放器，然后才停它（同样先立新后废旧）。 */
     fun closeFloat() {
         val at = float.posMs
@@ -528,6 +558,8 @@ fun CinemaScreen(
      * 和观众端指令走同一条 jsFor 路 —— 探针下一轮把新位置广播出去，观众自然跟上。
      */
     fun hostCmd(cmd: WatchCmd) {
+        // 自播在播时，一切控制直接给本地播放器（网页不再收指令）
+        if (TheaterPlayer.handle(cmd)) return
         val p = player?.posMs ?: 0L
         val d = player?.durMs ?: 0L
         /* Seek 的 JS 自带 v.play()（观众指令与恢复路径共用同一段），暂停中拖进度
@@ -711,6 +743,9 @@ fun CinemaScreen(
                    拽回 0 并暂停（REVIEW-2026-09-27 P1）；本地 player 也保留上一条好值。 */
                 if (!w.found) return@evaluateJavascript
                 player = w
+                /* 指挥权不在网页时（自播/浮窗接管）：网页的进度恢复与广播都不许走 ——
+                   resume 会 seek 网页、publish 会把观众时间轴拽回网页读数。 */
+                if (commander != Commander.Page) return@evaluateJavascript
                 /* 预热跟随（内部节流）：把预热的浮窗播放器起播点挪到页面当前进度 ——
                    HOME 那一刻目标分片已在缓冲里，首帧只剩解码时间（否则 seek 后
                    目标位置的分片是现下的，起播→首帧仍要 3 秒）。 */
@@ -767,9 +802,9 @@ fun CinemaScreen(
                         }
                     }
                 }
-                /* 指挥权已经交给浮窗：网页这个播放器已停，它的读数是陈旧的，
+                /* 指挥权已交给浮窗/自播：网页这个播放器已停，它的读数是陈旧的，
                    再照发会把观众的时间轴拽回旧位置（两套进度打架的根源）。 */
-                if (commander == Commander.Float) return@evaluateJavascript
+                if (commander != Commander.Page) return@evaluateJavascript
                 CallSession.publishCinemaProgress(w.posMs, w.durMs, w.playing)
             }
         }
@@ -833,6 +868,85 @@ fun CinemaScreen(
         }
     }
 
+    /* ── 画面自播（2B）──：进放映态就把画面从网页切到自播 —— 广告/跳转没有 DOM 可跳，
+       控制语言也与面板统一。起播失败（error）自动回退网页画面（见下方回退 effect）。
+       换片/退出放映/离场由 key 变化驱动；start 自身幂等。 */
+    LaunchedEffect(theater, cinema?.version, hits.size) {
+        if (!theater || cinema == null) {
+            if (TheaterPlayer.state.value.active) {
+                TheaterPlayer.stop()
+                if (commander == Commander.Theater) {
+                    commander = Commander.Page
+                    // 网页此前被交棒暂停了 —— 退出放映要把它放回来
+                    webView.post {
+                        webView.evaluateJavascript(
+                            WatchSync.jsFor(
+                                WatchCmd.Play, player?.posMs ?: 0L, player?.durMs ?: 0L,
+                            ),
+                            null,
+                        )
+                    }
+                }
+            }
+            return@LaunchedEffect
+        }
+        if (TheaterPlayer.state.value.active) return@LaunchedEffect
+        val h = CinemaProbe.bestOf(hits) ?: return@LaunchedEffect
+        startTheater(h)
+    }
+
+    /* 自播交接：**先立后废旧** —— 自播首帧在走才暂停网页，指挥权交给 Theater。 */
+    LaunchedEffect(tp.active, tp.ready) {
+        if (tp.active && tp.ready && commander == Commander.Page) {
+            webView.post {
+                webView.evaluateJavascript(
+                    WatchSync.jsFor(
+                        WatchCmd.Pause, player?.posMs ?: tp.posMs, player?.durMs ?: 0L,
+                    ),
+                    null,
+                )
+            }
+            commander = Commander.Theater
+            note = "画面已切到自播 —— 广告/点击跳转够不着了"
+        }
+    }
+
+    /* 自播起不来（防盗链/DRM…）：停自播、交还网页并让它继续播 —— 最坏就是现状。 */
+    LaunchedEffect(tp.error) {
+        if (tp.error != null) {
+            TheaterPlayer.stop()
+            if (commander == Commander.Theater) {
+                commander = Commander.Page
+            }
+            webView.post {
+                webView.evaluateJavascript(
+                    WatchSync.jsFor(WatchCmd.Play, player?.posMs ?: 0L, player?.durMs ?: 0L),
+                    null,
+                )
+            }
+            note = "这个站的画面自播起不来（防盗链/DRM），已回退网页画面继续放"
+        }
+    }
+
+    /* 控制条 3 秒不碰自动收起。 */
+    LaunchedEffect(showTctl) {
+        if (showTctl) {
+            delay(3_000)
+            showTctl = false
+        }
+    }
+
+    /* 自播指挥官的广播循环（与浮窗同款）。 */
+    LaunchedEffect(commander, tp.active) {
+        if (commander != Commander.Theater || !tp.active) return@LaunchedEffect
+        while (true) {
+            delay(500)
+            val t = TheaterPlayer.state.value
+            if (!t.active) break
+            if (cinema != null) CallSession.publishCinemaProgress(t.posMs, t.durMs, t.playing)
+        }
+    }
+
     /* ── 浮窗预热（雨见给的启发，见 yjllq-float-window.md §2/§10）──
        雨见弹窗早（页面还在播就弹），加载和页面播放**并行**，所以"用着挺不错"；
        我们按 HOME 才起窗，3 秒网络等待全在等待路径上。改法：放映中就把播放器建好、
@@ -873,6 +987,7 @@ fun CinemaScreen(
         onDispose {
             val st = FloatPlayer.state.value
             if (st.prewarm) FloatPlayer.stop(context)
+            TheaterPlayer.stop()   // 离场兜底：自播别留着出声
         }
     }
 
@@ -894,17 +1009,33 @@ fun CinemaScreen(
                 androidx.lifecycle.Lifecycle.Event.ON_STOP -> {
                     appResumed = false
                     if (theater && cinema != null && !float.active && !screenShared) {
-                        runCatching {
-                            openFloat(null)
-                            note = "已切到悬浮窗继续播"
-                        }.onFailure { android.util.Log.w("Cinema", "autofloat fail: ${it.message}") }
+                        if (commander == Commander.Theater) {
+                            /* 自播在放：浮窗按**自播位置**接棒（show 支持 seekMs），
+                               然后停自播 —— 声音只活一个，指挥权归浮窗。 */
+                            val at = tp.posMs
+                            runCatching { openFloat(null, at) }
+                            commander = Commander.Float
+                            TheaterPlayer.stop()
+                            note = "自播已交棒悬浮窗（按当前位置接着播）"
+                        } else {
+                            runCatching {
+                                openFloat(null)
+                                note = "已切到悬浮窗继续播"
+                            }.onFailure { android.util.Log.w("Cinema", "autofloat fail: ${it.message}") }
+                        }
                     }
                 }
                 androidx.lifecycle.Lifecycle.Event.ON_START -> {
                     appResumed = true
                     if (theater && float.active && commander == Commander.Float) {
-                        closeFloat()
-                        note = "回到全屏放映"
+                        val at = float.posMs
+                        closeFloat()   // 浮窗进度拨回网页 + 停浮窗 + commander=Page
+                        commander = Commander.Page
+                        note = "回到全屏放映（自播接回中）"
+                        // 自播从同位置接回：冷起 1-3s 期间网页在放，自播 ready 后自动暂停网页
+                        if (theater && cinema != null) {
+                            CinemaProbe.bestOf(hits)?.let { startTheater(it, posMs = at) }
+                        }
                     }
                 }
                 else -> {}
@@ -949,6 +1080,8 @@ fun CinemaScreen(
     DisposableEffect(webView) {
         CallSession.onCinemaCommand = cinemaCmd@{ cmd ->
             if (CinemaBrowser.webView !== webView) return@cinemaCmd   // 换代/散场护栏
+            // 自播在播时，观众指令也直接进本地播放器
+            if (TheaterPlayer.handle(cmd.toWatchCmd())) return@cinemaCmd
             val p = player?.posMs ?: 0L
             val d = player?.durMs ?: 0L
             // 观众的 Seek 同样自带 play()：房主暂停时被观众拖一下进度不该变成播放
@@ -1310,16 +1443,77 @@ fun CinemaScreen(
                     )
                 }
             }
-            Box(
-                if (theater) Modifier.height(300.dp) else Modifier.weight(1f)
-            ) {
+            /* 2026-09-30 结构修正（三案公共前提）：视频区**吃剩余**（weight），
+               下面的甲板**贴内容**（不给 weight）。以前视频钉死 300dp、甲板 weight 拉满，
+               内容三四组却有一屏高 → 卡片底部一大块空玻璃（用户截图实测）。
+               现在面板矮多少、视频就长高多少；面板在后测量、视频按剩余分配，空白恒为 0。 */
+            Box(Modifier.weight(1f)) {
                 // 没打开网页就不挂 WebView：空厅是一块深色的"待放"屏，不是白板
                 if (pageUrl.isEmpty()) EmptyStage(
                     if (theater) "还没选片 —— 去「浏览」打开一个视频页，或直接分享你的屏幕"
                     else "输入网址就能一起看；上面有「粘贴 / 上次 / 收藏夹」",
                     Modifier.fillMaxSize(),
                 )
-                else key(webGen) {
+                else if (tp.active) {
+                    /* 画面自播视图（2B）：画面是 TextureView —— 点击**进不到网页**，
+                       广告/整块画面跳转没有 DOM 可跳；轻点弹玻璃控制条（3 秒自动隐）。 */
+                    val tapInd = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .clickable(interactionSource = tapInd, indication = null) {
+                                showTctl = true
+                            },
+                    ) {
+                        AndroidView(
+                            factory = {
+                                android.view.TextureView(it).also { tv -> TheaterPlayer.attach(tv) }
+                            },
+                            update = { tv -> TheaterPlayer.attach(tv) },
+                            onRelease = { TheaterPlayer.detach() },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        if (showTctl) {
+                            val barInd = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                            fun tap(click: () -> Unit): Modifier = Modifier
+                                .clickable(interactionSource = barInd, indication = null) { click() }
+                            Row(
+                                Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(bottom = 16.dp)
+                                    .clip(RoundedCornerShape(32.dp))
+                                    .background(Color(0x73000000))
+                                    .padding(horizontal = 22.dp, vertical = 9.dp),
+                                horizontalArrangement = Arrangement.spacedBy(26.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    "−10",
+                                    color = Color.White,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = tap { hostCmd(WatchCmd.Step(-10_000)) },
+                                )
+                                Text(
+                                    if (tp.playing) "❚❚" else "▶",
+                                    color = Color.White,
+                                    fontSize = 17.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = tap {
+                                        hostCmd(if (tp.playing) WatchCmd.Pause else WatchCmd.Play)
+                                    },
+                                )
+                                Text(
+                                    "+10",
+                                    color = Color.White,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = tap { hostCmd(WatchCmd.Step(10_000)) },
+                                )
+                            }
+                        }
+                    }
+                } else key(webGen) {
                     AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
                 }
             }
@@ -1328,7 +1522,8 @@ fun CinemaScreen(
             if (theater) { GlassPanel(
                 backdrop = backdrop,
                 modifier = Modifier
-                    .weight(1f)
+                    // 不给 weight —— 贴内容长；上限护栏防止极端小屏把视频挤没
+                    .heightIn(max = 520.dp)
                     .fillMaxWidth()
                     .padding(horizontal = GlassDimens.screenH, vertical = 8.dp),
             ) {
@@ -1360,8 +1555,11 @@ fun CinemaScreen(
                     }
                 }
                 Box(Modifier.height(12.dp))
-                val durMs = player?.durMs?.takeIf { it > 0 } ?: cinema?.durMs ?: 0L
-                val posMs = player?.posMs ?: 0L
+                /* 自播接管时进度/时长/播放态读 TheaterPlayer（网页的读数是陈旧的）。 */
+                val durMs = (if (tp.active) tp.durMs else 0L).takeIf { it > 0 }
+                    ?: player?.durMs?.takeIf { it > 0 } ?: cinema?.durMs ?: 0L
+                val posMs = if (tp.active) tp.posMs else (player?.posMs ?: 0L)
+                val selfPlaying = if (tp.active) tp.playing else player?.playing == true
                 TheaterTrack(
                     frac = if (durMs > 0) posMs.toFloat() / durMs.toFloat() else 0f,
                     enabled = cinema != null && durMs > 0,
@@ -1384,7 +1582,7 @@ fun CinemaScreen(
                                 .padding(horizontal = 8.dp, vertical = 2.dp),
                         ) {
                             Text(
-                                if (player?.playing == true) "正在放映" else "已暂停",
+                                if (selfPlaying) "正在放映" else "已暂停",
                                 fontSize = 11.sp,
                                 color = if (player?.playing == true) Ink.Live else Ink.TextLow,
                             )
@@ -1410,8 +1608,8 @@ fun CinemaScreen(
                 ) {
                     DeckCircle("-10", backdrop) { hostCmd(WatchCmd.Step(-10_000)) }
                     Box(Modifier.width(34.dp))
-                    DeckCircle(if (player?.playing == true) "❚❚" else "▶", backdrop, big = true) {
-                        hostCmd(if (player?.playing == true) WatchCmd.Pause else WatchCmd.Play)
+                    DeckCircle(if (selfPlaying) "❚❚" else "▶", backdrop, big = true) {
+                        hostCmd(if (selfPlaying) WatchCmd.Pause else WatchCmd.Play)
                     }
                     Box(Modifier.width(34.dp))
                     DeckCircle("+10", backdrop) { hostCmd(WatchCmd.Step(10_000)) }
@@ -1428,6 +1626,62 @@ fun CinemaScreen(
                     }
                     // 放映模式里也有后退 —— 广告页一键退回，不必先切「浏览」
                     DockBtn("后退", backdrop, Modifier.weight(1f)) { browserBack() }
+                }
+                Box(Modifier.height(14.dp))
+                /* 对方状态条（方案二）：一起看的核心是「两个人」—— 对方在哪一步必须像
+                   播放键一样显眼，而不是藏在一行灰字里（面板/提示位此前都没有）。 */
+                val ackLine = CinemaSync.describeAck(playback, viewerOnline, timedOut = false)
+                val ackColor = when (ackLine.tone) {
+                    CinemaSync.AckTone.Live -> Ink.Live
+                    CinemaSync.AckTone.Bad -> Ink.Error
+                    CinemaSync.AckTone.Warn -> Ink.Warn
+                    else -> Ink.TextMid
+                }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(ackColor.copy(alpha = 0.10f))
+                        .border(1.dp, ackColor.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
+                        .padding(horizontal = 11.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        Modifier.size(9.dp)
+                            .clip(CircleShape)
+                            .background(ackColor),
+                    )
+                    Box(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            ackLine.head,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Ink.TextHi,
+                        )
+                        ackLine.detail?.let {
+                            Text(it, fontSize = 11.sp, color = Ink.TextMid, lineHeight = 15.sp)
+                        }
+                    }
+                }
+                Box(Modifier.height(12.dp))
+                /* 快捷工具（方案二）：放映态补上原本只有浏览态才有的四个入口 ——
+                   浮窗（已做）、换片（候选列表）、邀请、画质。 */
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    DockBtn(
+                        if (float.active || float.prewarm) "收起浮窗" else "浮窗",
+                        backdrop,
+                        Modifier.weight(1f),
+                    ) { toggleFloat() }
+                    DockBtn("换片", backdrop, Modifier.weight(1f)) { askPickList = true }
+                    DockBtn("邀请", backdrop, Modifier.weight(1f)) { copyInvite() }
+                    DockBtn("画质", backdrop, Modifier.weight(1f)) {
+                        note = "本场 " + videoFps + " fps · " + bpsLabel(videoBps) +
+                            "（这是上限，在首页「分享设置」里可调）"
+                    }
                 }
                 Box(Modifier.height(12.dp))
                 Row(
@@ -1517,6 +1771,10 @@ fun CinemaScreen(
                         LiquidGlassButton(
                             onClick = {
                                 pickTarget = null
+                                if (TheaterPlayer.state.value.active) {
+                                    // 自播在放：换到自播（停旧流、新片从头起）
+                                    replaceTheater(h)
+                                } else {
                                 FloatPlayer.replace(
                                     FloatRequest(
                                         url = h.url,
@@ -1527,6 +1785,7 @@ fun CinemaScreen(
                                     ),
                                 )
                                 note = "浮窗换片了"
+                                }
                             },
                             backdrop = backdrop,
                             modifier = Modifier.weight(1f).height(46.dp),
@@ -2200,7 +2459,7 @@ private fun androidx.compose.foundation.layout.BoxScope.FullscreenHint(text: Str
  * 观众端表现为进度来回跳（2026-09-29 修过的"进度循环"同源问题）。
  * 所以任一时刻只有一方是指挥官，广播只读它的读数，另一方必须停。
  */
-private enum class Commander { Page, Float }
+private enum class Commander { Page, Float, Theater }
 
 /** 毫秒 → "1:52:30" / "1:24" / "未知"。拿不到就老实说未知，不编数字。 */
 private fun fmtDuration(ms: Long?): String {
