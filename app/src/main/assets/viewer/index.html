@@ -136,8 +136,14 @@ body.cineB #stage{background:
  radial-gradient(140% 50% at 18% 22%,rgba(58,88,124,.70),transparent 60%),
  radial-gradient(120% 46% at 88% 34%,rgba(140,74,58,.60),transparent 58%),
  linear-gradient(180deg,#0a0e13,#06090c)}
-body.cineB #vbg,body.cineB #lv{inset:auto!important;width:384px!important;height:240px!important;
+body.cineB #vbg,body.cineB #v,body.cineB #lv{inset:auto!important;width:384px!important;height:240px!important;
  left:14px!important;top:12px!important;clip-path:inset(0 round 16px)}
+/* #v（转播画面）本来是文档流元素，光改 left/top 对它无效 —— 必须连定位一起改成
+   absolute，不然"我播他看"模式下画面仍然全屏居中，被下面三张卡挡个正着
+   （2026-10-01 用户实测截图：画面只在卡片缝里露一条，顶部全是 #v 的黑底 letterbox，
+   还把缩到左上角的 #vbg 也盖住了）。 */
+body.cineB #v{position:absolute!important;background:#000;
+ border:1px solid rgba(255,255,255,.12)}
 body.cineB #lv{background:#000;border:1px solid rgba(255,255,255,.12);border-radius:16px}
 body.cineB #lvBadge{right:28px;top:26px}
 body.cineB #topBar,body.cineB #ctlBar,body.cineB #cineBar{display:none!important}
@@ -848,8 +854,9 @@ $('btnVol').innerHTML = ICON.vol;
 $('btnVol').onclick = () => {
   volOn = !volOn;
   /* 放映厅里在放的是 `lv`，不是屏幕流那个 `video` —— 原来这里只动 video，
-     于是"本地播放中点音量"什么也没发生（图标翻了，声音没变）。 */
-  const target = (typeof cine !== 'undefined' && cine) ? lv : video;
+     于是"本地播放中点音量"什么也没发生（图标翻了，声音没变）。
+     转播态（B 档）反过来：在放的是 video，lv 是空的 —— 统一交给 activePlayer。 */
+  const target = activePlayer();
   target.muted = !volOn;
   if (target === lv) cineNeedSound = false;
   $('btnVol').innerHTML = volOn ? ICON.vol : ICON.mute2;
@@ -858,7 +865,15 @@ $('btnPip').innerHTML = ICON.pip;
 $('btnPip').onclick = async () => {
   // 放映厅里在放的是 lv：原来写死 video，小窗弹出来是那条**没在播**的屏幕流（一片黑）
   try { if (document.pictureInPictureElement) await document.exitPictureInPicture(); else await activePlayer().requestPictureInPicture(); }
-  catch (e) { /* Safari 可能走系统播控 */ }
+  catch (e) {
+    /* Safari 没有标准 API，走自家的 presentation mode；都没有才如实说"不支持"。
+       原来这里纯静默 —— 用户点小窗没反应，不知道是坏了还是不支持。 */
+    const p = activePlayer();
+    if (p.webkitSetPresentationMode) {
+      try { await p.webkitSetPresentationMode('picture-in-picture'); return; } catch (e2) {}
+    }
+    toast('这个浏览器不支持画中画' + (e && e.name ? '（' + e.name + '）' : ''));
+  }
 };
 $('btnFull').innerHTML = ICON.full;
 $('btnFull').onclick = async () => {
@@ -1677,7 +1692,13 @@ if (_q.get('report') === '1') {
    管的都是"没在播的那一路"（音量、画中画、点画面继续播，三处都是）。 */
 
 /** 现在真正在放的是哪一个：放映厅里是本地播放层，其余是屏幕流。 */
-function activePlayer(){ return (typeof cine !== 'undefined' && cine) ? lv : video; }
+function activePlayer(){
+  /* 转播态（B 档）真正在放的是 WebRTC 那条 `#v` —— 原来放映中一律返回 `lv`，
+     而转播时 lv 根本没在放：小窗弹不出来（reject 还被静默吞掉）、
+     音量键调了个寂寞（2026-10-01 用户实测：点小窗/全屏没反应）。 */
+  if (typeof cine !== 'undefined' && cine) return cine.url ? lv : video;
+  return video;
+}
 
 const CHROME_PARTS = ['topBar','ctlBar','cineBar','watchBar','lvBadge'];
 let lastTouch = Date.now();
