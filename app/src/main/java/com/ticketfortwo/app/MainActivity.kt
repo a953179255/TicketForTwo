@@ -378,7 +378,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
             // Android 14+：startForegroundService() 是异步的，抢在 startForeground()
             // 之前取 MediaProjection 会抛 SecurityException（实测崩过）。
             if (!ShareService.awaitReady()) {
-                CallSession.logEvent("前台服务未在 3 秒内就绪，放弃本次分享")
+                CallSession.logEvent("前台服务未在 30 秒内就绪，放弃本次分享")
                 context.toast("没能进入分享状态，请重试")
                 return@launch
             }
@@ -396,7 +396,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
         scope.launch {
             ShareService.start(context, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
             if (!ShareService.awaitReady()) {
-                CallSession.logEvent("前台服务未在 3 秒内就绪，放弃本次分享")
+                CallSession.logEvent("前台服务未在 30 秒内就绪，放弃本次分享")
                 context.toast("没能进入分享状态，请重试")
                 return@launch
             }

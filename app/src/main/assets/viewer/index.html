@@ -23,6 +23,10 @@ body{color:var(--text-hi);overscroll-behavior:none;
    fixed 元素直接对齐视口，浏览器外壳收起/展开时会自动跟着变。 */
 #stage{position:fixed;inset:0;background:#000}
 video{width:100%;height:100%;object-fit:contain;background:#000;display:block}
+/* 安卓 Chrome 的默认点按高亮是一个**不跟圆角的方块**，压在圆角按钮上就是"点击出了
+   个方框"（2026-10-01 用户实测截图）。全局关掉它 —— 按压反馈交给 .ctl:active 的
+   形变和各按钮自己的按压态，别让系统再画一层。 */
+*{-webkit-tap-highlight-color:transparent}
 /* 环境底（ambient）：电脑/平板上打开链接，一块竖屏画面居中，左右剩下大片死黑 ——
    "打开默认就是全屏播放，效果很不好"说的就是这一刻。把**同一条流**再画一层、
    放大铺满 + 模糊 + 压暗垫在后面，黑边变成画面自身的余晖，居中的那块再收个圆角，

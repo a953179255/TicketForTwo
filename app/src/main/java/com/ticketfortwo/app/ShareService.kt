@@ -192,8 +192,14 @@ class ShareService : Service() {
          * 这条等待是必需的，不是保险：startForegroundService() 是异步的，
          * 若在 startForeground() 完成前调 getMediaProjection()，
          * Android 14+ 直接抛 SecurityException（实测崩溃过）。
+         *
+         * 超时 3s → 30s（2026-10-01）：系统日志抓到 startForegroundDelayMs=12725/14505 ——
+         * 进厅时浏览 tab 的 WebView 自动加载上次的重页面（视频自动播），主线程被挤，
+         * startForeground 稳定晚到 12-15s。3s/15s 在这个场景必失败，且失败后 UI 还挂着
+         * "厅已开"（隧道没建，观众永远进不来）。等待本身是协程挂起，放宽不卡界面；
+         * 正常负载下 1s 内就 ready，只有重页面抢主线程时才会等到十几秒。
          */
-        suspend fun awaitReady(timeoutMs: Long = 3_000): Boolean =
+        suspend fun awaitReady(timeoutMs: Long = 30_000): Boolean =
             withTimeoutOrNull(timeoutMs) { _foregroundReady.first { it } } != null
 
         /** 按 Android 14+ 要求的顺序启动：授权之后、getMediaProjection 之前。

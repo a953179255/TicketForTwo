@@ -1692,10 +1692,17 @@ fun CinemaScreen(
                     DockBtn("换片", backdrop, Modifier.weight(1f)) { askPickList = true }
                     DockBtn("邀请", backdrop, Modifier.weight(1f)) { copyInvite() }
                     /* 麦键（2026-10-01 用户计划：放映厅点麦克风就能连麦）。
-                       跟 micLive 实际态画图；提示（回声/画面声）由 toggleMic 自带。 */
-                    DockBtn(if (micLive) "关麦" else "麦克风", backdrop, Modifier.weight(1f)) {
-                        CallSession.toggleMic()
-                    }
+                       文案直接说**状态**（原来说的是动作"关麦"，开/关样式又一模一样，
+                       用户分不清现在到底是开还是关 —— 2026-10-01 实测反馈）。
+                       开麦中加绿色强调（与"对方已播起来"的绿点同一套语言）：
+                       绿 + 已开麦 = 正在传声；灰 + 已关麦 = 没在传。
+                       点击后的动作提示（回声/画面声）由 toggleMic 自带。 */
+                    DockBtn(
+                        if (micLive) "已开麦" else "已关麦",
+                        backdrop,
+                        Modifier.weight(1f),
+                        hot = micLive,
+                    ) { CallSession.toggleMic() }
                 }
                 Box(Modifier.height(12.dp))
                 Row(
