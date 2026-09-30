@@ -354,6 +354,8 @@ fun CinemaScreen(
     /* B 方案「我播他看」转播中：本地画面 = 自己视频轨的回显 ——
        "你看到的正是观众看到的"（帧已经过一次编码，比自播纹理略慢半拍，换来零差异观感）。 */
     val localVt by CallSession.localVideo.collectAsState()
+    /** 麦克风实际开着没（放映面板的麦键跟它走 —— 不跟手动静音位，防"图标骗人"）。 */
+    val micLive by CallSession.micLive.collectAsState()
     /** 点画面弹出的自播控制条（3 秒自动隐）。 */
     var showTctl by remember { mutableStateOf(false) }
     /* 候选时长（URL → 毫秒）：异步回填，先出条目、时长后填。 */
@@ -1689,9 +1691,10 @@ fun CinemaScreen(
                     ) { toggleFloat() }
                     DockBtn("换片", backdrop, Modifier.weight(1f)) { askPickList = true }
                     DockBtn("邀请", backdrop, Modifier.weight(1f)) { copyInvite() }
-                    DockBtn("画质", backdrop, Modifier.weight(1f)) {
-                        note = "本场 " + videoFps + " fps · " + bpsLabel(videoBps) +
-                            "（这是上限，在首页「分享设置」里可调）"
+                    /* 麦键（2026-10-01 用户计划：放映厅点麦克风就能连麦）。
+                       跟 micLive 实际态画图；提示（回声/画面声）由 toggleMic 自带。 */
+                    DockBtn(if (micLive) "关麦" else "麦克风", backdrop, Modifier.weight(1f)) {
+                        CallSession.toggleMic()
                     }
                 }
                 Box(Modifier.height(12.dp))

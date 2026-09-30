@@ -102,7 +102,8 @@ object CallSession {
     private val _localVideo = MutableStateFlow<VideoTrack?>(null)
     val localVideo: StateFlow<VideoTrack?> = _localVideo.asStateFlow()
 
-    private val _micMuted = MutableStateFlow(false)
+    /** 默认关麦（2026-10-01 计划）：进厅不传环境音，想说在放映厅点麦克风按钮。 */
+    private val _micMuted = MutableStateFlow(true)
     val micMuted: StateFlow<Boolean> = _micMuted.asStateFlow()
 
     /**
@@ -455,6 +456,8 @@ object CallSession {
         _role.value = Role.Host
         this.quality = quality
         this.sessionContext = context.applicationContext
+        // 麦克风默认关（2026-10-01 计划）；「只连麦」档的全部意义就是说话 —— 进厅即开
+        _micMuted.value = quality.voiceMode != VoiceMode.CallOnly
         _state.value = State.Preparing(
             if (permissionIntent != null) "正在启动屏幕采集" else "正在准备语音通话"
         )
@@ -484,6 +487,7 @@ object CallSession {
         val vt = cap?.start(fps = quality.fps, scale = quality.scale)
         localVideoTrack = vt
         _localVideo.value = vt
+        if (vt != null) ensureMicForSoundRelay("屏幕分享")
         val at = ensureMicTrack(context)
         if (vt == null && at == null) {
             // 一条媒体都没有：连上也没有任何可传的东西 —— 直接失败好过转圈。
@@ -550,6 +554,8 @@ object CallSession {
         }
         localVideoTrack = vt
         _localVideo.value = vt
+        // B 档观众拿不到地址、也没有音频轨 —— 房主的麦克风是他唯一的声源
+        ensureMicForSoundRelay("我播他看")
         val p = peer
         if (p == null) {
             note("转播轨已备好，等对方进厅就发过去")
@@ -605,6 +611,7 @@ object CallSession {
         }
         localVideoTrack = vt
         _localVideo.value = vt
+        ensureMicForSoundRelay("屏幕分享")
         val p = peer
         if (p == null) {
             // 观众还没进来：轨先备着，等人进来时 onViewerJoined 会把它加进 offer。
@@ -809,6 +816,19 @@ object CallSession {
 
     // ---- 公共 ----------------------------------------------------------
 
+    /**
+     * **画面声音靠外放→麦克风**的两种模式（屏幕分享 / B 方案「我播他看」）：
+     * 麦关着 = 对方只看没声，所以这两种模式一激活就自动开麦 + 说明；
+     * 用户之后仍可手动关（关时 toggleMic 会给"对方会听不到画面声"的警告，不硬拦）。
+     */
+    private fun ensureMicForSoundRelay(what: String) {
+        if (_micMuted.value) {
+            _micMuted.value = false
+            note("${what}的声音靠你的麦克风传 —— 已为你开麦；点麦克风可关（对方会听不到画面声）")
+        }
+        applyVoicePolicy(what)
+    }
+
     fun setMicMuted(muted: Boolean) {
         _micMuted.value = muted
         applyVoicePolicy("手动静音")
@@ -833,8 +853,20 @@ object CallSession {
            （永远开不了，还照样 note"已开麦"）。用户报的就是这个（REVIEW-2026-09-27 P1）。 */
         _micMuted.value = _micLive.value
         applyVoicePolicy("用户切麦")
-        if (micOverride && quality.voiceMode == VoiceMode.VideoOnly) {
-            note("已开麦。对方在本地播原声，你出声会和他那份叠在一起 —— 想只留视频声就再点一次")
+        /* 提示按场景分（2026-10-01 计划）：画面声音类模式先说"它在传画面声"；
+           放映中（观众本地播）开麦要提示回声；其余给轻量确认。 */
+        val soundRelay = capture != null || theaterCapture != null
+        val viewerLocal = _cinema.value != null && _viewerPlayback.value?.ok == true
+        if (_micLive.value) {
+            when {
+                soundRelay -> note("已开麦 —— 画面的声音也靠它传给对方")
+                viewerLocal ->
+                    note("已开麦。对方在本地播原声，你出声会和他那份叠在一起 —— 说完点一下关掉")
+                else -> note("已开麦")
+            }
+        } else {
+            if (soundRelay) note("已关麦 —— 对方会听不到画面的声音（不只是你的话）")
+            else note("已关麦")
         }
     }
 
@@ -892,7 +924,7 @@ object CallSession {
         _localVideo.value = null
         _remoteVideo.value = null
         _role.value = null
-        _micMuted.value = false
+        _micMuted.value = true          // 下一场默认关麦（启动时再按档校正，只连麦例外）
         _micLive.value = false
         _hostHearsViewer.value = true
         micOverride = false

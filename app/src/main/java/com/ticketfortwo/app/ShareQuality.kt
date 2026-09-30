@@ -28,8 +28,8 @@ data class ShareQuality(
     val scale: Float = CallSession.DEFAULT_CAPTURE_SCALE,
     val fps: Int = CallSession.DEFAULT_VIDEO_FPS,
     val maxVideoBps: Int = CallSession.DEFAULT_MAX_VIDEO_BPS,
-    /** 声音怎么传（[VoiceMode]）。默认只有视频声，连麦要额外开启。 */
-    val voiceMode: VoiceMode = VoiceMode.VideoOnly,
+    /** 声音怎么传（[VoiceMode]）。默认「视频声+连麦」，麦克风默认关（见 load 的一次性迁移）。 */
+    val voiceMode: VoiceMode = VoiceMode.VideoPlusCall,
     /** 放映方式：发地址各播一份，还是房主转视频轨过去（见 [PlayMode]）。 */
     val playMode: PlayMode = PlayMode.Direct,
 ) {
@@ -125,6 +125,8 @@ data class ShareQuality(
         private const val K_VIDEO = "q_video"
         private const val K_VOICE = "q_voice"
         private const val K_PMODE = "q_pmode"
+        /** 一次性迁移标记：旧默认「只有视频声」升级为「视频声+连麦」（产品尚无外部用户）。 */
+        private const val K_VOICE_MIGRATED = "q_voice_migrated"
 
         fun load(context: Context): ShareQuality {
             val d = ShareQuality()
@@ -136,7 +138,7 @@ data class ShareQuality(
                 fps = sp.getInt(K_FPS, d.fps).takeIf { it in FPS_MIN..FPS_MAX } ?: d.fps,
                 // 码率可能是「自定义」值（不在预设档里），所以按范围校验而不是按档位成员。
                 maxVideoBps = sp.getInt(K_BPS, d.maxVideoBps).takeIf { it in BPS_MIN..BPS_MAX } ?: d.maxVideoBps,
-                voiceMode = voiceModeOf(sp),
+                voiceMode = migrateVoiceOnce(sp),
                 playMode = sp.getString(K_PMODE, null)
                     ?.let { runCatching { PlayMode.valueOf(it) }.getOrNull() }
                     ?: PlayMode.Direct,
@@ -152,6 +154,27 @@ data class ShareQuality(
          * [VoiceMode.VideoOnly]（旧档里"画面+语音"和"连麦"本来就是同一件事，
          * 而默认只有视频声正是这次要改的东西）。
          */
+        /**
+         * 读声音档 + **一次性存量迁移**（2026-10-01 计划，用户拍板）：
+         * 旧默认是「只有视频声」，产品还没有外部用户，把存量升级成新默认「视频声+连麦」，
+         * 否则他自己设备上永远看不到新默认。打过标记后不再迁移 —— 之后主动选回
+         * 「只有视频声」会被尊重（隐私档保留）。
+         */
+        private fun migrateVoiceOnce(sp: android.content.SharedPreferences): VoiceMode {
+            val vm = voiceModeOf(sp)
+            if (sp.getBoolean(K_VOICE_MIGRATED, false)) return vm
+            if (vm == VoiceMode.VideoOnly) {
+                // **必须回写**：只升级内存不写盘，下次启动 load 又读回旧值 = 白迁（实测踩过）
+                sp.edit()
+                    .putString(K_VOICE, VoiceMode.VideoPlusCall.name)
+                    .putBoolean(K_VOICE_MIGRATED, true)
+                    .apply()
+                return VoiceMode.VideoPlusCall
+            }
+            sp.edit().putBoolean(K_VOICE_MIGRATED, true).apply()
+            return vm
+        }
+
         private fun voiceModeOf(sp: android.content.SharedPreferences): VoiceMode {
             sp.getString(K_VOICE, null)?.let { raw ->
                 return runCatching { VoiceMode.valueOf(raw) }.getOrDefault(VoiceMode.VideoOnly)
