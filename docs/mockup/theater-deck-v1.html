@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>放映面板（甲板）优化 · 三个方案</title>
+<style>
+  :root{
+    --bg:#0b0e14; --glass:rgba(255,255,255,0.07);
+    --glass2:rgba(255,255,255,0.11);
+    --line:rgba(255,255,255,0.13);
+    --hi:#ffffff; --mid:#b3b3b3; --low:#7a7a7a;
+    --green:#34d399; --green-d:#10b981; --blue:#60a5fa; --amber:#fbbf24;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:
+      radial-gradient(1000px 600px at 15% -5%, rgba(52,211,153,.10), transparent 60%),
+      radial-gradient(900px 700px at 90% 20%, rgba(96,165,250,.10), transparent 60%),
+      var(--bg);
+    color:var(--hi);
+    font-family:-apple-system,"PingFang SC","Microsoft YaHei",Segoe UI,sans-serif;
+    line-height:1.6; padding:36px 20px 80px;
+  }
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:28px;font-weight:800;letter-spacing:-.4px}
+  h1 span{color:var(--green)}
+  .lead{color:var(--mid);margin-top:10px;max-width:780px;font-size:14.5px}
+  h2{font-size:20px;font-weight:800;margin:0 0 4px}
+
+  .diag{margin-top:24px;background:var(--glass);border:1px solid var(--line);
+    border-radius:16px;padding:18px 20px;backdrop-filter:blur(12px)}
+  .diag h3{font-size:15px;font-weight:700;margin-bottom:8px}
+  .diag ul{list-style:none;display:grid;gap:7px}
+  .diag li{font-size:13.5px;color:var(--mid);padding-left:22px;position:relative}
+  .diag li::before{content:"△";position:absolute;left:0;color:var(--amber);font-size:12px}
+  .diag li b{color:var(--hi)}
+  .flow{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}
+  .flow span{font-size:11.5px;background:rgba(255,255,255,.07);border:1px solid var(--line);
+    padding:3px 9px;border-radius:8px;color:var(--mid)}
+  .flow span.dead{background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.35);color:#fca5a5}
+
+  .plan{margin-top:44px;padding-top:28px;border-top:1px solid var(--line)}
+  .plan-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+  .badge{font-size:11.5px;font-weight:700;padding:3px 10px;border-radius:999px;
+    background:rgba(52,211,153,.16);color:var(--green);border:1px solid rgba(52,211,153,.32)}
+  .badge.b2{background:rgba(96,165,250,.16);color:var(--blue);border-color:rgba(96,165,250,.32)}
+  .badge.b3{background:rgba(168,85,247,.16);color:#c4b5fd;border-color:rgba(168,85,247,.32)}
+  .plan-sub{color:var(--mid);font-size:13.5px;margin-top:6px;max-width:860px}
+  .tagline{margin-top:10px;font-size:13px;background:rgba(255,255,255,.06);
+    border-left:3px solid var(--green);padding:8px 12px;border-radius:0 8px 8px 0}
+
+  .frames{display:flex;gap:28px;margin-top:20px;flex-wrap:wrap;align-items:flex-start}
+  .fcol{display:flex;flex-direction:column;gap:9px}
+  .fcap{font-size:12px;color:var(--low);text-align:center;letter-spacing:.5px}
+  .pros{font-size:12.5px;color:var(--mid);max-width:360px}
+  .pros b{color:var(--green)} .pros i{color:var(--amber);font-style:normal}
+
+  /* ── 手机仿真 ── */
+  .phone{width:330px;background:#05070b;border:1px solid rgba(255,255,255,.16);
+    border-radius:26px;overflow:hidden;box-shadow:0 18px 44px rgba(0,0,0,.5)}
+  .vid{height:118px;position:relative;background:
+      linear-gradient(160deg,#1e3a2f 0%,#2d5a3f 45%,#7c6a2e 100%);}
+  .vid::after{content:"画面（视频区）";position:absolute;inset:0;display:flex;
+    align-items:center;justify-content:center;font-size:11px;color:rgba(255,255,255,.55)}
+  .vid.hi{height:168px}
+
+  .deck{background:rgba(255,255,255,.06);border-top:1px solid rgba(255,255,255,.12);
+    padding:14px 14px 14px;position:relative}
+  .deck::before{content:"";position:absolute;inset:0;backdrop-filter:blur(10px);pointer-events:none}
+  .deck > *{position:relative}
+
+  .trow{display:flex;align-items:center;gap:8px}
+  .title{font-size:14.5px;font-weight:700;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pill{font-size:10.5px;padding:2px 8px;border-radius:999px;
+    background:rgba(52,211,153,.15);color:var(--green);white-space:nowrap}
+  .pill.gray{background:rgba(255,255,255,.08);color:var(--low)}
+  .pill.amber{background:rgba(251,191,36,.14);color:var(--amber)}
+
+  .track{height:4px;border-radius:999px;background:rgba(255,255,255,.16);margin-top:12px;position:relative}
+  .track::before{content:"";position:absolute;left:0;top:0;bottom:0;width:7%;border-radius:999px;background:var(--green)}
+  .track::after{content:"";position:absolute;left:7%;top:50%;width:12px;height:12px;border-radius:50%;
+    background:#fff;transform:translate(-50%,-50%);box-shadow:inset 0 -1px 2px rgba(0,0,0,.25)}
+  .tmeta{display:flex;align-items:center;gap:8px;margin-top:7px}
+  .tmeta .time{font-size:12px;color:var(--mid);flex:1}
+
+  .trans{display:flex;justify-content:center;align-items:center;gap:26px;margin-top:14px}
+  .cbtn{width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    font-size:14px;font-weight:700;color:var(--hi);
+    background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.20);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.28)}
+  .cbtn.big{width:58px;height:58px;font-size:20px;background:var(--green-d);
+    border-color:rgba(52,211,153,.6);box-shadow:inset 0 1px 0 rgba(255,255,255,.45)}
+
+  .dock{display:flex;gap:10px;margin-top:16px}
+  .dbtn{flex:1;height:46px;border-radius:14px;display:flex;align-items:center;justify-content:center;
+    font-size:13px;font-weight:600;color:var(--hi);
+    background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.22)}
+  .dbtn.hot{background:rgba(52,211,153,.18);border-color:rgba(52,211,153,.45);color:#8ef0c6}
+  .meta{display:flex;justify-content:space-between;margin-top:12px;font-size:11.5px;color:var(--low)}
+  .note{margin-top:8px;font-size:11.5px;color:var(--mid)}
+  .blank{height:96px;border-top:1px dashed rgba(248,113,113,.5);margin-top:12px;
+    display:flex;align-items:center;justify-content:center;font-size:11.5px;color:#fca5a5;
+    background:rgba(248,113,113,.05)}
+
+  /* 方案一：合并重排 */
+  .rowA{display:flex;gap:8px;margin-top:14px}
+  .rowA .dbtn{margin:0}
+  .note.mini{margin-top:10px;font-size:11px;color:var(--low)}
+
+  /* 方案二：状态条 + 工具行 */
+  .status{margin-top:14px;display:flex;align-items:center;gap:10px;
+    background:rgba(52,211,153,.10);border:1px solid rgba(52,211,153,.28);
+    border-radius:12px;padding:9px 11px}
+  .avatar{width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,#34d399,#10b981);
+    flex:none;position:relative}
+  .avatar::after{content:"";position:absolute;right:-1px;bottom:-1px;width:9px;height:9px;border-radius:50%;
+    background:#34d399;border:2px solid #0b0e14}
+  .stxt{font-size:12.5px;line-height:1.35}
+  .stxt b{display:block;font-size:13px}
+  .stxt span{color:var(--mid);font-size:11.5px}
+  .tools{display:flex;gap:8px;margin-top:14px}
+  .tool{flex:1;height:52px;border-radius:13px;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:1px;background:rgba(255,255,255,.07);
+    border:1px solid rgba(255,255,255,.16);box-shadow:inset 0 1px 0 rgba(255,255,255,.20)}
+  .tool .ic{font-size:16px}
+  .tool .lb{font-size:10.5px;color:var(--mid)}
+
+  /* 方案三：功能网格 */
+  .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:9px;margin-top:16px}
+  .gcell{height:58px;border-radius:14px;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:2px;background:rgba(255,255,255,.07);
+    border:1px solid rgba(255,255,255,.16);box-shadow:inset 0 1px 0 rgba(255,255,255,.20)}
+  .gcell .ic{font-size:17px}
+  .gcell .lb{font-size:10.5px;color:var(--mid)}
+  .gcell.hot{background:rgba(52,211,153,.16);border-color:rgba(52,211,153,.42)}
+  .gcell.hot .lb{color:#8ef0c6}
+
+  table{border-collapse:collapse;width:100%;margin-top:18px;font-size:13px;
+    background:var(--glass);border-radius:14px;overflow:hidden}
+  th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line)}
+  th{font-size:12px;color:var(--low);font-weight:600}
+  td b{color:var(--hi)} td{color:var(--mid)}
+  .ok{color:var(--green)} .warn{color:var(--amber)}
+
+  footer{margin-top:44px;padding-top:20px;border-top:1px solid var(--line);
+    color:var(--mid);font-size:13.5px}
+  footer b{color:var(--hi)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>放映面板（甲板）优化 · <span>三个方案</span></h1>
+<p class="lead">
+  放映态底部这张玻璃卡目前被 <b>weight(1f) 拉满整屏</b>，而内容只有七组 —— 截图里下半截是空的。
+  下面给你三个方向：一个是<b>减（把空白还给视频）</b>，一个是<b>加（把空白变成有用信息）</b>，
+  一个是<b>换（把空白变成操作入口）</b>。三个方案都完整保留现有全部功能，只是取舍不同。
+</p>
+
+<div class="diag">
+  <h3>现状诊断（元素从上到下）</h3>
+  <ul>
+    <li><b>卡片高度被拉满</b>：panel（浏览态）已经用了 <code>weight(1f, fill=false)</code> 贴内容，
+        甲板（放映态）还是满 weight —— 内容 4 组、卡片 1 屏高，空白全在 note 之后</li>
+    <li>信息层级平铺：<b>元数据（直连/fps/码率）和提示文案各占一行</b>，但都是低优先级灰字，
+        撑高了卡片、没提供相应回报</li>
+    <li>放映态<b>没有</b>浮窗 / 嗅探候选入口 —— 想换片或开浮窗必须先切回「浏览」</li>
+  </ul>
+  <div class="flow">
+    <span>标题+状态</span><span>进度条</span><span>时间+胶囊</span><span>传输三键</span>
+    <span>dock三键</span><span>元数据行</span><span>note 行</span>
+    <span class="dead">空白 × ~100dp</span>
+  </div>
+</div>
+
+<!-- ═══════ 根子：高度分配 ═══════ -->
+<div class="diag" style="border-color:rgba(52,211,153,.4)">
+  <h3>先说清楚：空白的根子 —— 这是三案的<b style="color:var(--green)">公共前提</b>，不是某个方案的专利</h3>
+  <ul>
+    <li><b>手机屏幕高度当然固定</b> —— 所以“收窄”必须配套改布局，否则按钮排紧凑了、
+        卡片还是拉满，空白照旧（你指出的正是这一点，成立）</li>
+    <li>现在的代码：<b>视频区固定 300dp 不吃剩余，甲板 weight(1f) 吃掉全部剩余</b> →
+        内容只有三四组、卡却有一屏高 → 空白</li>
+    <li>结构修正（<b>选哪个方案都先做这一步</b>）：甲板改 <code>weight(1f, fill=false)</code>
+        贴内容长；视频区改 <code>weight(1f)</code> 吃剩余 ——
+        <b>面板矮 1dp、视频就高 1dp，空白恒为 0</b></li>
+  </ul>
+
+  <div style="margin-top:16px;font-size:12.5px;color:var(--mid)">屏幕总高（顶栏以下）恒定，三案只是内部怎么分：</div>
+  <div style="display:grid;gap:10px;margin-top:10px">
+    <div>
+      <div style="font-size:11.5px;color:var(--low);margin-bottom:4px">现状 · 视频被钉死 300，面板吃满剩余 → 面板内底部留空</div>
+      <div style="display:flex;height:34px;border-radius:8px;overflow:hidden;border:1px solid var(--line)">
+        <div style="flex:300;background:linear-gradient(120deg,#2d5a3f,#7c6a2e);display:flex;align-items:center;justify-content:center;font-size:11px">视频 300dp 固定</div>
+        <div style="flex:390;background:rgba(255,255,255,.07);position:relative;display:flex;align-items:center;justify-content:center;font-size:11px">
+          面板 390dp（拉满）
+          <span style="position:absolute;right:0;top:0;bottom:0;width:38%;background:rgba(248,113,113,.14);
+            border-left:1px dashed rgba(248,113,113,.6);display:flex;align-items:center;justify-content:center;font-size:10.5px;color:#fca5a5">空白</span>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div style="font-size:11.5px;color:var(--low);margin-bottom:4px">改后 · 面板贴内容、视频吃剩余 —— 三案只是分配比例不同（总量一样，都无空白）</div>
+      <div style="display:flex;height:34px;border-radius:8px;overflow:hidden;border:1px solid rgba(52,211,153,.5);margin-bottom:6px">
+        <div style="flex:392;background:linear-gradient(120deg,#2d5a3f,#7c6a2e);display:flex;align-items:center;justify-content:center;font-size:11px">一：视频 ≈390dp</div>
+        <div style="flex:250;background:rgba(255,255,255,.07);display:flex;align-items:center;justify-content:center;font-size:11px">面板贴内容 ≈250dp</div>
+      </div>
+      <div style="display:flex;height:34px;border-radius:8px;overflow:hidden;border:1px solid rgba(96,165,250,.5);margin-bottom:6px">
+        <div style="flex:340;background:linear-gradient(120deg,#2d5a3f,#7c6a2e);display:flex;align-items:center;justify-content:center;font-size:11px">二：视频 ≈340dp</div>
+        <div style="flex:300;background:rgba(255,255,255,.07);display:flex;align-items:center;justify-content:center;font-size:11px">面板（含状态+工具）≈300dp</div>
+      </div>
+      <div style="display:flex;height:34px;border-radius:8px;overflow:hidden;border:1px solid rgba(168,85,247,.5)">
+        <div style="flex:310;background:linear-gradient(120deg,#2d5a3f,#7c6a2e);display:flex;align-items:center;justify-content:center;font-size:11px">三：视频 ≈310dp</div>
+        <div style="flex:330;background:rgba(255,255,255,.07);display:flex;align-items:center;justify-content:center;font-size:11px">面板（含 2×3 网格）≈330dp</div>
+      </div>
+    </div>
+  </div>
+  <div style="margin-top:12px;font-size:12.5px;color:var(--green)">
+    ⇒ 结论：<b>空白问题由公共前提解决（永远为 0）</b>；三案的真正差别是
+    <b>面板里放多少内容 → 视频能拿多少高度</b>。方案一最省高度（视频最大），
+    方案三最占高度（入口最全）；方案二居中。
+  </div>
+</div>
+
+<!-- ═══════ 方案一 ═══════ -->
+<section class="plan">
+  <div class="plan-head"><h2>方案一 · 紧凑收窄</h2><span class="badge">减法 · 观影优先</span></div>
+  <p class="plan-sub">
+    <b>（公共前提已含：面板贴内容 + 视频吃剩余，下同）</b> 在此之上，方案一<b>内容也最省</b>：
+    低优先级的元数据行与 note 合并成一行小字，不新增任何东西 ——
+    面板高度约 340 → 250dp，<b>视频 300 → 约 390dp</b>（总量不变，多出来的全从面板让给视频）。
+  </p>
+  <div class="tagline">看片时屏幕上的东西越少越好 —— 控制器用完就该缩着。</div>
+  <div class="frames">
+    <div class="fcol">
+      <div class="phone">
+        <div class="vid hi"></div>
+        <div class="deck">
+          <div class="trow"><div class="title">test-streams.mux.dev</div>
+            <span class="pill">对方可控制</span></div>
+          <div class="track"></div>
+          <div class="tmeta"><span class="time">0:34 / 10:34</span>
+            <span class="pill">正在放映</span><span class="pill gray">复制邀请</span></div>
+          <div class="trans">
+            <div class="cbtn">-10</div><div class="cbtn big">❚❚</div><div class="cbtn">+10</div>
+          </div>
+          <div class="rowA">
+            <div class="dbtn hot">收厅</div>
+            <div class="dbtn">分享我的屏幕</div>
+            <div class="dbtn">后退</div>
+          </div>
+          <div class="meta"><span>直连 86ms</span><span>30 fps</span><span>2.0 Mbps</span></div>
+          <div class="note mini">提示以浮动小条出现，不再占卡内一行（如：浮窗已收起）</div>
+        </div>
+      </div>
+      <div class="fcap">方案一 · 视频大、面板薄</div>
+    </div>
+    <div class="pros">
+      <p><b>✓ 优点</b>：视频视野最大；改动最小（基本只改布局约束与两行合并）；
+      和浏览态 panel 行为一致，维护一套规则。</p>
+      <p style="margin-top:8px"><i>△ 取舍</i>：不解决放映态缺浮窗/候选入口的问题；
+      想知道对方状态还得靠提示行。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════ 方案二 ═══════ -->
+<section class="plan">
+  <div class="plan-head"><h2>方案二 · 放映仪表</h2><span class="badge b2">加法 · 状态可见</span></div>
+  <p class="plan-sub">
+    <b>（公共前提已含：面板贴内容 + 视频吃剩余，下同）</b> 在此之上，把空白区变成
+    <b>「对方在哪一步」状态条</b> + <b>四格快捷工具</b>：对方回执状态是放映中你最想知道、
+    现在却看不见的信息（藏在一行灰字 ackLine 里）；浮窗 / 换候选 / 邀请 / 画质四个入口补进放映态。
+    面板比方案一高一截 ⇒ 视频拿得少一些（≈340dp），但空白同样为 0。
+  </p>
+  <div class="tagline">一起看的核心是「两个人」—— 让对方的状态像播放键一样显眼。</div>
+  <div class="frames">
+    <div class="fcol">
+      <div class="phone">
+        <div class="vid"></div>
+        <div class="deck">
+          <div class="trow"><div class="title">test-streams.mux.dev</div>
+            <span class="pill">对方可控制</span></div>
+          <div class="track"></div>
+          <div class="tmeta"><span class="time">0:34 / 10:34</span>
+            <span class="pill">正在放映</span><span class="pill gray">复制邀请</span></div>
+          <div class="trans">
+            <div class="cbtn">-10</div><div class="cbtn big">❚❚</div><div class="cbtn">+10</div>
+          </div>
+          <div class="dock">
+            <div class="dbtn hot">收厅</div>
+            <div class="dbtn">分享我的屏幕</div>
+            <div class="dbtn">后退</div>
+          </div>
+          <!-- ★ 新增区 -->
+          <div class="status">
+            <div class="avatar"></div>
+            <div class="stxt">
+              <b>对方正在本地播 · 画质原生</b>
+              <span>回执 210ms 前送达 · 无需投屏</span>
+            </div>
+          </div>
+          <div class="tools">
+            <div class="tool"><span class="ic">▭</span><span class="lb">浮窗</span></div>
+            <div class="tool"><span class="ic">⇅</span><span class="lb">换片</span></div>
+            <div class="tool"><span class="ic">✉</span><span class="lb">邀请</span></div>
+            <div class="tool"><span class="ic">⛶</span><span class="lb">1080p</span></div>
+          </div>
+          <div class="meta"><span>直连 86ms</span><span>30 fps</span><span>2.0 Mbps</span></div>
+        </div>
+      </div>
+      <div class="fcap">方案二 · 空白变状态 + 工具</div>
+    </div>
+    <div class="pros">
+      <p><b>✓ 优点</b>：补上放映态缺失的浮窗/换片入口（正好接住前面做的浮窗与候选列表）；
+      对方状态一眼可见；卡片高度接近现状，改动中等。</p>
+    <p style="margin-top:8px"><i>△ 取舍</i>：信息变多，视频区不增大；
+      工具行有「为填而填」的嫌疑 —— 用得少时这四格是死重。</p>
+    <!-- ★ 2B 增强档 -->
+    <div style="margin-top:14px;background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.35);
+      border-radius:12px;padding:11px 13px;max-width:360px">
+      <div style="font-size:12.5px;font-weight:700;color:var(--blue)">2B 增强档 · 画面自播（“包装一层”的完全体）</div>
+      <div style="font-size:12px;color:var(--mid);margin-top:5px">
+        放映画面<b style="color:var(--hi)">不再显示网页</b>，改由我们的播放器直接播嗅探地址
+        （= 把浮窗放大到满屏 + 开声音 + 高码率档）；网页退居幕后只交地址。
+        <b style="color:var(--hi)">广告跳转/点击乱跳一次全消</b>，点画面弹统一玻璃控制条
+        （暂停 / ±10 / 全屏）。复用浮窗已趟平的全套：挑档、预热、指挥官交接。
+      </div>
+      <div style="font-size:11.5px;color:var(--amber);margin-top:7px">
+        代价：弹幕/选集/清晰度切换等站内功能看不见（换片走本方案的「换片」入口）；
+        DRM 站自动回退网页画面。落地三步可回退：①自播开关+失败回退 → ②玻璃控制条
+        → ③指挥官切本地。
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════ 方案三 ═══════ -->
+<section class="plan">
+  <div class="plan-head"><h2>方案三 · 功能坞网格</h2><span class="badge b3">换法 · 操作效率</span></div>
+  <p class="plan-sub">
+    <b>（公共前提已含：面板贴内容 + 视频吃剩余，下同）</b> 在此之上，把 dock 从「一行三颗」
+    升级为 <b>2×3 玻璃网格</b>：传输键保持居中，全部操作（收厅 / 分享屏幕 / 后退 / 浮窗 /
+    换片 / 邀请）整整齐齐铺进空白区，每格 58dp 高、图标+文字 ——
+    <b>触控目标最大、所有入口一屏可见</b>。面板最高 ⇒ 视频维持 ≈310dp，空白同样为 0。
+  </p>
+  <div class="tagline">把它当「遥控器」：每个键都该又大又全，不用翻页不用切模式。</div>
+  <div class="frames">
+    <div class="fcol">
+      <div class="phone">
+        <div class="vid"></div>
+        <div class="deck">
+          <div class="trow"><div class="title">test-streams.mux.dev</div>
+            <span class="pill">对方可控制</span></div>
+          <div class="track"></div>
+          <div class="tmeta"><span class="time">0:34 / 10:34</span>
+            <span class="pill">正在放映</span><span class="pill gray">复制邀请</span></div>
+          <div class="trans">
+            <div class="cbtn">-10</div><div class="cbtn big">❚❚</div><div class="cbtn">+10</div>
+          </div>
+          <!-- ★ 新增区 -->
+          <div class="grid">
+            <div class="gcell hot"><span class="ic">⊘</span><span class="lb">收厅</span></div>
+            <div class="gcell"><span class="ic">▣</span><span class="lb">分享屏幕</span></div>
+            <div class="gcell"><span class="ic">↩</span><span class="lb">后退</span></div>
+            <div class="gcell"><span class="ic">▭</span><span class="lb">浮窗</span></div>
+            <div class="gcell"><span class="ic">⇅</span><span class="lb">换片</span></div>
+            <div class="gcell"><span class="ic">✉</span><span class="lb">邀请</span></div>
+          </div>
+          <div class="meta"><span>直连 86ms</span><span>30 fps</span><span>2.0 Mbps</span></div>
+        </div>
+      </div>
+      <div class="fcap">方案三 · 空白变遥控器</div>
+    </div>
+    <div class="pros">
+      <p><b>✓ 优点</b>：所有入口一屏、触控目标最大（老人机/边看边按最舒服）；
+      空白被结构性用掉，视觉有秩序；六个入口都在放映态可达。</p>
+      <p style="margin-top:8px"><i>△ 取舍</i>：卡片最高、视频区不增反微减；
+      「收厅」这类破坏性动作与常用键同格排布 —— 需要沿用二次确认兜底（已有）。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════ 对比 ═══════ -->
+<section class="plan">
+  <div class="plan-head"><h2>三案对比</h2></div>
+  <table>
+    <tr><th>维度</th><th>方案一 紧凑收窄</th><th>方案二 放映仪表</th><th>方案三 功能坞网格</th></tr>
+    <tr><td><b>取向</b></td><td>看片（画面最大）</td><td>知情（状态可见）</td><td>操作（入口最大）</td></tr>
+    <tr><td><b>视频区（总量恒定下的此消彼长）</b></td>
+        <td class="ok">300 → ≈390dp（+90）</td>
+        <td>300 → ≈340dp（+40）</td>
+        <td>300 → ≈310dp（+10）</td></tr>
+    <tr><td><b>面板空白</b></td>
+        <td class="ok">恒为 0（公共前提）</td>
+        <td class="ok">恒为 0（公共前提）</td>
+        <td class="ok">恒为 0（公共前提）</td></tr>
+    <tr><td><b>放映态新入口</b></td><td class="warn">不补</td><td class="ok">浮窗/换片/邀请/画质</td><td class="ok">浮窗/换片/邀请</td></tr>
+    <tr><td><b>对方状态</b></td><td>同现状（灰字）</td><td class="ok">大状态条</td><td>同现状</td></tr>
+    <tr><td><b>触控目标</b></td><td>维持现状</td><td>中（工具 52dp）</td><td class="ok">最大（网格 58dp）</td></tr>
+    <tr><td><b>改动量</b></td><td class="ok">小（布局约束）</td><td>中（两块新组件）</td><td>中（重排 + 六格）</td></tr>
+    <tr><td><b>风险</b></td><td>无新功能风险</td><td>信息过载可能</td><td>误触靠二次确认兜底</td></tr>
+  </table>
+  <p class="lead" style="margin-top:14px">
+    三案可<b>组合</b>：常见搭配是 <b>一 + 二</b>（先收窄拿回视频高度，再用多出来的高度放状态条和工具行，
+    卡片仍比现状矮）；或者 <b>一 + 三</b>（收窄 + 网格，介于两者之间）。
+  </p>
+</section>
+
+<footer>
+  <b>下一步</b>：你在浏览器里点开这个页面，挑一个方案（或说「一+二组合」这类搭配），
+  我按选定形态先改代码 → 编译装机 → 截图回贴给你对照，确认无误才算完。
+  现有功能（进度/传输键/收厅二次确认/元数据/note）任何一案都完整保留。
+</footer>
+
+</div>
+</body>
+</html>

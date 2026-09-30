@@ -707,6 +707,8 @@ fun QualitySettingsScreen(
                 // 用无 key 的 remember 会在读盘完成后残留默认值（本该空着的自定义格里写着 30），
                 // 看着像用户自己设过自定义档。预设档一律把格子清空。
                 var fpsFocused by remember { mutableStateOf(false) }
+                // 聚焦瞬间是否有文本：区分「真清空」与「预设档本来就空」
+                var fpsHadText by remember { mutableStateOf(false) }
                 var fpsText by remember {
                     mutableStateOf(
                         if (quality.fps in ShareQuality.FPSES) "" else quality.fps.toString()
@@ -737,14 +739,21 @@ fun QualitySettingsScreen(
                         onFocusChange = { focused ->
                             if (focused) {
                                 fpsFocused = true
-                            } else {
-                                // onFocusChanged 在首次组合时也会回调 false，所以整段必须幂等。
+                                fpsHadText = fpsText.isNotEmpty()
+                            } else if (fpsFocused) {
+                                fpsFocused = false
+                                // 两层防误伤（2026-09-30 实测 bug：改 60 帧重进被改回 30）：
+                                // ① 首次组合会回调一次 focus=false —— 没聚焦过就不算失焦，不处理；
+                                // ② "空=回默认"只在**聚焦时有文本、走时空了**时成立 ——
+                                //    预设档输入框本来就是空的（靠分段高亮显示），绝不能判成"被清空"。
                                 val n = fpsText.toIntOrNull()
                                     ?.coerceIn(ShareQuality.FPS_MIN, ShareQuality.FPS_MAX)
                                 if (n == null) {
-                                    // 清空 = 回默认档：不留"格子空着、旧值还照常生效"的分裂态
-                                    val def = ShareQuality().fps
-                                    if (quality.fps != def) onChange(quality.copy(fps = def))
+                                    // 真·清空（进来时有文本、走时空了）才回默认
+                                    if (fpsHadText) {
+                                        val def = ShareQuality().fps
+                                        if (quality.fps != def) onChange(quality.copy(fps = def))
+                                    }
                                 } else if (n != quality.fps) {
                                     onChange(quality.copy(fps = n))
                                 }
@@ -764,6 +773,8 @@ fun QualitySettingsScreen(
                 SectionTitle("码率上限")
                 val bpsToText = { bps: Int -> String.format(Locale.US, "%.1f", bps / 1_000_000f) }
                 var bpsFocused by remember { mutableStateOf(false) }
+                // 聚焦瞬间是否有文本：区分「真清空」与「预设档本来就空」
+                var bpsHadText by remember { mutableStateOf(false) }
                 var bpsText by remember {
                     mutableStateOf(
                         if (quality.maxVideoBps in ShareQuality.BPS_LIST) ""
@@ -795,14 +806,22 @@ fun QualitySettingsScreen(
                         onFocusChange = { focused ->
                             if (focused) {
                                 bpsFocused = true
-                            } else {
+                                bpsHadText = bpsText.isNotEmpty()
+                            } else if (bpsFocused) {
+                                bpsFocused = false
+                                // 两层防误伤（2026-09-30 bug：改 8M 重进被改回 2M，
+                                // 调用栈抓到 onChange(默认) 来自首次组合的假 focus=false）——同帧率段。
                                 val bps = bpsText.toFloatOrNull()
                                     ?.let { (it * 1_000_000).toInt() }
                                     ?.coerceIn(ShareQuality.BPS_MIN, ShareQuality.BPS_MAX)
                                 if (bps == null) {
-                                    // 清空 = 回默认档（同帧率那格）
-                                    val def = ShareQuality().maxVideoBps
-                                    if (quality.maxVideoBps != def) onChange(quality.copy(maxVideoBps = def))
+                                    // 真·清空（进来时有文本、走时空了）才回默认
+                                    if (bpsHadText) {
+                                        val def = ShareQuality().maxVideoBps
+                                        if (quality.maxVideoBps != def) {
+                                            onChange(quality.copy(maxVideoBps = def))
+                                        }
+                                    }
                                 } else if (bps != quality.maxVideoBps) {
                                     onChange(quality.copy(maxVideoBps = bps))
                                 }
