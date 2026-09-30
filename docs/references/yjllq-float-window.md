@@ -221,3 +221,45 @@ url_8=fhd / url_6=hq(480p) / url_0=hd）。
 
 ### 结果
 挑档成功 → 首帧 **+3048ms**（原 10.2s，快 3.4 倍）；窗口含占位即出。
+
+---
+
+## 11. 「雨见形态」重构 —— 预热 1×1 常驻窗，SHOW 37ms 秒开（2026-09-30，提交 be02b23）
+
+用户："悬浮窗还是有点慢，去看看雨见怎么做的（之前逆向分析过）。"
+
+### §2 的关键事实落到实现上
+雨见"嗅探到就弹窗"= 加载与页面播放**并行**；我们按 HOME 才起窗 = 全段等待在关键路径。
+结论：**让浮窗对象常驻**，把等待挪到放映时段。
+
+### 三个死胡同（都有打点实锤，别回头）
+| 方案 | 结果 | 根因 |
+|---|---|---|
+| 预热 playWhenReady=false 不绑画面 | 首帧仍 3.1s | 不播不喂缓冲，seek 目标片现下 |
+| 静音预播 + `playWhenReady=false` | 仍 2.6s | ExoPlayer 到 READY 只备 0.5s 缓冲就停 |
+| 静音预播 + 裸 `SurfaceTexture(false)` | **DECODING_FAILED → 静默 STATE_IDLE** | 离屏 Surface 没人消费 → MediaCodec 输出队列装满 → 播放器死；早期无错误监听，错误被吞（诊断：预热完成 state=2 → 3s 正常 → 随后失败） |
+
+### 现行架构（雨见同款）
+```
+放映中：FloatPlayer.prewarm → 服务建 1×1 透明窗 + 静音真播（真 TextureView）
+        + 跟随页面进度 reseek（3s/2.5s 节流）→ 缓冲喂到 100s 满
+HOME  ：FloatPlayer.show → updateViewLayout 放大（37ms）→ volume=1 → active 点亮
+        → FLOAT handoff 立即完成（进度无缝）
+退出放映/收厅/离屏：stop（幂等守卫 + startToken 作废机制照旧）
+冷路径（没预热可接时）不变：挑档 → buildConfigured → activate
+```
+- **解码永不憋死**：画面从头就流进真实 TextureView，系统天然消费。
+- **不换 surface、不切播放器**：SHOW 只改窗口尺寸 —— 这是 37ms 的来源。
+- 所有权：播放器从头到尾归服务单一持有（Warm/take/dummy 中转整套已删，架构更简单）。
+
+### 打点（长期保留）
+- `mark()`：+0ms 起各段耗时（SHOW/拉起/接预热/起播/首帧/READY/挑档）
+- 每秒 `STATE state= playWhenReady= pos= buf= size=` —— 解码失败这类无声故障靠它 3 秒定位
+- AnalyticsListener：LOAD 开始/完成（dataType/耗时/字节/uri）、清单就位
+
+### 结果
+| 阶段 | HOME → 画面可见 |
+|---|---|
+| 最初 | 10.2s |
+| 挑档+降载（§10） | 3.0s |
+| **雨见形态（§11）** | **~0.04s（SHOW 37ms，画面早在播）** |
