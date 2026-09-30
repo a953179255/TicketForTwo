@@ -100,6 +100,16 @@ import kotlinx.coroutines.withContext
  */
 private val theaterMode = androidx.compose.runtime.mutableStateOf(false)
 
+/* 当前页地址与地址栏输入 —— **进程级**（2026-10-01 真机实测定案）：
+ * HaoMirror 这类 scrcpy 式投屏在手机上建虚拟显示器，连接/断开（display removed）
+ * 会触发一次界面重建 —— 普通 remember 的 pageUrl 丢成空串：WebView 不再挂载
+ * （画面黑掉）、放映 tab 显示"还没选片"，而 theater 是进程级还活着，甲板
+ * "正在放映 0:11" 照样画 —— 两句自相矛盾的话同屏。theater 早就进程级了，
+ * pageUrl 跟上；WebView 是进程级单例，重建后重新挂回同一实例、loadedUrl 相同
+ * 不重载，页面和进度都不丢。 */
+private val cinemaPageUrl = androidx.compose.runtime.mutableStateOf("")
+private val cinemaInputUrl = androidx.compose.runtime.mutableStateOf("")
+
 
 /**
  * 等多久就算"对方没给回执"。
@@ -152,8 +162,16 @@ fun CinemaScreen(
        彩条测试页 —— 正式 App 里用户第一眼看到的是工程测试卡（2026-09-29 用户反馈）。
        现在没页就是没页：一行快捷芯片（粘贴/上次/收藏夹）+ 深色待放屏（方案A），
        WebView 什么都不加载。 */
-    var pageUrl by remember { mutableStateOf(initialUrl?.takeIf { it.isNotBlank() } ?: "") }
-    var inputUrl by remember { mutableStateOf(pageUrl) }
+    var pageUrl by cinemaPageUrl
+    var inputUrl by cinemaInputUrl
+    /* 深链/递链接进来的地址：进程级状态不能只在组合时取一次初值 —— 重进厅带新链接
+       （initialUrl 变了）要覆盖，同一进程里旧场的地址不许冒充这一场的。 */
+    LaunchedEffect(initialUrl) {
+        if (!initialUrl.isNullOrBlank() && initialUrl != pageUrl) {
+            inputUrl = initialUrl
+            pageUrl = initialUrl
+        }
+    }
     /**
      * 同一地址重复点「打开」= 真刷新。pageUrl 是加载 effect 的 key，值不变 effect
      * 不重跑 —— 页内跳走后想"回到这条链接"点了没反应（同 MainActivity「同一条链接
@@ -199,6 +217,10 @@ fun CinemaScreen(
         } else if (sawLiveSession) {
             sawLiveSession = false
             CinemaBrowser.destroy()
+            /* pageUrl 已是进程级（投屏断开重建也不丢）—— 散场必须显式清账，
+               不然下一场厅一进来就"自动弹回"上一场的页面。 */
+            cinemaPageUrl.value = ""
+            cinemaInputUrl.value = ""
         }
     }
     /** 现在到底有没有在投屏 —— 决定"分享我的屏幕"这颗入口还画不画。 */
