@@ -269,12 +269,18 @@ object CallSession {
         if (!SignalHub.viewerConnected.value) return
 
         val st = _cinema.value
-        val json = JSONObject().apply {
-            put("t", "cinema")
-            // 收厅要能传达：没有状态时发一条空 f，观众端据此退回"厅里还没片"
-            put("f", st?.let { CinemaSync.fields(it, _viewerMayControl.value) } ?: "")
+        Log.i(TAG, "BROADCAST pos=" + (st?.posMs ?: -1) + " dur=" + (st?.durMs ?: -1) +
+            " urlEmpty=" + (st?.track?.url?.isEmpty() ?: true))
+        try {
+            val json = JSONObject().apply {
+                put("t", "cinema")
+                put("f", st?.let { CinemaSync.fields(it, _viewerMayControl.value) } ?: "")
+            }
+            val sent = SignalHub.sendToViewer(json.toString())
+            Log.i(TAG, "BROADCAST sent=" + sent + " len=" + json.toString().length)
+        } catch (t: Throwable) {
+            Log.e(TAG, "BROADCAST 组装/发送失败", t)
         }
-        SignalHub.sendToViewer(json.toString())
     }
 
     /** 收到观众的放映请求。权限判定放在收消息这一侧，不给 UI 留"忘了判"的机会。 */

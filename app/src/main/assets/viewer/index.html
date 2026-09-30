@@ -265,7 +265,8 @@ body.cineB #topBar,body.cineB #ctlBar,body.cineB #cineBar{display:none!important
         <span class="btag"><i class="bdot"></i>直连</span>
         <span class="btag" id="bState">同步放映中</span>
       </div>
-      <div class="bsub">房主在放映厅选的片 · 本地播同一条源，画质原生</div>
+      <!-- 转播态（B 档）不是"本地播同一条源"，那句会在 onCinema 里换掉 -->
+      <div class="bsub" id="bSub">房主在放映厅选的片 · 本地播同一条源，画质原生</div>
     </div>
     <div class="bcard">
       <div class="btimebox">
@@ -348,8 +349,9 @@ let closedByUs = false;
 const KEY = new URLSearchParams(location.search).get('k') || '';
 
 function escapeHtml(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+let panelIsGesture = false;
 function show(html){ $('cardBody').innerHTML = html; $('panel').classList.remove('hide'); }
-function hidePanel(){ $('panel').classList.add('hide'); }
+function hidePanel(){ $('panel').classList.add('hide'); panelIsGesture = false; }
 function bars(n, color){
   let s = '<span class="meter">';
   for (let i = 0; i < 4; i++) s += `<i style="height:${4+i*3}px;background:${i<n?color:'rgba(255,255,255,.22)'}"></i>`;
@@ -436,7 +438,7 @@ function onMessage(text){
   else if (m.t === 'cand') addRemoteCandidate(m);
   else if (m.t === 'bye') { closedByUs = true; reportEnded('房主结束了分享'); }
   else if (m.t === 'watch') onWatch(m.f);
-  else if (m.t === 'cinema') onCinema(m.f);
+  else if (m.t === 'cinema') { console.log('WS cinema fLen=' + (m.f ? m.f.length : 'null')); onCinema(m.f); }
 }
 
 // ---- 建立直连 ---------------------------------------------------------
@@ -472,12 +474,16 @@ async function startPeer(offerSdp){
     if (bg && bg.srcObject !== s) { bg.srcObject = s; bg.play().catch(() => {}); }
     if (ev.track.kind === 'video') {
       gotVideo = true;
-      // B 方案（我播他看）：本地不起播、回执改由**轨到达**触发 —— 房主那边的状态条
-      // 才不会一直卡在"等对方那边出画面"
-      if (cine && !cine.url) cineAck(true, 'ok', '转发画面已到', cine.ver);
+      // B 方案的回执挂**真播起来**（video.play() 成功）而不是轨到达 ——
+      // 轨到 ≠ 有帧（autoplay 被拦、帧没到都算），ontrack 就发 ok 是假绿灯
+      //（2026-10-01 双端实测：状态条"已播起来"但观众实际黑屏）。
       if (voiceTimer) { clearTimeout(voiceTimer); voiceTimer = null; }
-      video.play().catch(() => { askToPlay(); });
-      hidePanel();
+      // 转播态（B 档）：真播起来才发"转发画面已到"；被拦 → 弹手势卡（不 hide）
+      const relayedNow = cine && !cine.url;
+      video.play().then(() => {
+        if (relayedNow) cineAck(true, 'ok', '转发画面已到', cine.ver);
+        hidePanel();
+      }).catch(() => { askToPlay(); });
       $('topBar').classList.remove('hide');
       $('ctlBar').classList.remove('hide');
       $('topRight').textContent = '画面已到';
@@ -506,7 +512,8 @@ async function startPeer(offerSdp){
     }
     if (s === 'disconnected') $('topRight').textContent = '连接抖动，正在自愈';
     if (s === 'connected') {
-      hidePanel();
+      // 手势卡在场时不收（它要等人点"开始播放"）；收的只是"连不上"那类错误卡
+      if (!panelIsGesture) hidePanel();
       if (!voiceTimer) voiceTimer = setTimeout(enterVoiceModeIfNeeded, 2500);
     }
   };
@@ -662,10 +669,21 @@ function askCinePlay(){
 
 /** 自动播放被浏览器拦下时的兜底入口（有声播放必须有用户手势）。 */
 function askToPlay(title, body){
+  panelIsGesture = true;   // 手势卡不许被"连上了"之类的常规收卡顺手关掉（2026-10-01 实测：弹一下即逝 → 观众黑屏）
   show(`<h1>${escapeHtml(title || '画面已到')}</h1>
     <p class="muted">${escapeHtml(body || '浏览器的自动播放被拦住了，点一下开始。')}</p>
     <button class="primary" id="btnListen">开始播放</button>`);
-  $('btnListen').onclick = () => video.play().then(hidePanel).catch(()=>{});
+  /* 点了之后**必须补一条回执**。
+     原来这里只有 `video.play().then(hidePanel)`，而回执只挂在 ontrack 那一支
+     `play().then` 上 —— 手机浏览器几乎必然先拦一次自动播放（画面里带声音时必拦），
+     于是走了 ontrack 的 catch（弹卡），人点完按钮画面虽然出来了，回执却永远不发
+     → 房主那边一直挂"等对方那边出画面…"（2026-10-01 双端实测：主机日志里
+     CINEMA_ACK 一行都没有，而观众其实已经在看了）。 */
+  $('btnListen').onclick = () => video.play().then(() => {
+    // 转播态（B 档）：画面是房主转过来的，出画面就等于"放映成功"，按当前版本回执
+    if (cine && !cine.url) cineAck(true, 'ok', '转发画面已到', cine.ver);
+    hidePanel();
+  }).catch(()=>{});
 }
 
 /**
@@ -935,6 +953,7 @@ function cineNote(msg) {
 }
 
 function onCinema(f) {
+  console.log('onCinema fLen=' + (f ? f.length : 'null'));
   if (!f) { cineDown('对方收了厅', false, 'closed'); return; }
   const p = String(f).split('|');
   if (p.length < 10) return;
@@ -942,7 +961,12 @@ function onCinema(f) {
     ver: +p[0], url: p[1], kind: p[2], title: p[3], pos: +p[4], dur: +p[5],
     playing: p[6] === '1', rate: +p[7] || 1, hostWall: +p[8], allow: p[9] === '1',
   };
+  // 必须在**任何使用之前**声明：原实现把它放在 topRight 赋值的下一行（TDZ），
+  // 每包都抛 ReferenceError 中断整个处理 → paintCine/起播分支全不执行 ——
+  // 观众进度永远 0:00、转播分支从未真正跑过（2026-10-01 双端实测定案）
+  const relayed = !st.url;
   // 空地址 = B 方案「我播他看」（房主直接转画面），不是坏地址 —— 放行走转播分支
+  console.log('CINE rec ver=' + st.ver + ' urlLen=' + st.url.length + ' pos=' + st.pos + ' dur=' + st.dur);
   if (st.url && !/^https?:\/\//i.test(st.url)) { cineDown('这条地址不能直接播', true, 'badurl', st.ver); return; }
   if (cine && st.ver < cine.ver) return;   // 乱序到达的旧状态：丢掉，别把进度倒回去
   const switched = !cine || cine.url !== st.url;
@@ -957,7 +981,11 @@ function onCinema(f) {
   /* 顶栏那句"语音已通"是等候期的话；开始放映之后它还挂着，
      观众会以为仍然没画面。状态换了，措辞也要跟着换。 */
   $('topRight').textContent = relayed ? '画面正直接转过来…' : '同步放映中';
-  const relayed = !st.url;
+  // 两种模式的画质来源不一样，那行小字要跟着换：转播态说"本地播同一条源"是假的
+  const bsub = document.getElementById('bSub');
+  if (bsub) bsub.textContent = relayed
+    ? '房主把画面直接转过来 · 画质由分享设置决定'
+    : '房主在放映厅选的片 · 本地播同一条源，画质原生';
   if (switched) { if (relayed) stopLocalPlayer(); else loadLocal(st); }
   else if (!relayed) syncLocal();
   /* 同 URL 换版本（房主中途把同一条重递一次）：switched=false 不走 loadLocal，
@@ -967,6 +995,14 @@ function onCinema(f) {
   if (!switched && st.ver !== prevVer && lv.videoWidth) {
     cineAck(true, 'ok', lv.videoWidth + 'x' + lv.videoHeight, st.ver);
   }
+  /* 转播态的补发：**画面已经在播**就按当前版本回一条。
+     ontrack 那一支只在"第一次 play() 就成功"时才发回执 —— 而它有可能比首条广播
+     先到（那时 cine 还是 null，relayedNow 算出来是 false），之后就再没人发过了。
+     去重在 cineAck 里（同一版本只回一次 ok），所以这里每次广播都调是无害的。 */
+  if (relayed && gotVideo && video.videoWidth && !video.paused) {
+    cineAck(true, 'ok', '转发画面已到', st.ver);
+  }
+  console.log('CINE apply relayed=' + relayed + ' pos=' + st.pos);
   paintCine();
 }
 
@@ -1162,6 +1198,20 @@ function syncLocal() {
   paintCine(drift);
 }
 
+/* 转播态（B 档）的"现在播到哪了"。
+ * 这种模式下本地播放器压根没在放（画面走 WebRTC 那条轨），`lv.currentTime` 恒为 0，
+ * 只能投房主广播过来的那条轴：他报的位置 + 消息在路上花掉的时间。
+ * 对钟复用 syncLocal 同一套（取历史最小 到达−发出），两台手机的时钟差因此不会
+ * 被全额算进 age（2026-10-01 双端实测：不投影的话观众进度永远 0:00）。 */
+function relayedPosMs(){
+  const now = Date.now();
+  const skewSample = now - cine.hostWall;
+  cineSkew = cineSkew === null ? skewSample : Math.min(cineSkew, skewSample);
+  const age = Math.max(0, now - cine.hostWall - cineSkew);
+  const raw = cine.playing ? cine.pos + age * (cine.rate || 1) : cine.pos;
+  return cine.dur > 0 ? Math.min(cine.dur, raw) : raw;
+}
+
 function paintCine(drift) {
   if (!cine) return;
   document.getElementById('cTitle').textContent = cine.title || '同步放映';
@@ -1172,13 +1222,16 @@ function paintCine(drift) {
      读起来像"不能按" —— 一个能力被自己的样式藏起来了。 */
   perm.className = 'chip' + (cine.allow ? ' ok' : '');
   document.getElementById('cPlay').textContent = cine.playing ? '❚❚' : '▶';
-  // 进度轨：宽度 = 本地真实进度；没权限时轨道压暗，和 wbtn:disabled 同一语言
+  // 进度轨：转播态（B 档）投房主那条轴，本地播才读 lv —— 否则转播时进度永远停在 0
+  const relayed = !cine.url;
+  const ready = relayed ? (gotVideo && video.videoWidth > 0) : cineReady;
+  const curMs = relayed ? relayedPosMs() : lv.currentTime * 1000;
+  const durMs = cine.dur || (lv.duration || 0) * 1000;
   const fill = document.getElementById('cTrackFill');
   const track = document.getElementById('cTrack');
   if (fill) {
-    const dur = cine.dur || (lv.duration || 0) * 1000;
-    const cur = cineReady ? lv.currentTime * 1000 : 0;
-    fill.style.width = (dur > 0 ? Math.min(100, Math.max(0, cur / dur * 100)) : 0) + '%';
+    const cur = ready ? curMs : 0;
+    fill.style.width = (durMs > 0 ? Math.min(100, Math.max(0, cur / durMs * 100)) : 0) + '%';
   }
   if (track) track.style.opacity = cine.allow ? '1' : '.4';
   // 没权限时三颗键置灰 —— 之前只压暗轨道、键永远可点，点了才被静默吞（审查 A2-3）
@@ -1188,11 +1241,13 @@ function paintCine(drift) {
   });
   /* 没出画面之前不报时间：显示一个"0:00 / 10:34"会让人以为进度坏了，
      其实只是还没接上；Δ 也一样 —— 没同步过时它是个几千毫秒的假数字。 */
-  document.getElementById('cTime').textContent = cineReady
-    ? fmtMs(lv.currentTime * 1000) + ' / ' + fmtMs(cine.dur || (lv.duration || 0) * 1000)
+  document.getElementById('cTime').textContent = ready
+    ? fmtMs(curMs) + ' / ' + fmtMs(durMs)
     : '正在接上这条片源…';
   const d = document.getElementById('cDrift');
-  if (!cineReady) d.textContent = '';
+  /* 转播态没有本地时间轴可比（画面不是本地播放器放的），Δ 凑出来是个假数字 ——
+     宁可留空，也别让观众对着一个"同步中/Δ 3000ms"去怀疑同步坏了。 */
+  if (!ready || relayed) d.textContent = '';
   else if (typeof drift !== 'number' || Math.abs(drift) > 5000) d.textContent = '同步中';
   else d.textContent = 'Δ' + Math.round(drift) + 'ms';
   lvBadge.innerHTML = '本地播放 · <b>' +
@@ -1239,7 +1294,12 @@ function paintBCine() {
   const m = /(\d+)\s*ms/.exec(d);
   $id('bLat').textContent = m ? m[1] + 'ms' : '—';
   $id('bFps').textContent = $id('sFps').textContent;
-  $id('bRes').textContent = (($id('lvRes') || {}).textContent || '—');
+  /* 转播态下 lvRes 永远"—"（本地播放器根本没在放），而画面是 WebRTC 那条轨出来的 ——
+     分辨率要从它身上读，不然"本地画质"那一格空着，看着像画面没起来。 */
+  const resEl = $id('lvRes');
+  $id('bRes').textContent = (!cine.url && video.videoWidth)
+    ? video.videoWidth + '×' + video.videoHeight
+    : ((resEl && resEl.textContent) || '—');
   $id('bMic').classList.toggle('on', micOn);
 }
 
