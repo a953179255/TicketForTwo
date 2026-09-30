@@ -677,10 +677,10 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     fun startScreenShare() {
         showShareKind = false
         if (!quality.videoEnabled) {
-            val q = quality.copy(voiceMode = VoiceMode.VideoOnly)
+            val q = quality.copy(voiceMode = VoiceMode.VideoPlusCall)
             quality = q
             scope.launch(Dispatchers.IO) { ShareQuality.save(context, q) }
-            context.toast("「只连麦」不传画面：已改成「只有视频声」")
+            context.toast("「只连麦」不传画面：已改成「视频声 + 连麦」")
         }
         showConsent = true
     }

@@ -881,27 +881,28 @@ fun QualitySettingsScreen(
         SectionTitle("声音与画面")
         GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
             Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp2)) {
+                /* 「只有视频声」已下线（2026-10-01 用户拍板）：B 方案落地后画面声全靠
+                   麦克风传，这档等于让对方看默片 —— 枚举保留但不再出现在选择里，
+                   读盘侧 normalizeVoice 把存量档位归一到「视频声+连麦」。 */
+                val voiceOptions = listOf(VoiceMode.VideoPlusCall, VoiceMode.CallOnly)
                 SegmentRow(
-                    options = VoiceMode.entries.map { VoiceMode.label(it) },
-                    selected = VoiceMode.entries.indexOf(quality.voiceMode),
-                ) { onChange(quality.copy(voiceMode = VoiceMode.entries[it])) }
+                    options = voiceOptions.map { VoiceMode.label(it) },
+                    selected = voiceOptions.indexOf(
+                        if (quality.voiceMode == VoiceMode.CallOnly) VoiceMode.CallOnly
+                        else VoiceMode.VideoPlusCall
+                    ),
+                ) { onChange(quality.copy(voiceMode = voiceOptions[it])) }
                 Text(
                     when (quality.voiceMode) {
-                        /* 每一档都要说清"声音从哪儿来"，因为这三条路的物理来源不一样
+                        /* 每一档都要说清"声音从哪儿来"，因为这几条路的物理来源不一样
                            （2026-10-01 改版：默认已是「视频声+连麦」、麦默认关）。 */
-                        VoiceMode.VideoOnly ->
-                            "隐私档：不收音、不说话。\n" +
-                                "· 放映厅里对方自己听原声就行，用不上你的麦克风\n" +
-                                "· 屏幕分享 / 我播他看时，画面的声音要靠你的麦克风 —— " +
-                                "这档得手动开麦，否则对方只看没声"
-                        VoiceMode.VideoPlusCall ->
-                            "默认档。能听对方、随时能说 —— 麦克风默认关着，" +
-                                "想说话在放映厅点麦克风按钮即可。\n" +
-                                "· 放映厅：对方听他自己的原生画面声，和你的麦无关\n" +
-                                "· 屏幕分享 / 我播他看：画面声靠你的麦 —— 一开就自动帮你开麦\n" +
-                                "· 放映中开麦会和对方那份原声叠成回声，说完再点一下关掉"
                         VoiceMode.CallOnly ->
                             "不弹投屏授权，几乎不耗流量（约 0.3 MB/分钟），适合纯连麦；进来麦就是开的。"
+                        else ->
+                            "默认档。能听对方、随时能说 —— 麦克风默认关着，" +
+                                "想说话在放映厅点麦克风按钮即可。\n" +
+                                "· 屏幕分享 / 我播他看：画面声靠你的麦 —— 一开就自动帮你开麦\n" +
+                                "· 放映中开麦会和对方那份原声叠成回声，说完再点一下关掉"
                     },
                     fontSize = 11.5.sp,
                     color = Ink.TextMid,

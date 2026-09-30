@@ -364,17 +364,29 @@ internal const val PIN_VIDEO_JS =
         }
         if(v.dataset.t2saved===undefined) v.dataset.t2saved=v.style.cssText;
         var vw=window.innerWidth||372, vh=window.innerHeight||0;
+        /* **不能只靠 object-fit:contain**：Android WebView 的 video 走硬件合成时
+           object-fit 会被无视（实测 16:9 片源被拉进 1080x935 的盒子，人全是扁的，
+           2026-10-01 用户反馈"视频比例被拉伸"）。改为按视频真实宽高比**手工算
+           contain 盒**：宽贴视口、高按比例，超高就反过来贴高；再居中放置。
+           视频比例拿不到（metadata 未到）先按 16:9 兜底，探针 2 秒后会带着真实
+           比例重算。object-fit:contain 留着不碍事（支持的内核上等价）。 */
+        var ratio=(v.videoWidth&&v.videoHeight)?(v.videoWidth/v.videoHeight):(16/9);
+        if(!isFinite(ratio)||ratio<=0) ratio=16/9;
+        var w=vw, h=vw/ratio;
+        if(vh>0&&h>vh){ h=vh; w=vh*ratio; }
         v.style.setProperty('position','fixed','important');
-        v.style.setProperty('left','0px','important');
-        v.style.setProperty('top','0px','important');
-        v.style.setProperty('width',vw+'px','important');
-        v.style.setProperty('height',(vh>0?vh:300)+'px','important');
+        v.style.setProperty('left',Math.max(0,(vw-w)/2)+'px','important');
+        v.style.setProperty('top',Math.max(0,(vh-h)/2)+'px','important');
+        v.style.setProperty('width',w+'px','important');
+        v.style.setProperty('height',h+'px','important');
         v.style.setProperty('display','block','important');
         v.style.setProperty('object-fit','contain','important');
         v.style.setProperty('background','#000','important');
         v.style.setProperty('z-index','2147483647','important');
         var r=v.getBoundingClientRect();
-        return 'fix|vp='+vw+'x'+vh+'|rect='+[Math.round(r.top),Math.round(r.width),Math.round(r.height)].join(',');
+        return 'fix|vp='+vw+'x'+vh+'|ar='+ratio.toFixed(3)+
+          '|box='+Math.round(w)+'x'+Math.round(h)+
+          '|rect='+[Math.round(r.top),Math.round(r.width),Math.round(r.height)].join(',');
       }
       window.__t2pin=pinNow;
       /* 视口一变**当场**重钉：点「开始放映」时布局从浏览态切到300dp的画面框，

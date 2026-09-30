@@ -161,19 +161,25 @@ data class ShareQuality(
          * 「只有视频声」会被尊重（隐私档保留）。
          */
         private fun migrateVoiceOnce(sp: android.content.SharedPreferences): VoiceMode {
-            val vm = voiceModeOf(sp)
+            val vm = normalizeVoice(voiceModeOf(sp))
             if (sp.getBoolean(K_VOICE_MIGRATED, false)) return vm
-            if (vm == VoiceMode.VideoOnly) {
+            if (vm != voiceModeOf(sp)) {
                 // **必须回写**：只升级内存不写盘，下次启动 load 又读回旧值 = 白迁（实测踩过）
                 sp.edit()
-                    .putString(K_VOICE, VoiceMode.VideoPlusCall.name)
+                    .putString(K_VOICE, vm.name)
                     .putBoolean(K_VOICE_MIGRATED, true)
                     .apply()
-                return VoiceMode.VideoPlusCall
+                return vm
             }
             sp.edit().putBoolean(K_VOICE_MIGRATED, true).apply()
             return vm
         }
+
+        /** 「只有视频声」已从设置页下线（2026-10-01 用户拍板：B 方案落地后这档没有
+         * 独立价值 —— 画面声类模式全靠麦克风传声，"不收音"意味着对方看默片）。
+         * 枚举保留（内部判据还有引用），读盘一律归一到「视频声+连麦」。 */
+        private fun normalizeVoice(vm: VoiceMode): VoiceMode =
+            if (vm == VoiceMode.VideoOnly) VoiceMode.VideoPlusCall else vm
 
         private fun voiceModeOf(sp: android.content.SharedPreferences): VoiceMode {
             sp.getString(K_VOICE, null)?.let { raw ->

@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -1361,7 +1362,13 @@ fun CinemaScreen(
     )
     }
 
-    Column(Modifier.fillMaxSize()) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            /* edge-to-edge 下底部卡片直接压到手势条上（2026-10-01 反馈）——
+               整个放映厅让开导航栏：浏览底卡与放映甲板一起收进来。 */
+            .navigationBarsPadding(),
+    ) {
         GlassPageBar(backdrop, title = "放映厅", onBack = onBack) {
             /* 放映模式下顶栏要挤下「放映|浏览」，状态句换短版 + 让位（weight），
                否则标题被挤到换行（真机截图实测：放映/厅 断成两行）。 */
@@ -1377,21 +1384,36 @@ fun CinemaScreen(
                 maxLines = 1,
                 modifier = Modifier.weight(1f),
             )
-            /* 放映/浏览 模式开关（方案B）：竖屏才有意义 —— 横屏保持原分栏布局。 */
-            if (!wide) {
-                Box(Modifier.width(6.dp))
-                ModeSeg(
-                    theater = theater,
-                    backdrop = backdrop,
-                    onTheater = { theater = true; pinVideo(true) },
-                    onBrowse = { theater = false; pinVideo(false) },
-                )
-            }
+            /* 放映/浏览 模式开关（方案B）：**横竖屏都显示** —— 原来横屏隐藏这颗开关，
+               而横屏布局又不认 theater 状态，于是"横过来就回到浏览界面"且无从切回
+               （2026-10-01 用户反馈）。配合下方横屏放映形态一起修。 */
+            Box(Modifier.width(6.dp))
+            ModeSeg(
+                theater = theater,
+                backdrop = backdrop,
+                onTheater = { theater = true; pinVideo(true) },
+                onBrowse = { theater = false; pinVideo(false) },
+            )
             /* 顶栏不再放「复制邀请」：竖屏浏览有底卡邀请行、放映模式有甲板时间行胶囊、
                横屏右栏也有 —— 顶栏那颗和地址下方那颗重复（2026-09-29 用户反馈）。 */
         }
 
         if (wide) {
+            /* 横屏放映形态（2026-10-01）：画面铺满整行（竖屏同款钉屏逻辑把 video
+               钉满 WebView 视口），控制交给网页播放器自己的控制条（轻点即出）；
+               浏览态仍是左右分栏。原来横屏不认 theater，切了开关界面纹丝不动。 */
+            if (theater && pageUrl.isNotEmpty()) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .padding(bottom = 6.dp),
+                ) {
+                    key(webGen) {
+                        AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
+                    }
+                }
+            } else {
             Row(Modifier.fillMaxWidth().weight(1f)) {
                 Box(
                     Modifier
@@ -1427,6 +1449,7 @@ fun CinemaScreen(
                     panel(Modifier.weight(1f, fill = false))
                 }
             }
+            } /* 横屏浏览分支结束 */
         } else {
             /* 竖屏的浏览/放映**共用同一个 WebView 节点** —— 分支里各挂一个的话，
                每次切换 AndroidView 都整棵 detach/reattach，Chromium 重挂黑闪一两帧、
@@ -1601,17 +1624,8 @@ fun CinemaScreen(
                             )
                         }
                     }
-                    if (theater && !inviteUrl.isNullOrBlank()) {
-                        Box(Modifier.width(6.dp))
-                        Box(
-                            Modifier.clip(RoundedCornerShape(9.dp))
-                                .background(Ink.Live.copy(alpha = 0.16f))
-                                .clickable(onClick = copyInvite)
-                                .padding(horizontal = 8.dp, vertical = 2.dp),
-                        ) {
-                            Text("复制邀请", fontSize = 11.sp, color = Ink.Live)
-                        }
-                    }
+                    /* 「复制邀请」胶囊已删（2026-10-01 用户反馈）：进度条下这颗和
+                       甲板四格里的「邀请」完全重复 —— 统一入口收进四格。 */
                 }
                 Box(Modifier.height(14.dp))
                 Row(
@@ -1688,7 +1702,13 @@ fun CinemaScreen(
                         if (float.active || float.prewarm) "收起浮窗" else "浮窗",
                         backdrop,
                         Modifier.weight(1f),
-                    ) { toggleFloat() }
+                    ) {
+                        /* 放映中点「浮窗」要先退出放映（画面还给网页）再起浮窗 ——
+                           否则浮窗刚起就被"放映时收浮窗"的规则立刻杀掉，
+                           用户看到的就是点了没反应（2026-10-01 反馈）。 */
+                        if (theater) { theater = false; pinVideo(false) }
+                        toggleFloat()
+                    }
                     DockBtn("换片", backdrop, Modifier.weight(1f)) { askPickList = true }
                     DockBtn("邀请", backdrop, Modifier.weight(1f)) { copyInvite() }
                     /* 麦键（2026-10-01 用户计划：放映厅点麦克风就能连麦）。
@@ -2017,14 +2037,9 @@ fun CinemaScreen(
                             color = Ink.TextHi,
                             modifier = Modifier.weight(1f),
                         )
-                        Text(
-                            "关闭",
-                            fontSize = 13.sp,
-                            color = Ink.TextMid,
-                            modifier = Modifier
-                                .clickable { showFavs = false }
-                                .padding(6.dp),
-                        )
+                        /* 原"关闭"是裸文本，浮在玻璃上没有按钮的样子（2026-10-01 反馈）；
+                           换成与「打开 / 删除」同一颗玻璃键。 */
+                        GlassTextButton("关闭", onClick = { showFavs = false }, backdrop)
                     }
                     Box(Modifier.height(8.dp))
                     if (favs.isEmpty()) {
