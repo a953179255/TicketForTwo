@@ -472,6 +472,9 @@ async function startPeer(offerSdp){
     if (bg && bg.srcObject !== s) { bg.srcObject = s; bg.play().catch(() => {}); }
     if (ev.track.kind === 'video') {
       gotVideo = true;
+      // B 方案（我播他看）：本地不起播、回执改由**轨到达**触发 —— 房主那边的状态条
+      // 才不会一直卡在"等对方那边出画面"
+      if (cine && !cine.url) cineAck(true, 'ok', '转发画面已到', cine.ver);
       if (voiceTimer) { clearTimeout(voiceTimer); voiceTimer = null; }
       video.play().catch(() => { askToPlay(); });
       hidePanel();
@@ -939,7 +942,8 @@ function onCinema(f) {
     ver: +p[0], url: p[1], kind: p[2], title: p[3], pos: +p[4], dur: +p[5],
     playing: p[6] === '1', rate: +p[7] || 1, hostWall: +p[8], allow: p[9] === '1',
   };
-  if (!/^https?:\/\//i.test(st.url)) { cineDown('这条地址不能直接播', true, 'badurl', st.ver); return; }
+  // 空地址 = B 方案「我播他看」（房主直接转画面），不是坏地址 —— 放行走转播分支
+  if (st.url && !/^https?:\/\//i.test(st.url)) { cineDown('这条地址不能直接播', true, 'badurl', st.ver); return; }
   if (cine && st.ver < cine.ver) return;   // 乱序到达的旧状态：丢掉，别把进度倒回去
   const switched = !cine || cine.url !== st.url;
   const prevVer = cine ? cine.ver : -1;
@@ -952,8 +956,10 @@ function onCinema(f) {
   bWanted = true; syncBCards();   // 方案B：竖屏换卡片（见 syncBCards）
   /* 顶栏那句"语音已通"是等候期的话；开始放映之后它还挂着，
      观众会以为仍然没画面。状态换了，措辞也要跟着换。 */
-  $('topRight').textContent = '同步放映中';
-  if (switched) loadLocal(st); else syncLocal();
+  $('topRight').textContent = relayed ? '画面正直接转过来…' : '同步放映中';
+  const relayed = !st.url;
+  if (switched) { if (relayed) stopLocalPlayer(); else loadLocal(st); }
+  else if (!relayed) syncLocal();
   /* 同 URL 换版本（房主中途把同一条重递一次）：switched=false 不走 loadLocal，
      而回执只挂在加载路径上 —— 房主那边 12 秒后挂"没等到回执"，对方其实一直在放
      （REVIEW-2026-09-27 P3）。已经在播就按当前画面补一条回执；

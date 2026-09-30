@@ -351,6 +351,9 @@ fun CinemaScreen(
     var commander by remember { mutableStateOf(Commander.Page) }
     /* 画面自播（2B）状态：放映态画面由 TheaterPlayer 接管（网页退居幕后交地址）。 */
     val tp by TheaterPlayer.state.collectAsState()
+    /* B 方案「我播他看」转播中：本地画面 = 自己视频轨的回显 ——
+       "你看到的正是观众看到的"（帧已经过一次编码，比自播纹理略慢半拍，换来零差异观感）。 */
+    val localVt by CallSession.localVideo.collectAsState()
     /** 点画面弹出的自播控制条（3 秒自动隐）。 */
     var showTctl by remember { mutableStateOf(false) }
     /* 候选时长（URL → 毫秒）：异步回填，先出条目、时长后填。 */
@@ -1454,7 +1457,15 @@ fun CinemaScreen(
                     else "输入网址就能一起看；上面有「粘贴 / 上次 / 收藏夹」",
                     Modifier.fillMaxSize(),
                 )
-                else if (tp.active) {
+                else if (TheaterPlayer.relaying && localVt != null) {
+                    /* B 方案转播中：自播的帧已交给帧桥推给观众，本地看这条轨的回显。
+                       VideoLayer 与观众端同款渲染 —— 你看到的正是观众看到的。 */
+                    VideoLayer(
+                        track = localVt,
+                        modifier = Modifier.fillMaxSize(),
+                        onLabel = "theater-relay",
+                    )
+                } else if (tp.active) {
                     /* 画面自播视图（2B）：画面是 TextureView —— 点击**进不到网页**，
                        广告/整块画面跳转没有 DOM 可跳；轻点弹玻璃控制条（3 秒自动隐）。 */
                     val tapInd = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }

@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kyant.backdrop.backdrops.LayerBackdrop
+import com.ticketfortwo.app.PlayMode
 import com.ticketfortwo.app.ShareQuality
 import com.ticketfortwo.app.VoiceMode
 import com.ticketfortwo.app.ui.glass.GlassCard
@@ -683,6 +684,32 @@ fun QualitySettingsScreen(
     PageScaffold(modifier = Modifier.verticalScroll(rememberScrollState())) {
         Spacer(Modifier.height(GlassDimens.sp6))
         Headline("分享设置", "这些是上限不是保证值：网络差或发热时会自动再降。分享中改了立即生效；开画面要重新授权一次。")
+
+        SectionTitle("放映方式")
+        GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp3)) {
+                SegmentRow(
+                    options = listOf("同步直连", "我播他看"),
+                    selected = if (quality.playMode == PlayMode.Relayed) 1 else 0,
+                    onSelect = { android.util.Log.i("PlayMode", "onSelect idx=$it"); onChange(quality.copy(playMode = if (it == 1) PlayMode.Relayed else PlayMode.Direct)) },
+                )
+                // 两行常显、随选中高亮 —— 让"这一档意味着什么"永远看得见
+                Text(
+                    "同步直连：把地址发给对方、各播一份 —— 画质原生、你几乎不耗流量；" +
+                        "但对方得自己能访问片源（比如也挂同一个代理）。",
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    color = if (quality.playMode == PlayMode.Direct) Ink.TextHi else Ink.TextLow,
+                )
+                Text(
+                    "我播他看：只有你在播，纯画面经 WebRTC 直接转过去 —— " +
+                        "对方不用挂代理、也看不到你手机上的界面；代价是你的上行流量和耗电多一份。",
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    color = if (quality.playMode == PlayMode.Relayed) Ink.TextHi else Ink.TextLow,
+                )
+            }
+        }
 
         SectionTitle("画质")
         GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {

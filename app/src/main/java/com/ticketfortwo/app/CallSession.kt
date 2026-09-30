@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.util.Log
 import com.ticketfortwo.app.capture.ScreenShareController
+import com.ticketfortwo.app.PlayMode
 import com.ticketfortwo.app.cinema.CinemaSync
 import com.ticketfortwo.app.rtc.Peer
 import com.ticketfortwo.app.rtc.RtcEngine
@@ -208,6 +209,15 @@ object CallSession {
             _viewerPlayback.value = null
             broadcastCinema()
             applyVoicePolicy("收厅")
+            // B 方案：收厅后自播会停（帧桥断），转播轨跟着释放 ——
+            // 本地视频轨一并清掉，免得屏幕分享那边误判"画面已经在传"。
+            runCatching { theaterCapture?.release() }
+            theaterCapture = null
+            if (_localVideo.value != null && capture == null) {
+                runCatching { localVideoTrack?.dispose() }
+                localVideoTrack = null
+                _localVideo.value = null
+            }
             note("已收厅，回到整屏分享")
             return
         }
@@ -219,8 +229,17 @@ object CallSession {
         applyVoicePolicy("递片")
         // 换片和首次递出去要在日志里分得开，否则回看时看不出中途换过片
         val wasScreening = _cinema.value != null
+        // B 方案触发：**必须在构造 State 之前**建轨 —— 首发这一帧就要把地址藏住，
+        // 否则观众先收到地址（自己播起来）、轨随后才到 = 双画面。
+        if (quality.playMode == PlayMode.Relayed && theaterCapture == null && capture == null) {
+            sessionContext?.let { attachTheaterPlayback(it, quality.fps) }
+        }
+        /* B 方案（我播他看）：转播轨活着时**地址不下发** —— 观众端拿到空地址就不
+           自己播（网页/App 都判空），画面全靠那条视频轨；直连模式照常发地址。
+           轨没建成（theaterCapture==null，如失败回退）时照发地址，自动退回直连。 */
+        val relayed = quality.playMode == PlayMode.Relayed && theaterCapture != null
         _cinema.value = CinemaSync.State(
-            track = track,
+            track = if (relayed) track.copy(url = "") else track,
             posMs = 0L,
             durMs = track.durationMs,
             playing = false,
@@ -339,6 +358,8 @@ object CallSession {
      */
     private var iceWasConnected = false
     private var capture: ScreenShareController? = null
+    /** B 方案「我播他看」的转播轨控制器（与屏幕分享互斥共用 localVideoTrack）。 */
+    private var theaterCapture: com.ticketfortwo.app.capture.PlayerShareController? = null
     private var audioSource: AudioSource? = null
     private var audioTrack: AudioTrack? = null
     private var videoSender: RtpSender? = null
@@ -505,6 +526,47 @@ object CallSession {
             _inviteUrl.value = url
             _state.value = State.WaitingViewer(url)
         }
+    }
+
+    /**
+     * B 方案「我播他看」：给自播画面建一条视频轨并推给观众（2026-09-30 用户拍板）。
+     *
+     * 与 [attachScreenCapture] 同构，差别只有采集源：屏幕 → PlayerShareController
+     * （自播播放器的帧桥）。与屏幕分享**互斥**共用 localVideoTrack —— 已有轨就不重建。
+     */
+    fun attachTheaterPlayback(context: Context, fps: Int) {
+        if (localVideoTrack != null) {
+            note("画面已经在传了，不重复接")
+            return
+        }
+        RtcEngine.init(context)
+        val cap = com.ticketfortwo.app.capture.PlayerShareController(context.applicationContext).also {
+            theaterCapture = it
+        }
+        val vt = cap.start(fps = fps)
+        if (vt == null) {
+            note("自播画面没能接上转播轨 —— 本场退回发地址（对方自己播）")
+            return
+        }
+        localVideoTrack = vt
+        _localVideo.value = vt
+        val p = peer
+        if (p == null) {
+            note("转播轨已备好，等对方进厅就发过去")
+            return
+        }
+        val senders = runCatching { p.addLocalTracks(vt, null) }.getOrNull()
+        if (senders?.video == null) {
+            note("转播轨接不进这条连接 —— 让对方重新点一次链接")
+            return
+        }
+        videoSender = senders.video
+        applyVideoBitrateCap(quality.maxVideoBps)
+        p.startOffer()
+        if (p.connectionState == org.webrtc.PeerConnection.IceConnectionState.CONNECTED) {
+            _state.value = State.Connected
+        }
+        note("画面已接上，正在转给对方（他不用挂代理）")
     }
 
     /**
@@ -817,6 +879,8 @@ object CallSession {
         teardownPeer()
         runCatching { capture?.release() }
         capture = null
+        runCatching { theaterCapture?.release() }
+        theaterCapture = null
         runCatching { localVideoTrack?.dispose() }
         localVideoTrack = null
         runCatching { videoSender?.dispose() }

@@ -13,6 +13,16 @@ import kotlin.math.roundToInt
  *
  * 持久化复用首页那份 "t2" SharedPreferences，只是键前缀不同。
  */
+/**
+ * 放映方式（2026-09-30 用户拍板：两案并存，设置里手动切）。
+ *
+ * - [Direct] 同步直连（现有 S 档）：发地址、观众自己播 —— 画质原生，
+ *   但**对方要能访问片源**（对方也得挂代理才行）。
+ * - [Relayed] 我播他看（B 方案）：房主是唯一播放器，纯视频轨经 WebRTC 转发过去 ——
+ *   对方不挂代理也能看、看不到你手机的 UI；代价是你的上行流量与耗电。
+ */
+enum class PlayMode { Direct, Relayed }
+
 data class ShareQuality(
     /** 采集缩放：0.5 → 约 540 宽、0.75 → 约 810、1.0 → 原生机（1080 机型标 1080p）。 */
     val scale: Float = CallSession.DEFAULT_CAPTURE_SCALE,
@@ -20,6 +30,8 @@ data class ShareQuality(
     val maxVideoBps: Int = CallSession.DEFAULT_MAX_VIDEO_BPS,
     /** 声音怎么传（[VoiceMode]）。默认只有视频声，连麦要额外开启。 */
     val voiceMode: VoiceMode = VoiceMode.VideoOnly,
+    /** 放映方式：发地址各播一份，还是房主转视频轨过去（见 [PlayMode]）。 */
+    val playMode: PlayMode = PlayMode.Direct,
 ) {
 
     /**
@@ -112,6 +124,7 @@ data class ShareQuality(
         private const val K_BPS = "q_bps"
         private const val K_VIDEO = "q_video"
         private const val K_VOICE = "q_voice"
+        private const val K_PMODE = "q_pmode"
 
         fun load(context: Context): ShareQuality {
             val d = ShareQuality()
@@ -124,6 +137,9 @@ data class ShareQuality(
                 // 码率可能是「自定义」值（不在预设档里），所以按范围校验而不是按档位成员。
                 maxVideoBps = sp.getInt(K_BPS, d.maxVideoBps).takeIf { it in BPS_MIN..BPS_MAX } ?: d.maxVideoBps,
                 voiceMode = voiceModeOf(sp),
+                playMode = sp.getString(K_PMODE, null)
+                    ?.let { runCatching { PlayMode.valueOf(it) }.getOrNull() }
+                    ?: PlayMode.Direct,
             )
         }
 
@@ -152,6 +168,7 @@ data class ShareQuality(
                 // 万一回滚到旧版本，至少画面/仅语音这一层语义还在。
                 .putBoolean(K_VIDEO, q.videoEnabled)
                 .putString(K_VOICE, q.voiceMode.name)
+                .putString(K_PMODE, q.playMode.name)
                 .apply()
         }
     }

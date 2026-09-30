@@ -43,6 +43,25 @@ object TheaterPlayer {
 
     private var exo: androidx.media3.exoplayer.ExoPlayer? = null
     private var surface: TextureView? = null
+
+    /** B 方案转播中（画面走 helper 面推给观众，本地 UI 改显示轨回显）。 */
+    @Volatile var relaying: Boolean = false
+
+    /**
+     * 转播帧桥的输出面（[com.ticketfortwo.app.capture.PlayerShareController] 挂上/摘下）。
+     * 非空：播放器输出切给帧桥（观众收轨）；空：恢复 UI 纹理面（回直连模式）。
+     * 跨线程安全：capturer 线程调入，实际 set 派发到主线程执行。
+     */
+    @Volatile private var external: android.view.Surface? = null
+    fun attachExternalSurface(s: android.view.Surface?) {
+        external = s
+        Log.i("TheaterPlay", "attachExternal s=" + (s != null) + " exoAlive=" + (exo != null))
+        handler.post {
+            val p = exo ?: return@post
+            if (s != null) p.setVideoSurface(s)
+            else surface?.let { p.setVideoTextureView(it) } ?: p.setVideoSurface(null)
+        }
+    }
     private var startMs = 0L
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -101,7 +120,10 @@ object TheaterPlayer {
                 return@launch
             }
             exo = p
-            surface?.let { p.setVideoTextureView(it) }
+            val ext = external
+            Log.i("TheaterPlay", "start ext=" + (ext != null) + " ui=" + (surface != null))
+            if (ext != null) p.setVideoSurface(ext)      // 转播在先：帧桥优先
+            else surface?.let { p.setVideoTextureView(it) }
             if (posMs > 0) p.seekTo(posMs)
             p.playWhenReady = true
             handler.post(ticker)
@@ -109,10 +131,10 @@ object TheaterPlayer {
         }
     }
 
-    /** UI 挂上画面（每次组合/回退返回都要重接）。 */
+    /** UI 挂上画面（每次组合/回退返回都要重接）。转播中让位给帧桥 —— 本地看回显轨。 */
     fun attach(view: TextureView) {
         surface = view
-        exo?.setVideoTextureView(view)
+        if (external == null) exo?.setVideoTextureView(view)
     }
 
     fun detach() {

@@ -873,6 +873,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 backdrop = backdrop,
                 quality = quality,
                 onChange = { q ->
+                    android.util.Log.i("PlayMode", "onChange playMode=${q.playMode}")
                     val old = quality
                     quality = q
                     scope.launch(Dispatchers.IO) { ShareQuality.save(context, q) }
