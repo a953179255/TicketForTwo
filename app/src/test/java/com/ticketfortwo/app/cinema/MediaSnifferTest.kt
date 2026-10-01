@@ -86,13 +86,13 @@ class MediaSnifferTest {
     fun `排序让单文件和主清单浮到顶，分片沉底`() {
         val now = 1_000L
         val seg = MediaSniffer.Hit(
-            "https://cdn/hls/seg-1.ts", MediaSniffer.Kind.Segment, null, null, now, hits = 99,
+            "https://cdn/hls/seg-1.ts", MediaSniffer.Kind.Segment, null, null, null, now, hits = 99,
         )
         val mp4 = MediaSniffer.Hit(
-            "https://cdn/a/movie.mp4", MediaSniffer.Kind.Progressive, null, null, now, hits = 1,
+            "https://cdn/a/movie.mp4", MediaSniffer.Kind.Progressive, null, null, null, now, hits = 1,
         )
         val master = MediaSniffer.Hit(
-            "https://cdn/a/index.m3u8", MediaSniffer.Kind.Master, null, null, now, hits = 1,
+            "https://cdn/a/index.m3u8", MediaSniffer.Kind.Master, null, null, null, now, hits = 1,
         )
         assertTrue(MediaSniffer.score(mp4) > MediaSniffer.score(master))
         assertTrue(MediaSniffer.score(master) > MediaSniffer.score(seg))
@@ -102,10 +102,10 @@ class MediaSnifferTest {
     fun `本机 file 地址不能当片源递给对方`() {
         val local = MediaSniffer.Hit(
             "file:///android_asset/watch/sample.mp4", MediaSniffer.Kind.Progressive,
-            null, null, 1L, sources = SRC_REQUEST or SRC_PAGE,
+            null, null, null, 1L, sources = SRC_REQUEST or SRC_PAGE,
         )
         val remote = MediaSniffer.Hit(
-            "https://cdn/a/index.m3u8", MediaSniffer.Kind.Master, null, null, 2L,
+            "https://cdn/a/index.m3u8", MediaSniffer.Kind.Master, null, null, null, 2L,
             sources = SRC_REQUEST,
         )
         // 本机那条后缀合法、房主确实在放，但观众取不到 —— 不能选它
@@ -118,11 +118,11 @@ class MediaSnifferTest {
     @Test
     fun `bestOf 优先选页面亲口报过的那条`() {
         val fromRequest = MediaSniffer.Hit(
-            "https://cdn/a/proxy.mp4", MediaSniffer.Kind.Progressive, null, null, 1L,
+            "https://cdn/a/proxy.mp4", MediaSniffer.Kind.Progressive, null, null, null, 1L,
             sources = SRC_REQUEST,
         )
         val fromPage = MediaSniffer.Hit(
-            "https://cdn/a/index.m3u8", MediaSniffer.Kind.Master, null, null, 2L,
+            "https://cdn/a/index.m3u8", MediaSniffer.Kind.Master, null, null, null, 2L,
             sources = SRC_REQUEST or SRC_PAGE,
         )
         // 请求流里那条虽然是单文件，但页面没承认在用它 —— 选页面报的那条
@@ -133,10 +133,50 @@ class MediaSnifferTest {
             CinemaProbe.bestOf(
                 listOf(
                     MediaSniffer.Hit(
-                        "https://cdn/hls/seg-1.ts", MediaSniffer.Kind.Segment, null, null, 1L,
+                        "https://cdn/hls/seg-1.ts", MediaSniffer.Kind.Segment, null, null, null, 1L,
                     ),
                 ),
             ),
+        )
+    }
+
+    @Test
+    fun `bestOf 优先选网页正在播的那条`() {
+        val ad = MediaSniffer.Hit(
+            "https://ad.example.com/clip.m3u8", MediaSniffer.Kind.Master, null, null, null, 1L,
+            sources = SRC_REQUEST or SRC_PAGE,      // 广告也会被页面资源计时记到
+        )
+        val playing = MediaSniffer.Hit(
+            "https://cdn/a/movie.m3u8", MediaSniffer.Kind.Master, null, null, null, 2L,
+            sources = SRC_REQUEST or SRC_PAGE,
+        )
+        // 两条都是 PAGE 源，老规则按列表顺序会选中广告 —— 网页在播的本尊必须赢
+        assertEquals(
+            playing,
+            CinemaProbe.bestOf(listOf(ad, playing), playingUrl = playing.url),
+        )
+        // 没给 playingUrl 时退回老语义（PAGE 源、同分按传入顺序）
+        assertEquals(ad, CinemaProbe.bestOf(listOf(ad, playing)))
+    }
+
+    @Test
+    fun `bestOf 同为页面源时选时长更长的（正片压广告）`() {
+        val ad = MediaSniffer.Hit(
+            "https://ad.example.com/clip.mp4", MediaSniffer.Kind.Progressive, null, null, null, 1L,
+            sources = SRC_PAGE,
+        )
+        val feature = MediaSniffer.Hit(
+            "https://cdn/a/movie.mp4", MediaSniffer.Kind.Progressive, null, null, null, 2L,
+            sources = SRC_PAGE,
+        )
+        assertEquals(
+            feature,
+            CinemaProbe.bestOf(listOf(ad, feature), durations = mapOf(ad.url to 104_000L, feature.url to 6_500_000L)),
+        )
+        // 时长没回填的条目排在已回填的后面 —— 正片探到了、广告没探到，也是正片赢
+        assertEquals(
+            feature,
+            CinemaProbe.bestOf(listOf(ad, feature), durations = mapOf(feature.url to 6_500_000L)),
         )
     }
 

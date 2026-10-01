@@ -455,12 +455,28 @@ fun CinemaScreen(
     /* B 方案「我播他看」转播中：本地画面 = 自己视频轨的回显 ——
        "你看到的正是观众看到的"（帧已经过一次编码，比自播纹理略慢半拍，换来零差异观感）。 */
     val localVt by CallSession.localVideo.collectAsState()
+    /* **回显轨首帧门**（2026-10-01 用户实测"点开始放映黑屏比较久，右上角切
+       放映却无缝"）：开始放映 = 递片 → 自播起播 + 帧桥编码回环，回显轨首帧要
+       等 1-3 秒 —— 原来 relay&&localVt 一有轨就接管画面，窗口期全是黑的
+       （右上角切放映不递片、无回显，所以无缝）。修：**回显首帧到达前不接管**，
+       网页钉屏（还在播/暂停帧）或自播 TextureView 顶着，首帧一到无缝切入。 */
+    var relayFirstFrame by remember { mutableStateOf(false) }
+    LaunchedEffect(localVt) { relayFirstFrame = false }   // 换轨/重开转播要重新等首帧
     /** 麦克风实际开着没（放映面板的麦键跟它走 —— 不跟手动静音位，防"图标骗人"）。 */
     val micLive by CallSession.micLive.collectAsState()
     /** 点画面弹出的自播控制条（3 秒自动隐）。 */
     var showTctl by remember { mutableStateOf(false) }
     /* 候选时长（URL → 毫秒）：异步回填，先出条目、时长后填。 */
     var durations by remember { mutableStateOf(emptyMap<String, Long>()) }
+
+    /**
+     * 自动挑候选的唯一入口：把「网页正在播的 URL」和「已回填的时长表」一并交给
+     * [CinemaProbe.bestOf]，保证自动选中的 = 候选列表置顶的那条 ——
+     * 过去两处排序规则不同，出现过"默认选中的不能播、列表里另一条才行"的错位
+     * （2026-10-01 用户实测）。所有 startTheater/openFloat/预热/递给观众都走这里。
+     */
+    fun autoPick(): MediaSniffer.Hit? =
+        CinemaProbe.bestOf(hits, playingUrl = probe?.currentSrc, durations = durations)
 
     /**
      * 起浮窗：先立新、后废旧 —— 网页那个照旧播着，等浮窗**真的播起来**才停它。
@@ -472,7 +488,7 @@ fun CinemaScreen(
             note = "浮窗继续播（预热秒开）"
             return
         }
-        val hit = h ?: CinemaProbe.bestOf(hits)
+        val hit = h ?: autoPick()
             /* 嗅探候选没有可播地址（blob/MSE 站点：流在页面里合成，浮窗拿不到直链）
                时，退而用**递给观众的片源地址** —— 只要开过放映它就在（会话里那份）。
                没了 referer/cookie 可能被防盗链拦，但拦了有失败回退，总比"点了没反应"
@@ -575,13 +591,23 @@ fun CinemaScreen(
     }
 
     /**
-     * 自播接管的起播位置：网页探针读数与会话广播里的进度**取较大值**。
-     * 只信探针（player）有个坑：探针 2 秒一轮，刚进厅/快速切换时还是 0 或旧值 ——
-     * 接管就从 0 起播，观众端跟着被拽回开头（2026-10-01 用户实测"切换后进度归零"）。
-     * 广播值（cinema.posMs）最多旧半秒，比归零强得多。
+     * 自播接管的起播位置。
+     *
+     * 两路信源，按"新鲜度"取舍：
+     * - **player**（网页探针，2 秒一轮）：只要读到过非零进度，它就是"此刻网页在哪"，
+     *   是最可信的一份 —— 优先用它。
+     * - **cinema**（会话广播镜像）：只在 8 秒内的新鲜值才可信。它只在放映/会话广播时更新，
+     *   浏览态网页自己往前播它**不知道** —— 陈旧的 cinema.posMs 会把起播位置拽回旧值
+     *   （2026-10-01 用户实测：网页播到 35s，切放映却被拨到 1:43 —— max() 取了陈旧广播）。
+     *   所以反着来：player 为零（刚进厅/快速切换，探针还没轮到）才借广播值应急，
+     *   且过期就不借 —— 宁可从 0 起，也不跳到错误位置。
      */
-    fun resumePosMs(): Long =
-        maxOf(player?.posMs ?: 0L, cinema?.posMs ?: 0L)
+    fun resumePosMs(): Long {
+        player?.posMs?.takeIf { it > 0L }?.let { return it }
+        val c = cinema ?: return 0L
+        val fresh = System.currentTimeMillis() - c.hostWallMs < 8_000L
+        return if (fresh) c.posMs else 0L
+    }
 
     /** 起画面自播（2B）：挑档按放映预算 1920，从 posMs 接。幂等（在播就忽略）。 */
     fun startTheater(h: MediaSniffer.Hit, posMs: Long = resumePosMs()) {
@@ -1027,7 +1053,7 @@ fun CinemaScreen(
             return@LaunchedEffect
         }
         if (TheaterPlayer.state.value.active) return@LaunchedEffect
-        val h = CinemaProbe.bestOf(hits) ?: return@LaunchedEffect
+        val h = autoPick() ?: return@LaunchedEffect
         startTheater(h)
     }
 
@@ -1090,7 +1116,7 @@ fun CinemaScreen(
        预热的播放器不播（playWhenReady=false）：不出声、不抢画面，只干活。
        换片/收厅/退出放映/离屏都要释放，防泄漏。 */
     val warmTarget = if (theater && cinema != null) {
-        CinemaProbe.bestOf(hits)?.url
+        autoPick()?.url
     } else {
         null
     }
@@ -1170,7 +1196,7 @@ fun CinemaScreen(
                         note = "回到全屏放映（自播接回中）"
                         // 自播从同位置接回：冷起 1-3s 期间网页在放，自播 ready 后自动暂停网页
                         if (theater && cinema != null) {
-                            CinemaProbe.bestOf(hits)?.let { startTheater(it, posMs = at) }
+                            autoPick()?.let { startTheater(it, posMs = at) }
                         }
                     }
                 }
@@ -1282,7 +1308,7 @@ fun CinemaScreen(
     val screenLatest = rememberUpdatedState<(MediaSniffer.Hit) -> Unit>({ screen(it) })
     DisposableEffect(Unit) {
         CinemaDebug.screenBest = {
-            val h = CinemaProbe.bestOf(hits)
+            val h = autoPick()
             if (h == null) null else { screenLatest.value(h); h.url }
         }
         CinemaDebug.candidateCount = { hits.count { MediaSniffer.playable(it.kind) } }
@@ -1331,7 +1357,7 @@ fun CinemaScreen(
             askCloseRoom = true     // 二次确认（唯一会中断放映的动作）
             return
         }
-        val h = CinemaProbe.bestOf(hits)
+        val h = autoPick()
         if (h != null) {
             screen(h)
         } else {
@@ -1544,14 +1570,19 @@ fun CinemaScreen(
                         .background(Color.Black)
                         .padding(bottom = 6.dp),
                 ) {
-                    key(webGen) {
-                        AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
+                    /* 回显首帧前网页顶显、首帧到撤网页露回显（与竖屏同款首帧门，
+                       2026-10-01 修"开始放映黑屏比较久"）。 */
+                    if (!(TheaterPlayer.relaying && localVt != null && relayFirstFrame)) {
+                        key(webGen) {
+                            AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
+                        }
                     }
                     if (TheaterPlayer.relaying && localVt != null) {
                         VideoLayer(
                             track = localVt,
                             modifier = Modifier.fillMaxSize(),
                             onLabel = "theater-relay-land",
+                            onFirstFrame = { if (it) relayFirstFrame = true },
                         )
                     } else if (tp.active && tp.ready) {
                         AndroidView(
@@ -1661,12 +1692,24 @@ fun CinemaScreen(
                 )
                 else if (TheaterPlayer.relaying && localVt != null) {
                     /* B 方案转播中：自播的帧已交给帧桥推给观众，本地看这条轨的回显。
-                       VideoLayer 与观众端同款渲染 —— 你看到的正是观众看到的。 */
-                    VideoLayer(
-                        track = localVt,
-                        modifier = Modifier.fillMaxSize(),
-                        onLabel = "theater-relay",
-                    )
+                       **首帧门（2026-10-01）**：回环首帧要等 1-3 秒，窗口期显示
+                       网页钉屏（在播/暂停帧）顶着 —— 否则"开始放映"黑屏比较久，
+                       而右上角切放映（无回显）却无缝。VideoLayer 常挂（SurfaceView
+                       在 View 之下照常收帧，onFirstFrameRendered 才能触发），
+                       首帧一到就撤掉网页、露出回显。 */
+                    Box(Modifier.fillMaxSize()) {
+                        if (!relayFirstFrame) {
+                            key(webGen) {
+                                AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
+                            }
+                        }
+                        VideoLayer(
+                            track = localVt,
+                            modifier = Modifier.fillMaxSize(),
+                            onLabel = "theater-relay",
+                            onFirstFrame = { if (it) relayFirstFrame = true },
+                        )
+                    }
                 } else if (tp.active && tp.ready) {
                     /* 画面自播视图（2B）：画面是 TextureView —— 点击**进不到网页**，
                        广告/整块画面跳转没有 DOM 可跳；轻点弹玻璃控制条（3 秒自动隐）。

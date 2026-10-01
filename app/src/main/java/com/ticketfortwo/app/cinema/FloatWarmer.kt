@@ -89,48 +89,61 @@ object FloatWarmer {
     // （原先在 FloatPlayerService，预热与冷启动两边都要用，搬到这）
 
     /**
-     * 从多个候选里找出 master 并挑低档变体；全是变体/拉不到就用第一条原样返回。
-     * 页面嗅探常常给的是**变体清单**（看不出码率），master 才有完整的档位表 —— 所以逐个试。
+     * 定一条可播地址。
+     *
+     * 语义（2026-10-01 收紧）：**第一条就是答案**，本函数只负责"清单 → 挑合适档位"；
+     * 选哪条候选是 bestOf/用户的事，这里不许越权 —— 过去会遍历全部候选，
+     * 跳过第一条（哪怕是正片 mp4 / 已在播的变体清单）去选后面随便哪条
+     * "能解析出档位表的 master"，广告/预览片的清单就这样顶掉了正片
+     * （用户实测"默认候选不能播、手动从列表选才行"的帮凶）。
+     * 只有首选是 m3u8 且**拉不到**（防盗链/下线/超时）才逐条换下一候选兜底。
      */
     fun pickVariant(
         urls: List<String>,
         headers: Map<String, String>,
         budgetPx: Int = 960,
     ): String {
-        val first = urls.firstOrNull().orEmpty()
-        var fallback = first
-        for (u in urls.distinct()) {
-            if (u.isBlank()) continue
-            val r = resolveVariant(u, headers, budgetPx)
-            if (r != u) {
-                Log.i("FloatPlay", "挑档成功 ${u.substringAfterLast('/')} -> ${r.substringAfterLast('/')}")
-                return r
+        val ordered = urls.distinct().filter { it.isNotBlank() }
+        val first = ordered.firstOrNull().orEmpty()
+        if (first.isEmpty() || !first.contains(".m3u8", ignoreCase = true)) return first
+        val text = runCatching { fetchText(first, headers) }.getOrNull()?.takeIf { it.isNotBlank() }
+        if (text != null) {
+            if (!text.contains("#EXT-X-STREAM-INF")) return first   // 已是变体清单
+            pickLowVariant(text, first, budgetPx)?.let {
+                Log.i("FloatPlay", "挑档成功 ${first.substringAfterLast('/')} -> ${it.substringAfterLast('/')}")
+                return it
             }
-            if (fallback == first) fallback = u
+            Log.i("FloatPlay", "master 无档位表，用原地址 ${first.substringAfterLast('/')}")
+            return first
         }
-        Log.i("FloatPlay", "挑档失败，用原地址 ${fallback.substringAfterLast('/')}")
-        return fallback
+        // 首选清单拉不到：逐条试其余候选（仅此时允许换流）
+        for (u in ordered.drop(1)) {
+            if (!u.contains(".m3u8", ignoreCase = true)) return u
+            val t = runCatching { fetchText(u, headers) }.getOrNull()?.takeIf { it.isNotBlank() } ?: continue
+            if (!t.contains("#EXT-X-STREAM-INF")) return u
+            pickLowVariant(t, u, budgetPx)?.let {
+                Log.i("FloatPlay", "兜底挑档 ${u.substringAfterLast('/')} -> ${it.substringAfterLast('/')}")
+                return it
+            }
+            return u
+        }
+        Log.i("FloatPlay", "候选全部拉不到，用原地址 ${first.substringAfterLast('/')}")
+        return first
     }
 
     /**
-     * 从 master 清单里挑一个**适合浮窗**的低档变体清单地址；不是 master / 拉不到就原样返回。
+     * 从 master 清单**文本**里挑一个低档变体地址；不是 master / 没解析出档位 → null
+     * （调用方用原地址）。纯解析不联网，方便单独测试。
      *
      * 选档规则（窗最大 276dp≈725px）：
-     *  1. 宽 ≤960 里带宽最高的（给放大留余量，实测 mux 这条流会选到 848x480/0.84Mbps）；
-     *  2. 没有就退 ≤1280 里带宽最高的（720p）；
-     *  3. 再没有就用原地址（播放器自己选，行为同以前）。
+     *  1. 宽 ≤budget 里带宽最高的（给放大留余量，实测 mux 这条流会选到 848x480/0.84Mbps）；
+     *  2. 没有就退 ≤budget×4/3 里带宽最高的（720p）；
+     *  3. 再没有返回 null（播放器用原地址自己选，行为同以前）。
      *
      * 为什么必须自己挑：media3 的 maxVideoSize 约束**实测对 HLS 初始变体选择无效**
      * （约束进选择器日志可见，仍选 1080p —— 13.5MB/片在慢网下要下 8 秒）。
      */
-    private fun resolveVariant(
-        url: String,
-        headers: Map<String, String>,
-        budgetPx: Int = 960,
-    ): String {
-        if (!url.contains(".m3u8", ignoreCase = true)) return url
-        val text = runCatching { fetchText(url, headers) }.getOrNull() ?: return url
-        if (!text.contains("#EXT-X-STREAM-INF")) return url   // 已经是变体清单
+    private fun pickLowVariant(text: String, baseUrl: String, budgetPx: Int): String? {
         val lines = text.lineSequence().map { it.trim() }.toList()
         val variants = mutableListOf<Triple<Int, Int, String>>()  // width, bandwidth, url
         for (i in lines.indices) {
@@ -140,14 +153,13 @@ object FloatWarmer {
             val w = Regex("""RESOLUTION=(\d+)x""").find(lines[i])?.groupValues?.get(1)?.toIntOrNull()
                 ?: continue
             val bw = Regex("""BANDWIDTH=(\d+)""").find(lines[i])?.groupValues?.get(1)?.toIntOrNull() ?: 0
-            val abs = runCatching { URL(URL(url), next).toString() }.getOrDefault(next)
+            val abs = runCatching { URL(URL(baseUrl), next).toString() }.getOrDefault(next)
             variants += Triple(w, bw, abs)
         }
-        if (variants.isEmpty()) return url
-        // 第一档：预算内最高带宽；退一档：预算 ×4/3 内最高带宽；再没有就原样
+        if (variants.isEmpty()) return null
         val chosen = variants.filter { it.first <= budgetPx }.maxByOrNull { it.second }
             ?: variants.filter { it.first <= budgetPx * 4 / 3 }.maxByOrNull { it.second }
-            ?: return url
+            ?: return null
         return chosen.third
     }
 

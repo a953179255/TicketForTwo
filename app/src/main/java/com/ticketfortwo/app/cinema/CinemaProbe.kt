@@ -68,12 +68,31 @@ object CinemaProbe {
      * **只认 http(s)**：本地测试页的 `file:///android_asset/...mp4` 后缀完全合法、
      * 在房主这台手机上也确实在放，但观众那边根本取不到这个地址 ——
      * 把它当"可播候选"端出去，房主会以为自己已经开始放映了。
+     *
+     * 挑选次序（2026-10-01 定稿，与候选列表 UI 的 rankedCandidates 对齐）：
+     * 1. **网页正在播的本尊**（[playingUrl]）—— 用户看到的画面就是它，自动选的必须也是它，
+     *    否则出现"默认的不能播、列表里另有一条才行"的错位（用户实测）；
+     * 2. **页面亲口报过的**（SRC_PAGE）—— currentSrc 是 blob 的 MSE 站点匹配不上 1，
+     *    退而选页面资源计时里记过的；
+     * 3. **时长更长**的 —— 正片通常最长，广告/预告十几秒（时长靠异步探测回填，
+     *    没回填的按 -1 排后面）；同分再按 [MediaSniffer.score] 收尾。
      */
-    fun bestOf(hits: List<MediaSniffer.Hit>): MediaSniffer.Hit? {
+    fun bestOf(
+        hits: List<MediaSniffer.Hit>,
+        playingUrl: String? = null,
+        durations: Map<String, Long> = emptyMap(),
+    ): MediaSniffer.Hit? {
         fun remote(h: MediaSniffer.Hit) =
             MediaSniffer.playable(h.kind) && h.url.startsWith("http", ignoreCase = true)
-        return hits.firstOrNull { remote(it) && it.sources and SRC_PAGE != 0 }
-            ?: hits.firstOrNull { remote(it) }
+        return hits.asSequence()
+            .filter(::remote)
+            .sortedWith(
+                compareByDescending<MediaSniffer.Hit> { playingUrl != null && it.url == playingUrl }
+                    .thenByDescending { it.sources and SRC_PAGE != 0 }
+                    .thenByDescending { durations[it.url] ?: -1L }
+                    .thenByDescending { MediaSniffer.score(it) },
+            )
+            .firstOrNull()
     }
 
     /** 有没有"看着能播、其实只有本机能播"的候选 —— 用来给房主一句人话解释。 */
