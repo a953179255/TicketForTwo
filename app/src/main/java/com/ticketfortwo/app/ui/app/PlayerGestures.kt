@@ -214,16 +214,21 @@ fun PlayerGestureOverlay(
                         when (mode) {
                             DragMode.Seek -> {
                                 val w = size.width.toFloat().coerceAtLeast(1f)
-                                // dragAmount 是**每帧增量**，必须累计 —— 只拿单帧
-                                // 会让落点变成"最后一帧的几像素"（实测横滑 400px
-                                // 只 seek 出 +5s，正是最后一帧 ~8px 的换算）。
+                                // dragAmount 是**每帧增量**，必须累计。
+                                // 一屏跨度 = **按片长自适应**（雨见 CopyGestureController
+                                // .calculateSensitivityByDuration 原公式）：
+                                //   ≤5min: 20%总长 | ≤30min: 15%+30s
+                                //   ≤120min: 12%+60s | >120min: 10%+120s
+                                // 短片按比例灵敏、长片靠固定量兜底 —— 比固定120s/百分比都合理。
                                 accX += drag.x
-                                // **一屏 = ±120 秒**（对齐雨见/dkplayer 的
-                                // slideToChangePosition：(-dx/width)*120000）。
-                                // 按总时长百分比算的话，4 小时的片拖一屏会跳几小时，
-                                // 完全不可用；固定步长才拖得动、也追得回来。
-                                val deltaMs = (accX / w * 120_000f).toLong()
-                                val target = (startFrac * durMs.toFloat()).toLong().plus(deltaMs)
+                                val spanMs = when {
+                                    durMs <= 5 * 60_000L -> durMs * 0.20f
+                                    durMs <= 30 * 60_000L -> durMs * 0.15f + 30_000f
+                                    durMs <= 120 * 60_000L -> durMs * 0.12f + 60_000f
+                                    else -> durMs * 0.10f + 120_000f
+                                }
+                                val deltaMs = (accX / w * spanMs).toLong()
+                                val target = (startFrac * durMs.toFloat()).toLong() + deltaMs
                                     .coerceIn(0L, durMs)
                                 seekPreviewMs = target
                                 showHud()
@@ -406,7 +411,9 @@ fun PlayerGestureOverlay(
                         hudJob?.cancel()
                     },
             ) {
-                /* 顶行：×1.0 倍速标（点回 1x）· ✕ 收起 */
+                /* 顶行：×1.0 倍速标（点回 1x）。✕ 收起键已删（2026-10-02 用户：
+                   "没用，也不该有——没必要关闭"：控件 3 秒自动隐 + 点空白即收起，
+                   关闭键是多余的；单击语义与雨见一致）。 */
                 Row(
                     Modifier
                         .align(Alignment.TopStart)
@@ -432,21 +439,6 @@ fun PlayerGestureOverlay(
                                 fontWeight = FontWeight.Bold,
                             )
                         }
-                    }
-                    Spacer(Modifier.weight(1f))
-                    val closeInd = remember { MutableInteractionSource() }
-                    Box(
-                        Modifier
-                            .size(34.dp)
-                            .clip(RoundedCornerShape(99))
-                            .background(Color(0x66000000))
-                            .clickable(interactionSource = closeInd, indication = null) {
-                                hudVisible = false
-                                hudJob?.cancel()
-                            },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text("✕", color = Color.White, fontSize = 15.sp)
                     }
                 }
 

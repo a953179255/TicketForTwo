@@ -489,7 +489,28 @@ internal const val UNPIN_VIDEO_JS =
       [].slice.call(document.querySelectorAll('video')).forEach(function(v){
         if(v.dataset.t2saved===undefined) return;
         v.style.cssText=v.dataset.t2saved; delete v.dataset.t2saved;
-        if(v.dataset.t2ctrl!==undefined){ v.controls=v.dataset.t2ctrl==='1'; delete v.dataset.t2ctrl; }});
+        if(v.dataset.t2ctrl!==undefined){ v.controls=v.dataset.t2ctrl==='1'; delete v.dataset.t2ctrl; }
+        /* **还原 ≠ 可见**（2026-10-02 用户实测"切浏览网页只剩黑、视频不见" +
+           模拟器 probe 实锤：video paused=false 在走 t=24.6→26.6，但屏上 y400-1600
+           纯黑）：页面原始样式可能本来就是隐藏/零尺寸（HLS 播放库动态控制），
+           或还原后元素落在视口外 —— 钉屏期间它是全屏 fixed，一还原就"消失"。
+           探测 rect，不可见就强制拉回文档流可见状态 + 滚进视口。 */
+        try{
+          var r=v.getBoundingClientRect();
+          var invisible = !r || r.width<40 || r.height<40 ||
+                          r.bottom<0 || r.top>window.innerHeight;
+          if(invisible){
+            v.style.setProperty('position','static','important');
+            v.style.setProperty('width','100%','important');
+            v.style.setProperty('height','auto','important');
+            v.style.setProperty('max-height','100%','important');
+            v.style.setProperty('display','block','important');
+            v.style.setProperty('object-fit','contain','important');
+            v.style.setProperty('margin','0 auto','important');
+          }
+          if(v.scrollIntoView) v.scrollIntoView({block:'center'});
+        }catch(e){}
+      });
       /* 黑底垫层与点击拦截层一并拆掉，页面恢复原样 */
       ['__t2pinbg','__t2pintrap'].forEach(function(id){
         var el=document.getElementById(id);

@@ -342,7 +342,7 @@ fun CinemaScreen(
                控制全走甲板（hostCmd 走 evaluateJavascript，不依赖 touch）。 */
             wv?.setOnTouchListener { _, _ -> android.util.Log.i("Cinema", "TOUCH: WebView 拦截（放映中）"); true }
         } else {
-            // 退出放映/收厅：全屏复位（甲板回来）+ 方向交还系统 + 网页触摸恢复 + 倍速归常速
+            // 退出放映/收厅/切浏览：全屏复位 + 方向交还系统 + 网页触摸恢复 + 倍速归常速
             deckHidden.value = false
             restoreOrientation()
             boostRate.value = 1.0
@@ -355,6 +355,37 @@ fun CinemaScreen(
             wv?.post {
                 wv?.evaluateJavascript(UNPIN_VIDEO_JS, null)
             }
+            /* **网页无条件恢复播放**（2026-10-02 用户实测"放映中点浏览，视频卡住、
+               网页界面不见了只剩视频"）：模拟器复现帧差=0（完全静止），日志显示
+               自播已停、UNPIN 也返回 ok，但网页仍冻结 —— 网页可能被交棒暂停过、
+               也可能指挥权时序差没收到恢复指令（1069 那条按 commander 条件发，
+               条件不满足就永远没人播）。不再赌时序：切浏览=回页面看它播，
+               这里直接无条件 Play 一次（用户要停再点一下即可）。 */
+            wv?.post {
+                // Play 的 JS 分支不消费 pos/dur（就是一句 v.play()），传 0 无副作用；
+                // 这里还读不到 player（它声明在本 effect 之后）。
+                wv?.evaluateJavascript(
+                    com.ticketfortwo.app.watch.WatchSync.jsFor(
+                        com.ticketfortwo.app.watch.WatchCmd.Play, 0L, 0L,
+                    ),
+                ) { r -> android.util.Log.i("Cinema", "BROWSE_PLAY -> $r") }
+            }
+            /* 诊断（2026-10-02 切浏览卡死排查）：Play 后连拍两次 video 状态，
+               paused/readyState/时间戳一次看清 —— 判断是"没播"还是"流死了"。 */
+            wv?.postDelayed({
+                val probe = "(function(){var v=document.querySelector('video');" +
+                    "return v?('paused='+v.paused+' rs='+v.readyState+" +
+                    "' t='+Math.round(v.currentTime*10)/10+" +
+                    "' src='+(v.currentSrc||v.src||'').slice(0,60)):'novideo';})()"
+                wv.evaluateJavascript(probe) { r ->
+                    android.util.Log.i("Cinema", "BROWSE_PROBE#1 $r")
+                    wv.postDelayed({
+                        wv.evaluateJavascript(probe) { r2 ->
+                            android.util.Log.i("Cinema", "BROWSE_PROBE#2 $r2")
+                        }
+                    }, 2_000)
+                }
+            }, 1_000)
         }
     }
     /* 进厅即输（方案A，2026-09-29 用户拍板）：引导页撤掉，空厅落地就是地址栏聚焦 +
@@ -1546,6 +1577,11 @@ fun CinemaScreen(
     Column(
         Modifier
             .fillMaxSize()
+            /* 放映态整页垫黑（2026-10-02 用户截图"甲板下面露着壁纸"）：画面区按
+               视频比例收紧后，甲板与屏底之间的剩余区域原靠 Spacer 垫黑，但实际
+               露出了页面壁纸（剩余空间分配没落到它）。改为根容器直接铺黑 ——
+               甲板玻璃浮在纯黑上，影院氛围也对；浏览态保持透明露壁纸。 */
+            .then(if (theater) Modifier.background(Color.Black) else Modifier)
             /* edge-to-edge 下底部卡片直接压到手势条上（2026-10-01 反馈）——
                整个放映厅让开导航栏：浏览底卡与放映甲板一起收进来。 */
             .navigationBarsPadding(),
@@ -1624,6 +1660,49 @@ fun CinemaScreen(
                        曾被这层抢先把甲板唤回、把新手势层的单击吃掉 —— 用户实测
                        "全屏时点画面自动返回放映界面"。单击出控件/⛶退出统一走
                        下面的 PlayerGestureOverlay。 */
+                    /* **横屏也挂手势层**（2026-10-02 用户真机实测"全屏后点屏幕
+                       什么按钮都不出、手势也没用"——全屏转横后走的是这个 wide 分支，
+                       此前只有竖屏分支挂了 PlayerGestureOverlay）。参数与竖屏同源。 */
+                    if (theater) {
+                        val durForGesture = (if (tp.active) tp.durMs else 0L).takeIf { it > 0 }
+                            ?: player?.durMs?.takeIf { it > 0 } ?: cinema?.durMs ?: 0L
+                        PlayerGestureOverlay(
+                            playing = if (tp.active) tp.playing else player?.playing == true,
+                            posMs = if (tp.active) tp.posMs else (player?.posMs ?: 0L),
+                            durMs = durForGesture,
+                            rate = boostRate.value,
+                            ladder = PlayerPrefs.ladder(),
+                            stepSec = PlayerPrefs.stepSec,
+                            onDoubleTap = { zone ->
+                                val step = PlayerPrefs.stepSec * 1000L
+                                when (zone) {
+                                    TapZone.Left -> hostCmd(WatchCmd.Step(-step))
+                                    TapZone.Right -> hostCmd(WatchCmd.Step(step))
+                                    TapZone.Center -> {
+                                        val playingNow =
+                                            if (tp.active) tp.playing else player?.playing == true
+                                        hostCmd(if (playingNow) WatchCmd.Pause else WatchCmd.Play)
+                                    }
+                                }
+                            },
+                            onSeek = { frac ->
+                                if (durForGesture > 0) {
+                                    hostCmd(
+                                        WatchCmd.Seek(
+                                            (frac * durForGesture).toLong().coerceAtLeast(0L),
+                                        ),
+                                    )
+                                }
+                            },
+                            onRate = { r -> applyBoost(r) },
+                            onToggleFullscreen = {
+                                // 横屏放映即"全屏中"：⛶ = 退出回竖屏放映界面
+                                deckHidden.value = false
+                                restoreOrientation()
+                                note = "已退出全屏"
+                            },
+                        )
+                    }
                 }
             } else {
             Row(Modifier.fillMaxWidth().weight(1f)) {
