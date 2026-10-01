@@ -269,9 +269,15 @@ fun CinemaScreen(
        放映模式，开始放映时打开、收厅时退出；顶栏「放映|浏览」随时切。 */
     var theater by theaterMode
     LaunchedEffect(Unit) {
-        // 新的一场还没片：别把上一场的放映模式带进来
-        if (CallSession.cinema.value == null && theaterMode.value) {
-            android.util.Log.i("Cinema", "THEATER 复位（新一场无片）cinema=null state=${CallSession.state.value}")
+        /* 新的一场还没片：别把上一场的放映模式带进来 —— 但**只在会话真的散场时**。
+           cinema=null 而 state 还是 WaitingViewer 之类的场景 = 投屏连接/断开引发的
+           状态抖动（2026-10-01 真机日志：cinema 被清但会话活着，用户明明还在厅里），
+           这时候复位等于把人从放映界面踢回浏览。真散场（Idle）才复位。 */
+        if (CallSession.cinema.value == null &&
+            CallSession.state.value is CallSession.State.Idle &&
+            theaterMode.value
+        ) {
+            android.util.Log.i("Cinema", "THEATER 复位（会话散场）")
             theaterMode.value = false
         }
     }

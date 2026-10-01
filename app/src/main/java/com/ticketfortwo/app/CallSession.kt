@@ -206,6 +206,14 @@ object CallSession {
     /** 房主选定片源（或收厅）。传 null 表示回到"厅里还没片"的状态。 */
     fun setCinemaTrack(track: CinemaSync.Track?) {
         if (track == null) {
+            /* **诊断日志（2026-10-01）**：投屏连接/断开时 cinema 被无日志清空
+               （state 还是 WaitingViewer = 不是 stop 也不是 UI 收厅）—— 打调用栈
+               直接看调用者。定位后可删。 */
+            android.util.Log.i(
+                TAG,
+                "CINEMA CLEAR 调用来源：" +
+                    Throwable().stackTrace.take(6).joinToString(" <- ") { it.className.substringAfterLast('.') + "." + it.methodName },
+            )
             _cinema.value = null
             _viewerPlayback.value = null
             broadcastCinema()
