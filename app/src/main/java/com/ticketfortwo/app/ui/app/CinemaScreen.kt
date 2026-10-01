@@ -270,7 +270,10 @@ fun CinemaScreen(
     var theater by theaterMode
     LaunchedEffect(Unit) {
         // 新的一场还没片：别把上一场的放映模式带进来
-        if (CallSession.cinema.value == null) theaterMode.value = false
+        if (CallSession.cinema.value == null && theaterMode.value) {
+            android.util.Log.i("Cinema", "THEATER 复位（新一场无片）cinema=null state=${CallSession.state.value}")
+            theaterMode.value = false
+        }
     }
     /** 视频宽高比（探针读页面 video 的真实尺寸）；拿不到按 16:9 兜底。 */
     fun videoRatio(): Float {
@@ -289,6 +292,7 @@ fun CinemaScreen(
         if (!deckHidden.value) restoreOrientation()
     }
     LaunchedEffect(theater) {
+        android.util.Log.i("Cinema", "THEATER -> $theater pageUrl=${pageUrl.take(40)} cinema=${cinema != null} state=${CallSession.state.value}")
         val wv = CinemaBrowser.webView
         if (theater) {
             /* **View 层禁网页触摸**（2026-10-01 用户复测"点击画面仍跳广告"）：
@@ -296,7 +300,7 @@ fun CinemaScreen(
               （AndroidView 分发顺序），JS 拦截层拦不住 View 层的这条路。
                OnTouchListener 返回 true 从根上掐 —— 放映中网页一个 touch 都收不到，
                控制全走甲板（hostCmd 走 evaluateJavascript，不依赖 touch）。 */
-            wv?.setOnTouchListener { _, _ -> true }
+            wv?.setOnTouchListener { _, _ -> android.util.Log.i("Cinema", "TOUCH: WebView 拦截（放映中）"); true }
         } else {
             // 退出放映/收厅：全屏复位（甲板回来）+ 方向交还系统 + 网页触摸恢复
             deckHidden.value = false
@@ -1637,7 +1641,7 @@ fun CinemaScreen(
                                     /* 自播画面自己消费 touch（2026-10-01 复测穿透修复）：
                                        TextureView 默认不消费，touch 穿到底下 WebView →
                                        网页收点击 → 跳广告。拦下来并顺手弹自播控制条。 */
-                                    tv.setOnTouchListener { _, _ -> showTctl = true; true }
+                                    tv.setOnTouchListener { _, _ -> android.util.Log.i("Cinema", "TOUCH: 自播 TextureView 消费"); showTctl = true; true }
                                 }
                             },
                             update = { tv -> TheaterPlayer.attach(tv) },
