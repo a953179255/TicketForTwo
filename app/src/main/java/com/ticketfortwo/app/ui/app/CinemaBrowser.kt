@@ -363,6 +363,13 @@ internal const val PIN_VIDEO_JS =
             return 'ok|vp='+vw2+'x'+vh2+'|rs='+(window.__t2pinResizeCount||0);
         }
         if(v.dataset.t2saved===undefined) v.dataset.t2saved=v.style.cssText;
+        /* **禁用网页播放器原生控制条**（2026-10-01 用户反馈"投屏时呼出一下进度条"）：
+           界面重建（投屏连/断）时 WebView 重挂，Chromium 对 video 重新合成，
+           原生控制条跟着闪现一下 —— 看起来就像"点击触发了播放器"。放映中控制
+           全走甲板，原生条本来就不该有。controls 是 property 不是 style，
+           dataset 存不了，单独记一个标记，UNPIN 时还原。 */
+        if(v.dataset.t2ctrl===undefined) v.dataset.t2ctrl=v.controls?'1':'0';
+        v.controls=false;
         var vw=window.innerWidth||372, vh=window.innerHeight||0;
         /* **不能只靠 object-fit:contain**：Android WebView 的 video 走硬件合成时
            object-fit 会被无视（实测 16:9 片源被拉进 1080x935 的盒子，人全是扁的，
@@ -436,7 +443,8 @@ internal const val UNPIN_VIDEO_JS =
     """(function(){
       [].slice.call(document.querySelectorAll('video')).forEach(function(v){
         if(v.dataset.t2saved===undefined) return;
-        v.style.cssText=v.dataset.t2saved; delete v.dataset.t2saved;});
+        v.style.cssText=v.dataset.t2saved; delete v.dataset.t2saved;
+        if(v.dataset.t2ctrl!==undefined){ v.controls=v.dataset.t2ctrl==='1'; delete v.dataset.t2ctrl; }});
       /* 黑底垫层与点击拦截层一并拆掉，页面恢复原样 */
       ['__t2pinbg','__t2pintrap'].forEach(function(id){
         var el=document.getElementById(id);

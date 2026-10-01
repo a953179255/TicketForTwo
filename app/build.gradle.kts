@@ -25,8 +25,8 @@ android {
         // 屏幕声用的 AudioPlaybackCapture 只要 29，所以不构成下限。
         minSdk = 33
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.2.6"
+        versionCode = 9
+        versionName = "0.2.7"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
