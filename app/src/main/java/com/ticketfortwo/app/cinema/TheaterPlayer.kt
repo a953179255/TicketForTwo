@@ -80,6 +80,21 @@ object TheaterPlayer {
         }
     }
 
+    /**
+     * 当前倍速（手势层长按/上滑设置）。[exo] 为 null 时先记着 —— [start] 建好
+     * 播放器后立即套用，[stop] 归 1。HUD 显示读 CinemaScreen.boostRate，这里只管执行。
+     */
+    @Volatile
+    var rate: Double = 1.0
+        private set
+
+    fun setRate(r: Double) {
+        rate = r
+        runCatching {
+            exo?.playbackParameters = androidx.media3.common.PlaybackParameters(r.toFloat())
+        }
+    }
+
     /** 起播（幂等：已在播就忽略）。挑档按放映预算 1920 —— 比浮窗的 960 高一档。 */
     fun start(
         context: Context,
@@ -120,6 +135,8 @@ object TheaterPlayer {
                 return@launch
             }
             exo = p
+            // 手势在起播期间设的倍速不丢：播放器就位立刻套上
+            p.playbackParameters = androidx.media3.common.PlaybackParameters(rate.toFloat())
             val ext = external
             Log.i("TheaterPlay", "start ext=" + (ext != null) + " ui=" + (surface != null))
             if (ext != null) p.setVideoSurface(ext)      // 转播在先：帧桥优先
@@ -148,6 +165,7 @@ object TheaterPlayer {
         runCatching { exo?.release() }
         exo = null
         surface = null
+        rate = 1.0
         _state.value = State()
         Log.i("TheaterPlay", "自播已停止")
     }

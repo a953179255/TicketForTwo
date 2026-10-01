@@ -1204,13 +1204,18 @@ function syncLocal() {
   const age = Math.max(0, now - cine.hostWall - cineSkew);
   const want = cine.playing ? cine.pos + age * (cine.rate || 1) : cine.pos;
   const drift = want - lv.currentTime * 1000;
+  /* base = 房主的内容倍速（手势长按/上滑设的）——本地播放器必须同速，
+     否则房主 2x、观众 1x，投影位置会以每秒 1000ms 的速度甩开、追帧逻辑
+     会疯狂 seek。微调（0.94~1.06 追帧）叠加在 base 之上，不互相打架。 */
+  const base = Math.min(8, Math.max(0.25, cine.rate || 1));
   if (now < cineApplyUntil) { paintCine(drift); return; }  // 刚发过指令，先别抢方向盘
   if (Math.abs(drift) > 1200) {
     try { lv.currentTime = Math.max(0, want / 1000); } catch (e) {}
   } else if (Math.abs(drift) > 120 && cine.playing) {
-    lv.playbackRate = Math.min(1.06, Math.max(0.94, 1 + drift / 1000 * 0.07));
+    const micro = Math.min(1.06, Math.max(0.94, 1 + drift / 1000 * 0.07));
+    lv.playbackRate = base * micro;
   } else {
-    lv.playbackRate = 1;
+    lv.playbackRate = base;
   }
   if (cine.playing && lv.paused && !cineAwaitTap) lv.play().catch(() => {});
   if (!cine.playing && !lv.paused) lv.pause();

@@ -173,6 +173,15 @@ object WatchSync {
                 "v.currentTime=t;v.play();})()"
     }
 
+    /**
+     * 把网页播放器拨到某倍速 —— **房主本机手势专用，不进协议**。
+     *
+     * 观众端的倍速跟随走的是放映广播里的 `State.rate` 字段（协议里本来就有），
+     * 不需要新增指令；这条 JS 只负责"房主自己这屏的网页"在兜底态跟上手势。
+     */
+    fun rateJs(rate: Double): String =
+        "(function(){var v=$FIND;if(v)v.playbackRate=$rate;})()"
+
     /** mm:ss / h:mm:ss —— 两端进度显示共用，避免同一秒在两边写成不同样子。 */
     fun formatTime(ms: Long): String = SyncProto.formatTime(ms)
 }

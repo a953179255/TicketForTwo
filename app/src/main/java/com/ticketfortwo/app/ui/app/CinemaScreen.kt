@@ -59,6 +59,7 @@ import com.ticketfortwo.app.cinema.FloatRequest
 import com.ticketfortwo.app.cinema.FloatWarmer
 import com.ticketfortwo.app.cinema.MediaDuration
 import com.ticketfortwo.app.cinema.MediaSniffer
+import com.ticketfortwo.app.cinema.PlayerPrefs
 import com.ticketfortwo.app.cinema.TheaterPlayer
 import com.ticketfortwo.app.cinema.SRC_PAGE
 import com.ticketfortwo.app.cinema.SnifferState
@@ -113,6 +114,11 @@ private val cinemaInputUrl = androidx.compose.runtime.mutableStateOf("")
 /* 放映全屏（2026-10-01 用户反馈"放映界面不能全屏"）：甲板收起、画面吃满；
    轻点画面唤回甲板。进程级 —— 重建/覆盖层往返不丢。退出放映自动复位。 */
 private val deckHidden = androidx.compose.runtime.mutableStateOf(false)
+
+/* 当前倍速（手势长按/上滑设的；1.0 = 常速）。进程级：
+   ① HUD/角标显示读它 ② 每轮进度广播把它塞进 State.rate —— 观众端既按它投影
+   时间轴、也把本地播放器拨到同速（同速才能同帧）。退出放映复位 1.0。 */
+private val boostRate = androidx.compose.runtime.mutableStateOf(1.0)
 
 
 /**
@@ -279,6 +285,8 @@ fun CinemaScreen(
         ) {
             android.util.Log.i("Cinema", "THEATER 复位（会话散场）")
             theaterMode.value = false
+            boostRate.value = 1.0
+            TheaterPlayer.setRate(1.0)
         }
     }
     /** 视频宽高比（探针读页面 video 的真实尺寸）；拿不到按 16:9 兜底。 */
@@ -333,9 +341,11 @@ fun CinemaScreen(
                控制全走甲板（hostCmd 走 evaluateJavascript，不依赖 touch）。 */
             wv?.setOnTouchListener { _, _ -> android.util.Log.i("Cinema", "TOUCH: WebView 拦截（放映中）"); true }
         } else {
-            // 退出放映/收厅：全屏复位（甲板回来）+ 方向交还系统 + 网页触摸恢复
+            // 退出放映/收厅：全屏复位（甲板回来）+ 方向交还系统 + 网页触摸恢复 + 倍速归常速
             deckHidden.value = false
             restoreOrientation()
+            boostRate.value = 1.0
+            TheaterPlayer.setRate(1.0)
             wv?.setOnTouchListener(null)
             /* **统一拆钉屏**（2026-10-01 问题 1）：原来只有手动切「浏览」那一条路
                会 pinVideo(false)；投屏断开触发界面复位走的是 theaterMode 复位，
@@ -462,10 +472,15 @@ fun CinemaScreen(
        网页钉屏（还在播/暂停帧）或自播 TextureView 顶着，首帧一到无缝切入。 */
     var relayFirstFrame by remember { mutableStateOf(false) }
     LaunchedEffect(localVt) { relayFirstFrame = false }   // 换轨/重开转播要重新等首帧
+    /* 手势的两个可自定义参数（快进步长/倍速档位）：首次读盘挪到 IO ——
+       SharedPreferences 首次访问会在调用线程同步等磁盘（老坑）。 */
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            PlayerPrefs.init(context)
+        }
+    }
     /** 麦克风实际开着没（放映面板的麦键跟它走 —— 不跟手动静音位，防"图标骗人"）。 */
     val micLive by CallSession.micLive.collectAsState()
-    /** 点画面弹出的自播控制条（3 秒自动隐）。 */
-    var showTctl by remember { mutableStateOf(false) }
     /* 候选时长（URL → 毫秒）：异步回填，先出条目、时长后填。 */
     var durations by remember { mutableStateOf(emptyMap<String, Long>()) }
 
@@ -728,6 +743,23 @@ fun CinemaScreen(
         }
     }
 
+    /**
+     * 手势设倍速（长按/上滑/点角标回 1x）：**本机立刻生效 + 进程状态更新**。
+     *
+     * 广播不用单独发 —— 进度每秒一轮 [CallSession.publishCinemaProgress]，
+     * 把 [boostRate] 塞进 State.rate 后观众端自然收到：既按它投影时间轴、
+     * 又把本地播放器拨到同速（同速才能同帧）。自播在走给 ExoPlayer，否则给
+     * 网页兜底态的 <video>（rateJs 是本地注入，不进协议 —— 协议只传结果值）。
+     */
+    fun applyBoost(r: Double) {
+        boostRate.value = r
+        if (TheaterPlayer.state.value.active) {
+            TheaterPlayer.setRate(r)
+        } else {
+            webView.post { webView.evaluateJavascript(WatchSync.rateJs(r), null) }
+        }
+    }
+
     /* 系统返回 = 浏览器后退，全屏永远优先，历史到头才离开放映厅
        （MainActivity 的 showCinema handler 在本屏之后注册不上，由 else 分支的
        onBack() 直接离场，行为等价）。用户反馈的场景：网页被广告/自动跳转带走后
@@ -967,7 +999,7 @@ fun CinemaScreen(
                 /* 指挥权已交给浮窗/自播：网页这个播放器已停，它的读数是陈旧的，
                    再照发会把观众的时间轴拽回旧位置（两套进度打架的根源）。 */
                 if (commander != Commander.Page) return@evaluateJavascript
-                CallSession.publishCinemaProgress(w.posMs, w.durMs, w.playing)
+                CallSession.publishCinemaProgress(w.posMs, w.durMs, w.playing, rate = boostRate.value)
             }
         }
     }
@@ -995,7 +1027,7 @@ fun CinemaScreen(
             delay(500)
             val f = FloatPlayer.state.value
             if (!f.active) break
-            if (cinema != null) CallSession.publishCinemaProgress(f.posMs, f.durMs, f.playing)
+            if (cinema != null) CallSession.publishCinemaProgress(f.posMs, f.durMs, f.playing, rate = boostRate.value)
         }
     }
 
@@ -1090,14 +1122,6 @@ fun CinemaScreen(
         }
     }
 
-    /* 控制条 3 秒不碰自动收起。 */
-    LaunchedEffect(showTctl) {
-        if (showTctl) {
-            delay(3_000)
-            showTctl = false
-        }
-    }
-
     /* 自播指挥官的广播循环（与浮窗同款）。 */
     LaunchedEffect(commander, tp.active) {
         if (commander != Commander.Theater || !tp.active) return@LaunchedEffect
@@ -1105,7 +1129,7 @@ fun CinemaScreen(
             delay(500)
             val t = TheaterPlayer.state.value
             if (!t.active) break
-            if (cinema != null) CallSession.publishCinemaProgress(t.posMs, t.durMs, t.playing)
+            if (cinema != null) CallSession.publishCinemaProgress(t.posMs, t.durMs, t.playing, rate = boostRate.value)
         }
     }
 
@@ -1712,87 +1736,77 @@ fun CinemaScreen(
                     }
                 } else if (tp.active && tp.ready) {
                     /* 画面自播视图（2B）：画面是 TextureView —— 点击**进不到网页**，
-                       广告/整块画面跳转没有 DOM 可跳；轻点弹玻璃控制条（3 秒自动隐）。
-                       **ready 才接管画面**（2026-10-01）：起播要拉流 2-3 秒，原来
-                       active 就把黑 TextureView 盖上来 —— 浏览切放映"卡 3 秒黑屏"
-                       就是它。未 ready 时落到底下的网页钉屏分支，网页还在播（暂停
-                       交棒本来就发生在 ready），首帧一到无缝切换。 */
-                    val tapInd = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-                    Box(
-                        Modifier
-                            .fillMaxSize()
-                            .clickable(interactionSource = tapInd, indication = null) {
-                                showTctl = true
-                            },
-                    ) {
+                       广告/整块画面跳转没有 DOM 可跳。
+                       （原"轻点弹控制条 showTctl"已删：方案 C 手势层统一接管，
+                       单击出 HUD、双击三区，不再有第二套控制条。）
+                       **ready 才接管画面**（2026-10-01）：起播要拉流 2-3 秒，
+                       未 ready 时落到底下的网页钉屏分支，首帧一到无缝切换。 */
+                    Box(Modifier.fillMaxSize()) {
                         AndroidView(
                             factory = {
                                 android.view.TextureView(it).also { tv ->
                                     TheaterPlayer.attach(tv)
                                     /* 自播画面自己消费 touch（2026-10-01 复测穿透修复）：
                                        TextureView 默认不消费，touch 穿到底下 WebView →
-                                       网页收点击 → 跳广告。拦下来并顺手弹自播控制条。 */
-                                    tv.setOnTouchListener { _, _ -> android.util.Log.i("Cinema", "TOUCH: 自播 TextureView 消费"); showTctl = true; true }
+                                       网页收点击 → 跳广告。拦下来（交互由上面的手势层做）。 */
+                                    tv.setOnTouchListener { _, _ ->
+                                        android.util.Log.i("Cinema", "TOUCH: 自播 TextureView 消费")
+                                        true
+                                    }
                                 }
                             },
                             update = { tv -> TheaterPlayer.attach(tv) },
                             onRelease = { TheaterPlayer.detach() },
                             modifier = Modifier.fillMaxSize(),
                         )
-                        if (showTctl) {
-                            val barInd = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-                            fun tap(click: () -> Unit): Modifier = Modifier
-                                .clickable(interactionSource = barInd, indication = null) { click() }
-                            Row(
-                                Modifier
-                                    .align(Alignment.BottomCenter)
-                                    .padding(bottom = 16.dp)
-                                    .clip(RoundedCornerShape(32.dp))
-                                    .background(Color(0x73000000))
-                                    .padding(horizontal = 22.dp, vertical = 9.dp),
-                                horizontalArrangement = Arrangement.spacedBy(26.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    "−10",
-                                    color = Color.White,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    modifier = tap { hostCmd(WatchCmd.Step(-10_000)) },
-                                )
-                                Text(
-                                    if (tp.playing) "❚❚" else "▶",
-                                    color = Color.White,
-                                    fontSize = 17.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = tap {
-                                        hostCmd(if (tp.playing) WatchCmd.Pause else WatchCmd.Play)
-                                    },
-                                )
-                                Text(
-                                    "+10",
-                                    color = Color.White,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    modifier = tap { hostCmd(WatchCmd.Step(10_000)) },
-                                )
-                            }
-                        }
                     }
                 } else key(webGen) {
                     AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
                 }
-                /* 全屏态的唤回层：甲板收起后整块画面都可轻点，一下唤回控制甲板。
-                   只在全屏态出现，浏览态（网页要收点击）不受影响。 */
-                if (theater && deckHidden.value) {
-                    val tapInd = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-                    Box(
-                        Modifier
-                            .matchParentSize()
-                            .clickable(interactionSource = tapInd, indication = null) {
+                /* 手势层（方案 C 定稿，2026-10-01）：三态之上、放映态常挂，
+                   **替代**原"全屏唤回层"——全屏态的轻点唤回并进 onSingleTap
+                   （效果图承诺的合并手势）。浏览态不挂（网页要收点击）。
+                   单击出 HUD、双击三区快进快退、横滑 seek、竖滑亮度/音量、
+                   长按+上滑倍速，全部在 PlayerGestureOverlay 里。 */
+                if (theater) {
+                    val durForGesture = (if (tp.active) tp.durMs else 0L).takeIf { it > 0 }
+                        ?: player?.durMs?.takeIf { it > 0 } ?: cinema?.durMs ?: 0L
+                    PlayerGestureOverlay(
+                        playing = if (tp.active) tp.playing else player?.playing == true,
+                        posMs = if (tp.active) tp.posMs else (player?.posMs ?: 0L),
+                        durMs = durForGesture,
+                        rate = boostRate.value,
+                        ladder = PlayerPrefs.ladder(),
+                        stepSec = PlayerPrefs.stepSec,
+                        isFullScreen = deckHidden.value,
+                        onSingleTap = {
+                            if (deckHidden.value) {
                                 deckHidden.value = false
                                 restoreOrientation()   // 唤回甲板 = 退出全屏，方向交还系统
-                            },
+                            }
+                        },
+                        onDoubleTap = { zone ->
+                            val step = PlayerPrefs.stepSec * 1000L
+                            when (zone) {
+                                TapZone.Left -> hostCmd(WatchCmd.Step(-step))
+                                TapZone.Right -> hostCmd(WatchCmd.Step(step))
+                                TapZone.Center -> {
+                                    val playingNow =
+                                        if (tp.active) tp.playing else player?.playing == true
+                                    hostCmd(if (playingNow) WatchCmd.Pause else WatchCmd.Play)
+                                }
+                            }
+                        },
+                        onSeek = { frac ->
+                            if (durForGesture > 0) {
+                                hostCmd(
+                                    WatchCmd.Seek(
+                                        (frac * durForGesture).toLong().coerceAtLeast(0L),
+                                    ),
+                                )
+                            }
+                        },
+                        onRate = { r -> applyBoost(r) },
                     )
                 }
             }
@@ -1843,63 +1857,52 @@ fun CinemaScreen(
                     ?: player?.durMs?.takeIf { it > 0 } ?: cinema?.durMs ?: 0L
                 val posMs = if (tp.active) tp.posMs else (player?.posMs ?: 0L)
                 val selfPlaying = if (tp.active) tp.playing else player?.playing == true
-                TheaterTrack(
-                    frac = if (durMs > 0) posMs.toFloat() / durMs.toFloat() else 0f,
-                    enabled = cinema != null && durMs > 0,
-                    onSeek = { f -> hostCmd(WatchCmd.Seek((f * durMs).toLong().coerceAtLeast(0L))) },
-                )
-                Box(Modifier.height(4.dp))
+                /* 状态句（方案 C 甲板瘦身，2026-10-01 定稿）：独立进度条（TheaterTrack）、
+                   时间行、三圆钮（-10 ▶ +10）**全部删除** —— 播放控制全在画面手势里
+                   （单击 HUD · 双击三区 · 横滑 seek · 长按倍速）。甲板退成"厅的遥控器"，
+                   这行是它唯一的时间读数。 */
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        if (player != null) {
-                            CinemaSync.formatTime(posMs) + " / " + CinemaSync.formatTime(durMs)
-                        } else "还没接到本页播放器",
-                        fontSize = 12.5.sp,
-                        color = Ink.TextMid,
+                        (if (selfPlaying) "正在放映" else "已暂停") + " · " +
+                            (if (player != null || tp.active) {
+                                CinemaSync.formatTime(posMs) + " / " + CinemaSync.formatTime(durMs)
+                            } else "还没接到本页播放器"),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Ink.TextHi,
                         modifier = Modifier.weight(1f),
                     )
-                    if (cinema != null) {
+                    /* 倍速只读徽标：画面右上角的角标可点回 1x，这里同步显示当前档。 */
+                    if (boostRate.value != 1.0) {
                         Box(
-                            Modifier.clip(RoundedCornerShape(9.dp))
-                                .background(Color(0x14FFFFFF))
+                            Modifier
+                                .clip(RoundedCornerShape(9.dp))
+                                .background(Color(0x1AF0C36A))
                                 .padding(horizontal = 8.dp, vertical = 2.dp),
                         ) {
                             Text(
-                                if (selfPlaying) "正在放映" else "已暂停",
+                                "×" + ("%.1f".format(boostRate.value)
+                                    .trimEnd('0').trimEnd('.')),
                                 fontSize = 11.sp,
-                                color = if (player?.playing == true) Ink.Live else Ink.TextLow,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF8A5A12),
                             )
                         }
                     }
-                    /* 「复制邀请」胶囊已删（2026-10-01 用户反馈）：进度条下这颗和
-                       甲板四格里的「邀请」完全重复 —— 统一入口收进四格。 */
                 }
                 Box(Modifier.height(14.dp))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    DeckCircle("-10", backdrop) { hostCmd(WatchCmd.Step(-10_000)) }
-                    Box(Modifier.width(34.dp))
-                    DeckCircle(if (selfPlaying) "❚❚" else "▶", backdrop, big = true) {
-                        hostCmd(if (selfPlaying) WatchCmd.Pause else WatchCmd.Play)
-                    }
-                    Box(Modifier.width(34.dp))
-                    DeckCircle("+10", backdrop) { hostCmd(WatchCmd.Step(10_000)) }
-                }
-                Box(Modifier.height(16.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    /* 动作行顺序（2026-10-01 用户反馈"后退下意识应该在左边"，雨见
+                       底部五键同款）：后退最左 · 分享居中 · 破坏性的「收厅」靠右。 */
+                    DockBtn("后退", backdrop, Modifier.weight(1f)) { browserBack() }
+                    if (!screenShared) {
+                        DockBtn("分享我的屏幕", backdrop, Modifier.weight(1f)) { onStartShare() }
+                    }
                     if (cinema != null) {
                         DockBtn("收厅", backdrop, Modifier.weight(1f), hot = true) {
                             askCloseRoom = true     // 与动作行同一个二次确认
                         }
                     }
-                    if (!screenShared) {
-                        DockBtn("分享我的屏幕", backdrop, Modifier.weight(1f)) { onStartShare() }
-                    }
-                    // 放映模式里也有后退 —— 广告页一键退回，不必先切「浏览」
-                    DockBtn("后退", backdrop, Modifier.weight(1f)) { browserBack() }
                 }
                 Box(Modifier.height(14.dp))
                 /* 对方状态条（方案二）：一起看的核心是「两个人」—— 对方在哪一步必须像
@@ -2147,45 +2150,16 @@ fun CinemaScreen(
                             lineHeight = 18.sp,
                         )
                     }
+                    val maxDur = ranked.mapNotNull { durations[it.url] }.maxOrNull()
                     ranked.forEach { h ->
-                        val dur = durations[h.url]
-                        val cur = h.url == probe?.currentSrc
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable { askPickList = false; requestPlay(h) }
-                                .padding(vertical = 7.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                fmtDuration(dur),
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (cur) Ink.Live else Ink.TextHi,
-                            )
-                            Box(Modifier.width(8.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    MediaSniffer.shorten(h.url, 44),
-                                    fontSize = 11.sp,
-                                    color = Ink.TextMid,
-                                    maxLines = 1,
-                                )
-                                Text(
-                                    "${h.kind.name.take(4)} · ${MediaDuration.hint(dur)}" +
-                                        if (cur) " · 网页正在播" else "",
-                                    fontSize = 10.sp,
-                                    color = Ink.TextLow,
-                                )
-                            }
-                            Text(
-                                if (float.active) "换它" else "播它",
-                                fontSize = 11.5.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Ink.Live,
-                                modifier = Modifier.padding(start = 6.dp),
-                            )
-                        }
+                        CandidateCard(
+                            hit = h,
+                            durMs = durations[h.url],
+                            current = h.url == probe?.currentSrc,
+                            longest = durations[h.url] != null && durations[h.url] == maxDur,
+                            action = if (float.active) "换它" else "播它",
+                            onClick = { askPickList = false; requestPlay(h) },
+                        )
                     }
                     Box(Modifier.height(8.dp))
                     Text(
@@ -2642,65 +2616,30 @@ private fun CinemaPanel(
                         fontSize = 10.5.sp,
                         color = Ink.TextLow,
                     )
-                    /* 候选列表：全列 + 标时长 —— 一页里常有正片/预告/广告好几条，
-                       光看地址分不清谁是谁，时长是最直观的分辨依据（2026-09-30 用户要求）。
-                       正在播的置顶、其余按时长降序；时长异步回填，没回来前显示"未知"。 */
+                    /* 候选列表（雨见式卡片，2026-10-01 定稿）：类型徽标 + 时长大字 +
+                       疑似标签 + 正在播绿框高亮 + 「放映」/「浮窗」双动作。
+                       正在播的置顶、其余按时长降序；时长异步回填，没回来前显示"探测中"。 */
                     val ranked = rankedCandidates(hits, playingUrl, durations)
                     if (ranked.isNotEmpty()) {
                         Text(
-                            "嗅到 ${ranked.size} 条 · 最长的多半是正片，十几秒的基本是广告",
-                            fontSize = 10.sp,
-                            color = Ink.TextLow,
+                            "🔍 检测到 ${ranked.size} 条可播 · 最长的多半是正片，十几秒的基本是广告",
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Ink.TextMid,
                         )
                     }
+                    val maxDur = ranked.mapNotNull { durations[it.url] }.maxOrNull()
                     ranked.forEach { h ->
-                        val dur = durations[h.url]
-                        val cur = h.url == playingUrl
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                fmtDuration(dur),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (cur) Ink.Live else Ink.TextHi,
-                            )
-                            Box(Modifier.width(7.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    MediaSniffer.shorten(h.url, 52),
-                                    fontSize = 10.5.sp,
-                                    color = Ink.TextMid,
-                                    maxLines = 1,
-                                )
-                                Text(
-                                    "${h.kind.name.take(4)} · ${MediaDuration.hint(dur)}" +
-                                        if (cur) " · 网页正在播" else "",
-                                    fontSize = 9.5.sp,
-                                    color = Ink.TextLow,
-                                )
-                            }
-                            // 两条出路：放给对方（放映）/ 自己挂浮窗看
-                            Text(
-                                "放映",
-                                fontSize = 11.sp,
-                                color = Ink.TextHi,
-                                modifier = Modifier
-                                    .clickable { onPick(h) }
-                                    .padding(horizontal = 5.dp),
-                            )
-                            Text(
-                                "浮窗",
-                                fontSize = 11.sp,
-                                color = Ink.Live,
-                                modifier = Modifier
-                                    .clickable { onFloatPick(h) }
-                                    .padding(horizontal = 5.dp),
-                            )
-                        }
+                        CandidateCard(
+                            hit = h,
+                            durMs = durations[h.url],
+                            current = h.url == playingUrl,
+                            longest = durations[h.url] != null && durations[h.url] == maxDur,
+                            action = "放映",
+                            onClick = { onPick(h) },
+                            secondaryAction = "浮窗",
+                            onSecondary = { onFloatPick(h) },
+                        )
                     }
                 }
                 Text(note, fontSize = 10.5.sp, color = Ink.TextLow)
@@ -2774,6 +2713,145 @@ private fun fmtDuration(ms: Long?): String {
         "%d:%02d:%02d".format(h, m, s)
     } else {
         "%d:%02d".format(m, s)
+    }
+}
+
+/**
+ * 候选卡片（雨见式资源嗅探列表，2026-10-01 用户定稿"学习雨见的展现效果"）：
+ * 类型徽标色块 + 时长大字 + 疑似标签 + 正在播绿框高亮 + 右侧操作键。
+ * 「换片」弹层与「展开嗅探」面板共用 —— 过去两处各写一版纯文字行，样式漂移。
+ */
+@Composable
+private fun CandidateCard(
+    hit: MediaSniffer.Hit,
+    durMs: Long?,
+    current: Boolean,
+    longest: Boolean,
+    action: String,
+    onClick: () -> Unit,
+    secondaryAction: String? = null,
+    onSecondary: (() -> Unit)? = null,
+) {
+    // 类型徽标：HLS 紫 / MP4 橙 / 音频蓝（与 mockup 色板一致）
+    val (kindLabel, kindColor) = when (hit.kind) {
+        MediaSniffer.Kind.Progressive -> "MP4" to Color(0xFFFF8A6B)
+        MediaSniffer.Kind.Audio -> "音频" to Color(0xFF4AA8E8)
+        else -> "HLS" to Color(0xFF8F76E8)
+    }
+    val tagText = when {
+        current -> "正在播"
+        durMs != null && durMs < 60_000L -> "疑似广告"
+        longest -> "正片 · 最长"
+        else -> null
+    }
+    val tagColor = when (tagText) {
+        "正在播", "正片 · 最长" -> Color(0xFF149A7D)
+        "疑似广告" -> Color(0xFFE3638C)
+        else -> Color(0xFF6D54D6)
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(
+                if (current) Color(0xE6DFF6EF) else Color(0xF2FFFFFF),
+            )
+            .then(
+                if (current) Modifier.border(1.5.dp, Color(0x992FBFA0), RoundedCornerShape(14.dp))
+                else Modifier.border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(14.dp)),
+            )
+            .clickable { onClick() }
+            .padding(horizontal = 11.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .size(42.dp)
+                .clip(RoundedCornerShape(11.dp))
+                .background(kindColor),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                kindLabel,
+                color = Color.White,
+                fontSize = if (kindLabel.length > 2) 10.sp else 12.sp,
+                fontWeight = FontWeight.ExtraBold,
+            )
+        }
+        Box(Modifier.width(11.dp))
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (current) {
+                    Text("▶", color = Color(0xFF149A7D), fontSize = 9.sp)
+                    Box(Modifier.width(4.dp))
+                }
+                Text(
+                    MediaSniffer.hostLabel(hit.url),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Ink.TextHi,
+                    maxLines = 1,
+                )
+            }
+            Box(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (durMs != null) fmtDuration(durMs) else "探测中…",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = if (durMs != null) Ink.TextHi else Ink.TextLow,
+                )
+                if (tagText != null) {
+                    Box(Modifier.width(7.dp))
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(99))
+                            .background(tagColor.copy(alpha = 0.14f))
+                            .padding(horizontal = 7.dp, vertical = 2.dp),
+                    ) {
+                        Text(
+                            tagText,
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = tagColor,
+                        )
+                    }
+                }
+                Box(Modifier.width(7.dp))
+                Text(
+                    MediaSniffer.shorten(hit.url, 30),
+                    fontSize = 9.5.sp,
+                    color = Ink.TextLow,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+            }
+        }
+        if (secondaryAction != null && onSecondary != null) {
+            Text(
+                secondaryAction,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Ink.TextHi,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(99))
+                    .background(Color(0x14000000))
+                    .clickable { onSecondary() }
+                    .padding(horizontal = 9.dp, vertical = 6.dp),
+            )
+            Box(Modifier.width(6.dp))
+        }
+        Text(
+            if (current) "播放中" else action,
+            fontSize = 11.5.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (current) Color(0xFF149A7D) else Color.White,
+            modifier = Modifier
+                .clip(RoundedCornerShape(99))
+                .background(if (current) Color(0x332FBFA0) else Color(0xFF2FBFA0))
+                .clickable { onClick() }
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+        )
     }
 }
 
@@ -2895,31 +2973,6 @@ private fun SegCell(label: String, on: Boolean, backdrop: LayerBackdrop, click: 
     }
 }
 
-/**
- * 甲板圆形传输键 —— 液态玻璃（原先是 background 半透平涂，看着只有透明没有玻璃感，
- * 2026-09-29 用户反馈；与仓库其他按钮统一走 LiquidGlassButton 的折射+按压液感）。
- * 大绿那颗是播放/暂停，两侧 ±10。
- */
-@Composable
-private fun DeckCircle(label: String, backdrop: LayerBackdrop, big: Boolean = false, onClick: () -> Unit) {
-    LiquidGlassButton(
-        onClick = onClick,
-        backdrop = backdrop,
-        modifier = Modifier
-            .height(if (big) 60.dp else 52.dp)
-            .width(if (big) 60.dp else 52.dp),
-        shape = CircleShape,
-        surfaceColor = if (big) Ink.Live else null,
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            label,
-            fontSize = if (big) 21.sp else 16.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = if (big) Color.White else Ink.TextHi,
-        )
-    }
-}
 
 /** 甲板底坞的一格（收厅 / 分享我的屏幕 / 后退）：液态玻璃；hot = 收厅的绿染。 */
 @Composable
@@ -2972,68 +3025,6 @@ private fun GlassIconBtn(
     }
 }
 
-/**
- * 放映模式的进度轨：按住拖动 —— 按下与松手各发一次 Seek（拖动中只画预览，
- * 不刷屏），落点交回 hostCmd → 本页播放器 → 探针广播给观众。
- * 手势 lambda 用 rememberUpdatedState 持有：`drag` 状态每帧都触发重组，
- * 若 key 进 pointerInput 会把手势整个重启掉（拖到一半就断）。
- */
-@Composable
-private fun TheaterTrack(frac: Float, enabled: Boolean, onSeek: (Float) -> Unit) {
-    var drag by remember { mutableStateOf<Float?>(null) }
-    val seek by rememberUpdatedState(onSeek)
-    val f = drag ?: frac
-    BoxWithConstraints(
-        Modifier
-            .fillMaxWidth()
-            .height(26.dp)
-            .pointerInput(enabled) {
-                if (!enabled) return@pointerInput
-                detectDragGestures(
-                    onDragStart = { p ->
-                        drag = (p.x / size.width).coerceIn(0f, 1f)
-                        seek(drag!!)
-                    },
-                    onDrag = { change, _ ->
-                        change.consume()
-                        drag = (change.position.x / size.width).coerceIn(0f, 1f)
-                    },
-                    onDragEnd = {
-                        seek(drag ?: frac)
-                        drag = null
-                    },
-                    onDragCancel = { drag = null },
-                )
-            },
-    ) {
-        Box(
-            Modifier
-                .align(Alignment.CenterStart)
-                .fillMaxWidth()
-                .height(7.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(Color(0x29FFFFFF)),
-        ) {
-            Box(
-                Modifier
-                    .fillMaxWidth(f)
-                    .fillMaxHeight()
-                    .background(Ink.Live),
-            )
-        }
-        if (enabled) {
-            Box(
-                Modifier
-                    .align(Alignment.CenterStart)
-                    .offset(x = maxWidth * f - 7.dp)
-                    .height(14.dp)
-                    .width(14.dp)
-                    .clip(RoundedCornerShape(7.dp))
-                    .background(Color.White),
-            )
-        }
-    }
-}
 
 /* ── 引导首页（浏览模式的"新标签页"）与空态屏 ─────────────────────────── */
 

@@ -66,6 +66,11 @@ class FloatPlayerService : android.app.Service() {
     private var windowLp: WindowManager.LayoutParams? = null
     private var lastSeekMs = -1L
     private var titleView: TextView? = null
+    /** 控制条进度线 + 时间（2026-10-01 用户要求：浮窗也要能看进度、拖进度）。 */
+    private var seekBar: android.widget.SeekBar? = null
+    private var timeView: TextView? = null
+    /** 用户正拖着进度条 —— 拖动期间 publish 别把进度拽回去（和滑块打架）。 */
+    private var seekTracking = false
     private val handler = Handler(Looper.getMainLooper())
 
     /** 进度回传：界面与"指挥权"判断都靠它。1000ms 一拍 ——
@@ -367,6 +372,21 @@ class FloatPlayerService : android.app.Service() {
                 )
             }
         }
+        // 控制条进度线 + 时间每拍跟进（拖动中让位，别把用户的滑块拽回来）
+        if (!seekTracking) {
+            seekBar?.let { sb ->
+                if (dur > 0) {
+                    sb.max = 1000
+                    sb.progress = ((pos * 1000) / dur).toInt().coerceIn(0, 1000)
+                    sb.isEnabled = true
+                } else {
+                    sb.progress = 0
+                    sb.isEnabled = false   // 时长未知（直播/未探到）：线留着、拖不了
+                }
+            }
+            timeView?.text = com.ticketfortwo.app.cinema.CinemaSync.formatTime(pos) +
+                " / " + com.ticketfortwo.app.cinema.CinemaSync.formatTime(dur)
+        }
     }
 
     fun play() { player?.play() }
@@ -456,7 +476,9 @@ class FloatPlayerService : android.app.Service() {
         root.addView(ph)
 
         /* 控制条**覆盖在画面内部**（不再占独立空间）：默认藏起来，
-           轻点窗身从画面里浮出来，3 秒自动收（2026-09-30 用户要求）。 */
+           轻点窗身从画面里浮出来，3 秒自动收（2026-09-30 用户要求）。
+           2026-10-01 加高为两行：上 = 可拖进度线（能看放哪了、能拖），
+           下 = 标题 · 时间 · 暂停 · 关闭（用户反馈"看不到进度也拖不了"）。 */
         val bar = FrameLayout(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, dp(BAR_H_DP), Gravity.BOTTOM,
@@ -466,18 +488,62 @@ class FloatPlayerService : android.app.Service() {
             visibility = View.GONE
         }
         this.bar = bar
+
+        // 进度线：拖动 seek（松手才提交，拖动中 publish 让位）
+        val sb = android.widget.SeekBar(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, dp(22),
+                Gravity.TOP,
+            ).apply { topMargin = dp(2); marginStart = dp(8); marginEnd = dp(70) }
+            max = 1000
+            splitTrack = false
+            progressTintList = android.content.res.ColorStateList.valueOf(0xFF7AD8C3.toInt())
+            thumbTintList = android.content.res.ColorStateList.valueOf(0xFFFFFFFF.toInt())
+            setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: android.widget.SeekBar, p: Int, fromUser: Boolean) = Unit
+                override fun onStartTrackingTouch(sb: android.widget.SeekBar) {
+                    seekTracking = true
+                }
+                override fun onStopTrackingTouch(sb: android.widget.SeekBar) {
+                    val d = player?.duration ?: 0L
+                    if (d > 0) player?.seekTo(d * sb.progress / 1000L)
+                    seekTracking = false
+                }
+            })
+        }
+        seekBar = sb
+        bar.addView(sb)
+
         val t = TextView(this).apply {
             text = title
             setTextColor(0xFFFFFFFF.toInt())
             textSize = 11f
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.START or Gravity.CENTER_VERTICAL,
-            ).apply { marginStart = dp(8) }
+                Gravity.START or Gravity.BOTTOM,
+            ).apply { marginStart = dp(8); bottomMargin = dp(7) }
         }
+        // 底行左侧空间 = 窗宽 - 时间 - 两颗键（约 130dp）—— 不限宽会顶到时间上
+        t.maxWidth = (w * 45) / 100
         titleView = t
         bar.addView(t)
+
+        // 时间：底行右侧、按钮左边
+        val tm = TextView(this).apply {
+            text = "0:00 / 0:00"
+            setTextColor(0xCCFFFFFF.toInt())
+            textSize = 9.5f
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.END or Gravity.BOTTOM,
+            ).apply { marginEnd = dp(66); bottomMargin = dp(9) }
+        }
+        timeView = tm
+        bar.addView(tm)
 
         /* 「换片」键已从浮窗控制条移除（2026-10-01 用户拍板：浮窗就是拿来播放的，
            暂停 + 关闭就够；换片走放映厅甲板的「换片」键）。onPickRequest 回调
@@ -487,8 +553,8 @@ class FloatPlayerService : android.app.Service() {
             setTextColor(0xFFFFFFFF.toInt())
             textSize = 16f
             layoutParams = FrameLayout.LayoutParams(
-                dp(28), dp(28), Gravity.END or Gravity.CENTER_VERTICAL,
-            ).apply { marginEnd = dp(6) }
+                dp(28), dp(28), Gravity.END or Gravity.BOTTOM,
+            ).apply { marginEnd = dp(6); bottomMargin = dp(4) }
             setOnClickListener { teardown(); stopSelf() }
         }
         bar.addView(close)
@@ -497,8 +563,8 @@ class FloatPlayerService : android.app.Service() {
             setTextColor(0xFFFFFFFF.toInt())
             textSize = 13f
             layoutParams = FrameLayout.LayoutParams(
-                dp(28), dp(28), Gravity.END or Gravity.CENTER_VERTICAL,
-            ).apply { marginEnd = dp(34) }
+                dp(28), dp(28), Gravity.END or Gravity.BOTTOM,
+            ).apply { marginEnd = dp(34); bottomMargin = dp(4) }
             setOnClickListener {
                 val p = player ?: return@setOnClickListener
                 if (p.isPlaying) { p.pause(); text = "▶" } else { p.play(); text = "❚❚" }
@@ -611,6 +677,10 @@ class FloatPlayerService : android.app.Service() {
         windowLp = null
         inPrewarm = false
         bar = null
+        seekBar = null
+        timeView = null
+        titleView = null
+        seekTracking = false
         videoView = null
         placeholder = null
         runCatching { player?.release() }
@@ -673,6 +743,6 @@ class FloatPlayerService : android.app.Service() {
 
         private const val NOTIF_ID = 1007
         private const val CHANNEL_ID = "t2_float"
-        private const val BAR_H_DP = 30
+        private const val BAR_H_DP = 46
     }
 }

@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>放映界面播放器改版 · 三方案效果图</title>
+<style>
+  :root{
+    --bg1:#f6f2ff; --bg2:#eef7ff; --bg3:#fff1f5;
+    --card:rgba(255,255,255,.72);
+    --ink:#2b2b3d; --ink-mid:#6b6b85; --ink-low:#9a9ab5;
+    --mint:#7ad8c3; --mint-deep:#2fbfa0;
+    --lilac:#b9a7f2; --lilac-deep:#8f76e8;
+    --peach:#ffb3a0; --peach-deep:#ff8a6b;
+    --sky:#8ecdf7; --sky-deep:#4aa8e8;
+    --butter:#ffe08a; --rose:#ffb8d0;
+    --stage:#171722;
+    --glass-line:rgba(255,255,255,.55);
+    --radius:22px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:"HarmonyOS Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    color:var(--ink);
+    background:
+      radial-gradient(900px 500px at 8% -5%, var(--bg1), transparent 60%),
+      radial-gradient(900px 520px at 95% 8%, var(--bg2), transparent 62%),
+      radial-gradient(760px 560px at 50% 108%, var(--bg3), transparent 60%),
+      #fbfaff;
+    min-height:100vh;
+    padding:34px 22px 70px;
+  }
+  .wrap{max-width:1360px;margin:0 auto}
+  header h1{font-size:26px;letter-spacing:.5px}
+  header h1 .tag{font-size:13px;color:#fff;background:linear-gradient(120deg,var(--lilac-deep),var(--sky-deep));
+    border-radius:99px;padding:4px 12px;vertical-align:6px;margin-left:10px;box-shadow:0 4px 14px rgba(143,118,232,.35)}
+  header p.lead{margin-top:10px;font-size:14.5px;line-height:1.8;color:var(--ink-mid);max-width:1080px}
+  header p.lead b{color:var(--ink)}
+  .pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;font-weight:600;margin:0 3px}
+  .pill.a{background:#e9e2ff;color:#6d54d6}
+  .pill.b{background:#dff6ef;color:#149a7d}
+  .pill.c{background:#ffe9f0;color:#e3638c}
+
+  /* ── 对比表 ── */
+  h2.sec{font-size:19px;margin:44px 0 16px;display:flex;align-items:center;gap:10px}
+  h2.sec::before{content:"";width:8px;height:24px;border-radius:6px;background:linear-gradient(160deg,var(--lilac),var(--sky))}
+  .tablebox{background:var(--card);border:1px solid var(--glass-line);border-radius:var(--radius);
+    backdrop-filter:blur(14px);overflow:auto;box-shadow:0 10px 34px rgba(120,110,190,.10)}
+  table{border-collapse:collapse;width:100%;min-width:860px;font-size:13.6px}
+  th,td{padding:13px 15px;text-align:left;vertical-align:top;border-bottom:1px solid rgba(140,130,200,.14)}
+  thead th{font-size:13px;color:var(--ink-mid);background:rgba(255,255,255,.5);white-space:nowrap}
+  thead th:nth-child(2){color:#6d54d6}
+  thead th:nth-child(3){color:#149a7d}
+  thead th:nth-child(4){color:#e3638c}
+  tbody tr:last-child td{border-bottom:none}
+  td.dim{font-weight:600;white-space:nowrap;color:var(--ink)}
+  .yes{color:#149a7d;font-weight:700}
+  .no{color:#e3638c;font-weight:700}
+  .mid{color:#c98a1e;font-weight:600}
+  .rec{font-size:11px;background:linear-gradient(120deg,var(--peach-deep),#ff6f91);color:#fff;
+    border-radius:99px;padding:2px 8px;margin-left:6px;white-space:nowrap}
+
+  /* ── 手机 ── */
+  .phones{display:flex;gap:26px;align-items:flex-start;flex-wrap:wrap}
+  .slot{flex:1 1 340px;min-width:330px;max-width:430px}
+  .ph-head{display:flex;align-items:center;gap:9px;margin-bottom:10px}
+  .ph-num{width:30px;height:30px;border-radius:11px;color:#fff;font-weight:800;display:grid;place-items:center;font-size:15px}
+  .slot:nth-child(1) .ph-num{background:linear-gradient(140deg,#f06292,#ff8a6b)}
+  .ph-head h3{font-size:16.5px}
+  .ph-head small{color:var(--ink-low);font-size:12px;display:block;margin-top:2px}
+  .phone{border-radius:34px;background:#101018;padding:9px;
+    box-shadow:0 22px 50px rgba(60,50,120,.22), 0 3px 10px rgba(60,50,120,.14);position:relative}
+  .screen{border-radius:27px;overflow:hidden;background:
+    linear-gradient(165deg,#f3efff 0%,#eef4ff 46%,#fdf2f6 100%);
+    display:flex;flex-direction:column;height:700px;position:relative;font-size:12px}
+  .st{position:absolute;top:9px;left:50%;transform:translateX(-50%);font-size:9.5px;color:#3a3a52;
+    background:rgba(255,255,255,.55);padding:2px 9px;border-radius:99px;letter-spacing:.5px}
+  /* 顶栏 */
+  .topbar{display:flex;align-items:center;justify-content:space-between;padding:30px 13px 8px}
+  .topbar .title{font-weight:800;font-size:13.5px}
+  .topbar .title span{font-weight:500;color:var(--ink-low);font-size:10px;margin-left:6px}
+  .seg{display:flex;background:rgba(255,255,255,.62);border:1px solid rgba(255,255,255,.8);
+    border-radius:99px;padding:3px;gap:2px;box-shadow:inset 0 1px 3px rgba(120,110,190,.12)}
+  .seg b{font-size:10.5px;padding:4px 11px;border-radius:99px;color:var(--ink-low);font-weight:600}
+  .seg b.on{background:linear-gradient(140deg,var(--mint-deep),var(--mint));color:#fff;box-shadow:0 3px 9px rgba(47,191,160,.4)}
+
+  /* 画面区 */
+  .stagebox{margin:4px 10px 0;border-radius:16px;overflow:hidden;position:relative;
+    background:var(--stage);height:246px;box-shadow:0 8px 22px rgba(20,18,50,.4)}
+  .film{position:absolute;inset:0;background:
+      linear-gradient(112deg, rgba(64,54,140,.85), rgba(24,60,110,.7) 44%, rgba(120,54,96,.72)),
+      radial-gradient(420px 200px at 72% 24%, rgba(255,196,140,.5), transparent 62%);}
+  .film::after{content:"";position:absolute;inset:auto 0 0 0;height:34px;
+    background:linear-gradient(transparent, rgba(0,0,0,.55))}
+  .film .cap{position:absolute;left:0;right:0;bottom:8px;text-align:center;color:rgba(255,255,255,.88);
+    font-size:10.5px;letter-spacing:1px}
+  .film .bigpause{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);
+    width:52px;height:52px;border-radius:50%;background:rgba(0,0,0,.4);backdrop-filter:blur(4px);
+    display:grid;place-items:center;color:#fff;font-size:19px;border:1px solid rgba(255,255,255,.25)}
+  /* A 控制浮层 */
+  .floatctl{position:absolute;left:8px;right:8px;bottom:8px;background:rgba(14,14,24,.72);
+    backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.16);border-radius:14px;
+    padding:9px 11px 8px;color:#fff}
+  .floatctl .trow{display:flex;justify-content:space-between;font-size:10px;color:rgba(255,255,255,.75);margin-bottom:6px}
+  .pbar{height:4px;border-radius:99px;background:rgba(255,255,255,.22);position:relative}
+  .pbar i{position:absolute;left:0;top:0;bottom:0;width:38%;border-radius:99px;background:linear-gradient(90deg,var(--mint),#a8f0dd)}
+  .pbar i::after{content:"";position:absolute;right:-5px;top:50%;transform:translateY(-50%);width:11px;height:11px;border-radius:50%;background:#fff;box-shadow:0 1px 5px rgba(0,0,0,.5)}
+  .btnrow{display:flex;justify-content:center;align-items:center;gap:20px;margin-top:8px;font-size:13px}
+  .btnrow .play{width:30px;height:30px;border-radius:50%;background:linear-gradient(140deg,var(--mint-deep),var(--mint));
+    display:grid;place-items:center;color:#0d3a31;font-weight:800;font-size:13px;box-shadow:0 3px 10px rgba(47,191,160,.5)}
+  .btnrow span{font-weight:700;font-size:12px}
+  /* B 常驻细进度线 */
+  .thinbar{position:absolute;left:0;right:0;bottom:0;height:14px;background:rgba(0,0,0,.42);
+    backdrop-filter:blur(4px);display:flex;align-items:center;padding:0 2px;gap:0}
+  .thinbar .tr{flex:1;height:3.5px;border-radius:99px;background:rgba(255,255,255,.28);position:relative}
+  .thinbar .tr b{position:absolute;left:0;top:0;bottom:0;width:46%;border-radius:99px;background:linear-gradient(90deg,var(--sky),#bfe7ff)}
+  .thinbar .tr b::after{content:"";position:absolute;right:-4px;top:50%;transform:translateY(-50%);width:9px;height:9px;border-radius:50%;background:#fff}
+  .thinbar .tt{font-size:9px;color:rgba(255,255,255,.85);padding:0 6px;letter-spacing:.4px}
+  .tap-hint{position:absolute;right:9px;top:9px;font-size:9px;color:rgba(255,255,255,.8);
+    background:rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.2);padding:3px 8px;border-radius:99px;backdrop-filter:blur(4px)}
+  /* C 手势箭头 + HUD */
+  .hud{position:absolute;left:50%;top:34%;transform:translateX(-50%);text-align:center;color:#fff;
+    background:rgba(10,10,20,.6);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.18);
+    border-radius:13px;padding:8px 16px}
+  .hud b{font-size:15px;letter-spacing:1px}
+  .hud .hbar{height:3.5px;width:120px;border-radius:99px;background:rgba(255,255,255,.25);margin-top:6px;position:relative}
+  .hud .hbar i{position:absolute;left:0;top:0;bottom:0;width:46%;background:linear-gradient(90deg,var(--rose),#ffd9e4);border-radius:99px}
+  .hud small{font-size:9px;color:rgba(255,255,255,.7);display:block;margin-top:4px}
+  .g{position:absolute;color:#fff;font-size:9.5px;background:rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.25);
+    padding:3px 7px;border-radius:99px;backdrop-filter:blur(4px);white-space:nowrap}
+  .arrow{position:absolute;color:var(--butter);font-size:15px;text-shadow:0 1px 4px rgba(0,0,0,.6)}
+  .vbar{position:absolute;width:4px;border-radius:99px;background:rgba(255,255,255,.35)}
+  .vbar i{position:absolute;left:0;right:0;border-radius:99px}
+  .lvl-bright{left:12px;top:34px;bottom:34px}.lvl-bright i{bottom:0;height:64%;background:linear-gradient(#fff7c9,var(--butter))}
+  .lvl-vol{right:12px;top:34px;bottom:34px}.lvl-vol i{bottom:0;height:44%;background:linear-gradient(#d9f2ff,var(--sky))}
+  .lb{position:absolute;font-size:8.5px;color:#fff;background:rgba(0,0,0,.5);padding:2px 5px;border-radius:6px}
+  .tapzone{position:absolute;width:62px;height:62px;border-radius:50%;background:rgba(255,255,255,.13);
+    border:1.5px solid rgba(255,255,255,.6);backdrop-filter:blur(3px);display:grid;place-items:center;
+    color:#fff;font-size:15px;font-weight:800;text-shadow:0 1px 3px rgba(0,0,0,.7);text-align:center}
+  .tapzone small{display:block;font-size:8.5px;font-weight:600;color:rgba(255,255,255,.88);letter-spacing:.3px}
+  .tapzone-l{left:24px;top:46%;transform:translateY(-50%)}
+  .tapzone-r{right:24px;top:46%;transform:translateY(-50%)}
+
+  /* 甲板（玻璃） */
+  .deck{margin:9px 10px 10px;background:rgba(255,255,255,.66);border:1px solid rgba(255,255,255,.85);
+    backdrop-filter:blur(16px);border-radius:18px;padding:11px 12px;
+    box-shadow:0 8px 24px rgba(120,110,190,.14), inset 0 1px 0 rgba(255,255,255,.9)}
+  .deck .t1{display:flex;align-items:center;justify-content:space-between;gap:6px}
+  .deck .t1 b{font-size:12.5px}
+  .chip{font-size:9.5px;padding:3px 8px;border-radius:99px;background:rgba(122,216,195,.24);color:#149a7d;font-weight:700}
+  .deck .time{font-size:10.5px;color:var(--ink-mid);margin-top:6px;display:flex;justify-content:space-between;align-items:center}
+  .deck .time .st2{font-size:9.5px;background:rgba(122,216,195,.28);color:#149a7d;padding:2px 7px;border-radius:99px;font-weight:700}
+  .acts{display:flex;gap:6px;margin-top:9px}
+  .acts .b{flex:1;text-align:center;font-size:10.5px;padding:8px 2px;border-radius:11px;font-weight:600;
+    background:rgba(255,255,255,.78);border:1px solid rgba(255,255,255,.95);color:#4b4b66;
+    box-shadow:0 2px 6px rgba(120,110,190,.10)}
+  .acts .b.hot{background:linear-gradient(140deg,#ff8f7a,#ff6f91);color:#fff;border-color:transparent;box-shadow:0 4px 12px rgba(255,111,145,.4)}
+  .acts .b.g2{background:linear-gradient(140deg,rgba(122,216,195,.30),rgba(142,205,247,.30));color:#177a92;border-color:rgba(255,255,255,.9)}
+  .ack{margin-top:9px;display:flex;gap:7px;align-items:center;font-size:10.5px;color:#177a92;
+    background:rgba(142,205,247,.18);border:1px solid rgba(142,205,247,.4);border-radius:11px;padding:7px 9px}
+  .ack .dot{width:7px;height:7px;border-radius:50%;background:#2fbfa0;box-shadow:0 0 6px rgba(47,191,160,.8);flex:none}
+  .ack b{font-size:11px}
+  .ack small{display:block;color:var(--ink-mid);font-size:9.5px}
+  .stats{display:flex;justify-content:space-between;font-size:9.5px;color:var(--ink-low);margin-top:8px}
+  .cut{position:relative;color:#e3638c;font-size:9.5px;font-weight:700;background:#ffe9f0;
+    border:1px dashed #f095b4;border-radius:8px;padding:1px 7px;margin-left:6px}
+  .deck.mini{padding:9px 11px}
+  .deck.mini .t1 b{font-size:12px}
+  .empty{margin-top:7px;font-size:9.5px;color:var(--ink-low);text-align:center;
+    background:rgba(255,255,255,.5);border:1px dashed rgba(154,154,181,.5);border-radius:9px;padding:5px}
+
+  .caption{background:var(--card);border:1px solid var(--glass-line);border-radius:16px;
+    backdrop-filter:blur(12px);padding:12px 14px;margin-top:12px;font-size:12.6px;line-height:1.75;color:var(--ink-mid)}
+  .caption b{color:var(--ink)}
+  .caption ul{padding-left:17px;margin-top:5px}
+  .caption li{margin-top:3px}
+
+  /* 手势图例 */
+  .gestures{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}
+  .gcard{background:var(--card);border:1px solid var(--glass-line);border-radius:16px;backdrop-filter:blur(12px);
+    padding:13px 15px;font-size:13px;line-height:1.7}
+  .gcard b{display:block;font-size:13.5px;margin-bottom:4px}
+  .gcard .ico{font-size:17px;margin-right:6px}
+  .gcard small{color:var(--ink-low);font-size:11.5px;display:block;margin-top:3px}
+
+  /* 悬浮窗 */
+  .floatrow{display:flex;gap:22px;flex-wrap:wrap}
+  .fw{background:var(--card);border:1px solid var(--glass-line);border-radius:18px;backdrop-filter:blur(12px);
+    padding:16px 18px;flex:1 1 300px;max-width:440px}
+  .fw h4{font-size:14px;margin-bottom:10px}
+  .fw h4 .n{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:8px;color:#fff;
+    background:linear-gradient(140deg,var(--sky-deep),var(--sky));font-size:12px;margin-right:7px;vertical-align:-4px}
+  .win{width:230px;height:130px;border-radius:14px;position:relative;overflow:hidden;background:var(--stage);
+    box-shadow:0 10px 26px rgba(60,50,120,.25);margin:0 auto}
+  .win .film{border-radius:0}
+  .win .oldbar{position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);
+    display:flex;justify-content:center;gap:26px;color:#fff;font-size:12px;padding:7px 0;align-items:center}
+  .win .newbar{position:absolute;left:6px;right:6px;bottom:6px;background:rgba(14,14,24,.7);backdrop-filter:blur(8px);
+    border:1px solid rgba(255,255,255,.16);border-radius:11px;padding:7px 9px 7px}
+  .win .newbar .t{display:flex;justify-content:space-between;font-size:8.5px;color:rgba(255,255,255,.75);margin-bottom:5px}
+  .win .newbar .pbar{height:3.5px}
+  .win .newbar .pbar i::after{width:9px;height:9px;right:-4.5px}
+  .win .newbar .pbtn{position:absolute;right:9px;bottom:12px;width:22px;height:22px;border-radius:50%;
+    background:linear-gradient(140deg,var(--mint-deep),var(--mint));display:grid;place-items:center;color:#0d3a31;font-size:10px;font-weight:800}
+  .fw p{font-size:12.3px;color:var(--ink-mid);line-height:1.7;margin-top:10px}
+
+  /* 风险 */
+  .risk{background:linear-gradient(150deg,rgba(255,241,245,.9),rgba(238,247,255,.9));
+    border:1px solid rgba(255,255,255,.9);border-radius:var(--radius);padding:18px 20px;
+    box-shadow:0 10px 30px rgba(180,140,190,.10);font-size:13.3px;line-height:1.85;color:#4b4b66}
+  .risk b{color:var(--ink)}
+  .risk ol{padding-left:20px;margin-top:6px}
+  .risk li{margin-top:5px}
+  .ask{margin-top:34px;background:var(--card);border:1px solid var(--glass-line);border-radius:var(--radius);
+    backdrop-filter:blur(14px);padding:20px 22px;text-align:center;font-size:15px;box-shadow:0 10px 30px rgba(120,110,190,.10)}
+  .ask b{background:linear-gradient(120deg,var(--lilac-deep),var(--mint-deep));-webkit-background-clip:text;background-clip:text;color:transparent}
+  /* 嗅探列表（雨见化） */
+  .sniffbox{background:var(--card);border:1px solid var(--glass-line);border-radius:var(--radius);
+    backdrop-filter:blur(14px);padding:16px 18px;box-shadow:0 10px 34px rgba(120,110,190,.10);max-width:640px}
+  .sniffhead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:11px}
+  .sniffttl{font-weight:800;font-size:15px}
+  .sniffcnt{font-size:12.5px;color:var(--ink-mid)}
+  .sniffcnt b{color:#6d54d6}
+  .autosniff{margin-left:auto;font-size:12px;color:var(--ink-mid);display:flex;align-items:center;gap:6px}
+  .autosniff i{width:30px;height:17px;border-radius:99px;background:linear-gradient(120deg,var(--mint-deep),var(--mint));
+    position:relative;box-shadow:0 2px 6px rgba(47,191,160,.4)}
+  .autosniff i::after{content:"";position:absolute;right:2px;top:2px;width:13px;height:13px;border-radius:50%;background:#fff}
+  .snifftabs{display:flex;gap:7px;margin-bottom:11px}
+  .snifftabs b{font-size:12px;padding:5px 13px;border-radius:99px;background:rgba(255,255,255,.7);
+    color:var(--ink-mid);font-weight:600;border:1px solid rgba(255,255,255,.9)}
+  .snifftabs b.on{background:linear-gradient(130deg,var(--lilac-deep),var(--sky-deep));color:#fff;
+    border-color:transparent;box-shadow:0 3px 10px rgba(143,118,232,.35)}
+  .sncard{display:flex;align-items:center;gap:12px;background:rgba(255,255,255,.72);
+    border:1px solid rgba(255,255,255,.95);border-radius:15px;padding:11px 13px;margin-bottom:9px;
+    box-shadow:0 3px 10px rgba(120,110,190,.08)}
+  .sncard.playing{border:1.5px solid rgba(47,191,160,.65);background:linear-gradient(140deg,rgba(223,246,239,.85),rgba(255,255,255,.8));
+    box-shadow:0 4px 14px rgba(47,191,160,.22)}
+  .sncard-l{flex:none}
+  .sntype{display:grid;place-items:center;width:46px;height:46px;border-radius:12px;color:#fff;
+    font-size:11px;font-weight:800;letter-spacing:.5px}
+  .sntype.hls{background:linear-gradient(140deg,var(--lilac-deep),var(--lilac))}
+  .sntype.mp4{background:linear-gradient(140deg,var(--peach-deep),var(--peach))}
+  .sncard-m{flex:1;min-width:0}
+  .sntitle{font-size:13.5px;font-weight:700;display:flex;align-items:center;gap:6px}
+  .sndot{font-size:10px;color:#149a7d}
+  .snmeta{display:flex;align-items:center;gap:8px;margin-top:4px;flex-wrap:wrap}
+  .sndur{font-size:14.5px;font-weight:800;color:var(--ink);letter-spacing:.4px}
+  .sndur.probing{font-size:12px;color:var(--ink-low);font-weight:600}
+  .sntag{font-size:10.5px;padding:2px 8px;border-radius:99px;font-weight:700;background:#efeaff;color:#6d54d6}
+  .sntag.good{background:#dff6ef;color:#149a7d}
+  .sntag.bad{background:#ffe9f0;color:#e3638c}
+  .snurl{font-size:11px;color:var(--ink-low)}
+  .snplay{flex:none;font-size:12.5px;font-weight:700;padding:8px 16px;border-radius:99px;color:#fff;
+    background:linear-gradient(140deg,var(--mint-deep),var(--mint));box-shadow:0 4px 12px rgba(47,191,160,.4)}
+  .snplay.ghost{background:rgba(255,255,255,.9);color:#6d54d6;border:1.5px solid #d9cdff;box-shadow:none}
+  .sncard.playing .snplay{background:rgba(47,191,160,.16);color:#149a7d;box-shadow:none}
+  .snfoot{font-size:12px;color:var(--ink-mid);background:rgba(255,247,214,.7);border:1px solid rgba(255,224,138,.7);
+    border-radius:11px;padding:8px 11px;margin-top:3px}
+  @media (max-width:760px){.phones{flex-direction:column}.slot{max-width:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>放映界面播放器改版 · 方案 C <span class="tag">极简 HUD · 定稿</span></h1>
+  <p class="lead">
+    放映 = 固定位置的智能播放器（不可移动的"雨见同款"），浏览 = 纯网页浏览，两个 tab 各司其职。
+    画面平时<b>零常驻控件</b>（只留发丝进度线），所有操作靠手势，HUD 浮现 1.5 秒就散；甲板退成"厅的遥控器"，
+    播放控件全部删除。
+    <br><b>本轮补上你指出的</b>：<b>长按 = 倍速，手指不松往上滑继续升档</b>（2 → 3 → 4 → 6 → 8x，下滑降档、松手保持）；
+    资源嗅探列表做成雨见式卡片。雨见官方证实它是<b>双轨架构</b>——原生播放器接管 + 接不了的站点在网页上加手势增强
+    （"媒体助手"），我们的网页兜底态照此办理，手势在兜底态同样可用。
+  </p>
+</header>
+
+<h2 class="sec">方案 C 规格</h2>
+<div class="tablebox">
+<table>
+  <thead><tr><th style="width:130px">维度</th><th>方案 C · 极简 HUD（已定稿）设计</th></tr></thead>
+  <tbody>
+    <tr><td class="dim">手势层</td><td><b>双击三区</b>：左半屏 = 快退 10 秒（波纹 ⟲10）· 中间 = 暂停 · 右半屏 = 快进 10 秒（波纹 10⟳）<br>
+      <b>横滑拖动</b> = 快进快退（带时间气泡，松手即跳）<br>
+      <b>左半屏上滑</b> = 亮度 · <b>右半屏上滑</b> = 音量<br>
+      <b>长按 = 倍速，按住上滑继续升档</b>：长按立即 2 倍速，手指不松往上滑逐档提升（2 → 3 → 4 → 6 → 8x），下滑降档（可到 0.5x），<b>松手保持所选档位</b>，画面角落留小倍速标（点它回 1x）<br>
+      <b>单击</b> = 唤出 HUD（250ms 内无第二击才算单击，不与双击冲突）</td></tr>
+    <tr><td class="dim">进度条</td><td>发丝线<b>常驻</b>画面底边（随时可拖）+ HUD 浮现 1.5 秒（时间 + 进度 + 操作反馈）</td></tr>
+    <tr><td class="dim">甲板</td><td>进度条 + 三个圆钮 + 独立时间行<b>全部删除</b>，时间并入状态句（"正在放映 · 12:34"）；<br>保留：片名行、厅管理按钮、对方状态条、统计行</td></tr>
+    <tr><td class="dim">按钮顺序</td><td><b>后退（最左）· 分享屏幕 · 收厅（最右，红）</b> —— 回退在左符合直觉（雨见底部五键同款）；破坏性的收厅靠右防误触</td></tr>
+    <tr><td class="dim">网页兜底</td><td>自播没起来时网页画面顶着，<b>手势照常可用</b>（对标雨见"媒体助手"：接管不了的站点在网页上加手势增强）</td></tr>
+    <tr><td class="dim">资源嗅探</td><td>候选列表重做成雨见式<b>卡片</b>：类型徽标 + 时长大字 + 标签 + 正在播高亮 + 「播它」（见下方效果图）</td></tr>
+    <tr><td class="dim">悬浮窗</td><td>控制条加<b>可拖进度线 + 时间</b>（现状只有暂停/关闭），双击窗面 = 暂停</td></tr>
+    <tr><td class="dim">工作量</td><td>约 1–1.5 天（手势层 + HUD + 甲板瘦身 + 嗅探卡片 + 悬浮窗进度线）</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 class="sec">效果图</h2>
+<div class="phones">
+
+  <!-- ─────── 方案 C ─────── -->
+  <div class="slot">
+    <div class="ph-head"><div class="ph-num">C</div><div><h3>手势优先 · 极简 HUD</h3><small>YouTube 手机端形态 · 最轻</small></div></div>
+    <div class="phone"><div class="screen">
+      <div class="st">状态栏 · 19:06</div>
+      <div class="topbar">
+        <div class="title">放映厅<span>厅已开</span></div>
+        <div class="seg"><b>浏览</b><b class="on">放映</b></div>
+      </div>
+      <div class="stagebox">
+        <div class="film"></div>
+        <div class="cap">不良辅导员 · 第 1 集</div>
+        <!-- HUD（倍速态示意：右上角档位徽标） -->
+        <div class="hud"><b>12:34 / 45:67</b><span style="color:#ffd08a;font-size:12px;margin-left:7px">4.0x</span><div class="hbar"><i></i></div><small>操作时浮现 1.5 秒 · 长按上滑升倍速档</small></div>
+        <!-- 双击三区波纹 -->
+        <div class="tapzone tapzone-l">⟲<small>快退 10s</small></div>
+        <div class="tapzone tapzone-r">⟳<small>快进 10s</small></div>
+        <!-- 手势标注 -->
+        <div class="g" style="left:10px;bottom:8px">左上滑 = 亮度</div>
+        <div class="g" style="right:10px;bottom:8px">右上滑 = 音量</div>
+        <div class="g" style="left:50%;top:10px;transform:translateX(-50%)">横滑拖动 = 快进（时间气泡）</div>
+        <div class="g" style="left:50%;bottom:8px;transform:translateX(-50%)">双击中间 = 暂停 · 长按+上滑 = 倍速 2→8x</div>
+        <div class="vbar lvl-bright"><i></i></div>
+        <div class="vbar lvl-vol"><i></i></div>
+        <div class="lb" style="left:10px;top:20px">☀ 64%</div>
+        <div class="lb" style="right:10px;top:20px">🔊 44%</div>
+        <div class="thinbar" style="height:6px;background:rgba(0,0,0,.30);padding:0">
+          <div class="tr" style="border-radius:0"><b style="width:38%"></b></div>
+        </div>
+      </div>
+      <div class="deck">
+        <div class="t1"><b>不良辅导员 (2028)</b><span class="chip">对方可控制</span></div>
+        <div class="time"><span>正在放映 · 12:34</span><span class="cut">独立时间行并入状态句</span></div>
+        <div class="acts"><div class="b">后退</div><div class="b">分享屏幕</div><div class="b hot">收厅</div></div>
+        <div class="acts"><div class="b g2">浮窗</div><div class="b">换片</div><div class="b">邀请</div><div class="b">全屏</div><div class="b">已开麦</div></div>
+        <div class="ack"><span class="dot"></span><span><b>对方已追平 · 差 0.3 秒</b><small>画面在同步范围内</small></span></div>
+        <div class="stats"><span>直连 45ms</span><span>60 fps</span><span>4.0 Mbps</span></div>
+      </div>
+    </div></div>
+    <div class="caption">
+      <b>一句话</b>：平时画面<b>零控件</b>（只留发丝进度线），所有操作靠手势，HUD 浮现 1.5 秒就散。
+      <ul>
+        <li><b>双击三区</b>：左 = 快退 10 秒（波纹 ⟲10）、中 = 暂停、右 = 快进 10 秒（波纹 10⟳）——雨见同款玩法</li>
+        <li><b>长按 = 倍速，按住上滑继续升档</b>：长按 2x 起步，不松手往上滑逐档升到 8x，下滑降档，松手保持——雨见同款"长按倍速 0.5-8x"再进一步</li>
+        <li>最干净——画面里几乎没有常驻 UI；学习成本靠首次放映的一条引导提示解决</li>
+        <li>甲板：进度条和三圆钮删除，时间并进状态句；动作行改为「后退 · 分享屏幕 · 收厅」（后退在左）</li>
+        <li>网页兜底态手势照常可用（对标雨见"媒体助手"：接管不了的站点在网页上加手势增强）</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<h2 class="sec">手势图例（三方案通用）</h2>
+<div class="gestures">
+  <div class="gcard"><b><span class="ico">👆</span>单击画面</b>唤出 / 收起控制浮层，3 秒不操作自动隐藏<small>全屏态下 = 唤回甲板（现有逻辑保留）</small></div>
+  <div class="gcard"><b><span class="ico">👆👆</span>双击 · 分三区（雨见同款玩法）</b>左半屏 = <b>快退 10 秒</b>（波纹 ⟲10）· 中间 = <b>暂停/继续</b> · 右半屏 = <b>快进 10 秒</b>（波纹 10⟳）<small>250ms 内无第二击才算单击出 HUD，不会误触；快进步长后续可进设置调（10/15/30 秒）</small></div>
+  <div class="gcard"><b><span class="ico">↔️</span>按住横滑</b>快进 / 快退——拖到哪播到哪，屏幕中央出时间气泡<small>松手即跳；指挥权照旧走现有链路，观众跟着动</small></div>
+  <div class="gcard"><b><span class="ico">☀️</span>左半屏上下滑</b>调亮度<small>只影响你看的这块屏，不动系统设置</small></div>
+  <div class="gcard"><b><span class="ico">🔊</span>右半屏上下滑</b>调音量<small>调的是播放器的音，不影响连麦说话</small></div>
+  <div class="gcard"><b><span class="ico">⏩</span>长按 = 倍速，按住上滑继续升档（雨见同款）</b>长按立即 <b>2 倍速</b>；手指不松<b>往上滑逐档提升</b>（2 → 3 → 4 → 6 → 8x），往下滑降档（最低 0.5x）；<b>松手保持所选档位</b><small>倍速期间画面角落留小倍速标（如 4.0x），点它一键回 1x；升档时 HUD 实时显示档位 + 竖向档位条；倍速会同步给对方（同速才能同帧）</small></div>
+</div>
+
+<h2 class="sec">资源嗅探列表 · 雨见化重做（本轮新增）</h2>
+<p style="font-size:13.5px;color:var(--ink-mid);line-height:1.8;margin:-6px 0 14px;max-width:1000px">
+  你说雨见的嗅探展现效果很好——雨见的招牌是<b>「打开网页自动嗅探，资源分门别类一张张卡片列出，
+  点一下就下载/播放」</b>（官方叫"智能嗅探引擎"）。对标到我们：把「展开嗅探」里的候选列表从
+  <b>纯文字行</b>升级成<b>卡片式资源列表</b>：类型徽标 + 时长大字 + 标签 + 正在播高亮 + 右侧「播它」。
+</p>
+<div class="sniffbox">
+  <div class="sniffhead">
+    <span class="sniffttl">🔍 本页嗅探</span>
+    <span class="sniffcnt">检测到 <b>3 个视频</b> · 1 个音频</span>
+    <span class="autosniff">自动嗅探 <i></i></span>
+  </div>
+  <div class="snifftabs"><b class="on">视频 3</b><b>音频 1</b><b>全部</b></div>
+
+  <div class="sncard playing">
+    <div class="sncard-l"><span class="sntype hls">HLS</span></div>
+    <div class="sncard-m">
+      <div class="sntitle"><span class="sndot">▶</span>fofo22 · 不良辅导员 正片</div>
+      <div class="snmeta"><b class="sndur">1:43:20</b><span class="sntag good">正片 · 最长</span><span class="snurl">m3u8 · 域名 fofo22.com</span></div>
+    </div>
+    <div class="snplay">播放中</div>
+  </div>
+
+  <div class="sncard">
+    <div class="sncard-l"><span class="sntype mp4">MP4</span></div>
+    <div class="sncard-m">
+      <div class="sntitle">预加载片段 · 可能是广告</div>
+      <div class="snmeta"><b class="sndur">00:15</b><span class="sntag bad">疑似广告</span><span class="snurl">域名 ad-track.net</span></div>
+    </div>
+    <div class="snplay ghost">播它</div>
+  </div>
+
+  <div class="sncard">
+    <div class="sncard-l"><span class="sntype hls">HLS</span></div>
+    <div class="sncard-m">
+      <div class="sntitle">片花 · 预告</div>
+      <div class="snmeta"><b class="sndur probing">探测中…</b><span class="sntag">预告</span><span class="snurl">m3u8 · cdn.fofo22.com</span></div>
+    </div>
+    <div class="snplay ghost">播它</div>
+  </div>
+
+  <div class="snfoot">💡 最长的多半是正片，十几秒的基本是广告 · 正在网页里播的已置顶</div>
+</div>
+
+<h2 class="sec">悬浮窗同步优化（三方案相同）</h2>
+<div class="floatrow">
+  <div class="fw">
+    <h4><span class="n">现</span>现状</h4>
+    <div class="win">
+      <div class="film"></div>
+      <div class="cap" style="bottom:34px">不良辅导员</div>
+      <div class="oldbar"><span>❚❚</span><span>✕</span></div>
+    </div>
+    <p>轻点出控制条，只有<b>暂停</b>和<b>关闭</b>——看不到放哪了，也拖不了进度。</p>
+  </div>
+  <div class="fw">
+    <h4><span class="n">新</span>优化后</h4>
+    <div class="win">
+      <div class="film"></div>
+      <div class="cap" style="bottom:52px">不良辅导员</div>
+      <div class="newbar">
+        <div class="t"><span>12:34</span><span>45:67</span></div>
+        <div class="pbar"><i></i></div>
+        <div class="pbtn">❚❚</div>
+      </div>
+    </div>
+    <p>控制条里加<b>可拖进度线 + 时间</b>（窗再小也能拖）；双击窗面 = 暂停。换片仍走甲板的「换片」。</p>
+  </div>
+</div>
+
+<h2 class="sec">动工前必须说清的三件事</h2>
+<div class="risk">
+  <b>1. 手势不等于"换了个播放器"——播放器早就在了。</b>放映时的画面本来就有原生播放器接档（这两天修的
+  三个 bug 就是让它更稳地接上），这次加的是它缺的<b>手感层</b>（手势 + 进度浮层）。所以下面三个方案
+  <b>都不会把播放链推倒重来</b>，改的是交互和布局，风险可控。
+  <ol>
+    <li><b>指挥权不变</b>：所有手势产生的操作（暂停/快进/倍速）继续走现有的"发令→同步"通道，观众那边照样跟得上——只是命令的入口从按钮变成了手势。</li>
+    <li><b>网页兜底是分水岭</b>：A/C 保留"自播没起来就网页画面顶着"（稳，但这类降级下横滑快进走网页桥会有一点延迟感）；B 把兜底做成显式卡片（体验统一，但要认真做失败流程，防盗链站会先看到提示而不是画面）。</li>
+    <li><b>和"全屏"的互动</b>：全屏态轻点 = 唤回甲板（现有行为）和"单击弹浮层"要合并成一个手势——唤回时顺手把控制浮层一起带出来，不冲突。</li>
+  </ol>
+</div>
+
+<div class="ask">
+  <b>方案 C · 已按你的全部反馈改好</b>——① 双击三区（左快退 10s · 中暂停 · 右快进 10s，带波纹）；
+  ② <b>长按 = 倍速、按住上滑升档 2→8x、下滑降档、松手保持</b>（本轮补上）；
+  ③ 「后退」挪到最左、「收厅」靠右；④ 资源嗅探列表重做成雨见式卡片（类型徽标 + 时长大字 + 标签 + 正在播高亮 + 播它）。
+  <br><br>浏览页保持原样（纯网页浏览），放映页 = 固定位置的智能播放器 —— 正是你说的分工。
+  <br><br>确认这版没问题我就开工改代码；要再调（比如倍速档位、快进步长 10/15/30 秒、卡片样式、标签措辞）直接说。
+</div>
+
+</div>
+</body>
+</html>

@@ -261,13 +261,19 @@ object CallSession {
         note(if (wasScreening) "换片了：$what" else "片源已递给对方：$what")
     }
 
-    /** 放映厅那一屏每轮询到一次播放器状态就调它。 */
-    fun publishCinemaProgress(posMs: Long, durMs: Long, playing: Boolean) {
+    /**
+     * 放映厅那一屏每轮询到一次播放器状态就调它。
+     *
+     * [rate] 是房主当前倍速（手势长按/上滑设的）——协议字段本来就有，
+     * 观众端拿它既投影时间轴、也把本地播放器拨到同速（同速才能同帧）。
+     */
+    fun publishCinemaProgress(posMs: Long, durMs: Long, playing: Boolean, rate: Double = 1.0) {
         val cur = _cinema.value ?: return
         _cinema.value = cur.copy(
             posMs = posMs,
             durMs = durMs,
             playing = playing,
+            rate = rate,
             hostWallMs = System.currentTimeMillis(),
         )
         broadcastCinema()

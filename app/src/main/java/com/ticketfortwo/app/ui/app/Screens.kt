@@ -39,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import com.ticketfortwo.app.cinema.PlayerPrefs
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -908,6 +909,42 @@ fun QualitySettingsScreen(
                     color = Ink.TextMid,
                     lineHeight = 17.sp,
                 )
+            }
+        }
+
+        SectionTitle("放映播放")
+        GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp3)) {
+                /* 首次读盘也放 IO：这页可能在没进过放映厅时直接打开，
+                   不 init 的话显示的是代码默认值、不是上次存的档。 */
+                val ctx = LocalContext.current
+                LaunchedEffect(Unit) {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        PlayerPrefs.init(ctx)
+                    }
+                }
+
+                SectionTitle("快进步长")
+                Text(
+                    "画面里双击左/右的快退快进秒数。",
+                    fontSize = 11.5.sp, color = Ink.TextMid, lineHeight = 17.sp,
+                )
+                SegmentRow(
+                    options = PlayerPrefs.STEPS.map { "${it}秒" },
+                    selected = PlayerPrefs.STEPS.indexOf(PlayerPrefs.stepSec)
+                        .let { if (it >= 0) it else 1 },
+                ) { PlayerPrefs.setStep(PlayerPrefs.STEPS[it], ctx) }
+
+                SectionTitle("倍速档位")
+                Text(
+                    "长按画面立即起步，手指不松上滑按这组档位逐档升、下滑降，松手保持；\n" +
+                        "画面右上角的小倍速标随时点回 1x。倍速会同步给对方（同速才能同帧）。",
+                    fontSize = 11.5.sp, color = Ink.TextMid, lineHeight = 17.sp,
+                )
+                SegmentRow(
+                    options = PlayerPrefs.LADDERS.map { it.first },
+                    selected = PlayerPrefs.ladderIndex,
+                ) { PlayerPrefs.setLadder(it, ctx) }
             }
         }
 
