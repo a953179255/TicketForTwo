@@ -369,7 +369,17 @@ internal const val PIN_VIDEO_JS =
            2026-10-01 用户反馈"视频比例被拉伸"）。改为按视频真实宽高比**手工算
            contain 盒**：宽贴视口、高按比例，超高就反过来贴高；再居中放置。
            视频比例拿不到（metadata 未到）先按 16:9 兜底，探针 2 秒后会带着真实
-           比例重算。object-fit:contain 留着不碍事（支持的内核上等价）。 */
+           比例重算。object-fit:contain 留着不碍事（支持的内核上等价）。
+           视频缩小后元素盖不满视口了，页面其它内容（页头/广告横幅）会从四周露出来
+           —— 垫一层全屏黑 div 压住整个页面（z 比 video 低 1），放映就是纯画面。 */
+        var bg=document.getElementById('__t2pinbg');
+        if(!bg){
+          bg=document.createElement('div');
+          bg.id='__t2pinbg';
+          bg.style.cssText='position:fixed;left:0;top:0;width:100%;height:100%;'+
+            'background:#000;z-index:2147483646;pointer-events:none';
+          document.documentElement.appendChild(bg);
+        }
         var ratio=(v.videoWidth&&v.videoHeight)?(v.videoWidth/v.videoHeight):(16/9);
         if(!isFinite(ratio)||ratio<=0) ratio=16/9;
         var w=vw, h=vw/ratio;
@@ -414,6 +424,9 @@ internal const val UNPIN_VIDEO_JS =
       [].slice.call(document.querySelectorAll('video')).forEach(function(v){
         if(v.dataset.t2saved===undefined) return;
         v.style.cssText=v.dataset.t2saved; delete v.dataset.t2saved;});
+      /* 黑底垫层一并拆掉，页面恢复原样 */
+      var bg=document.getElementById('__t2pinbg');
+      if(bg&&bg.parentNode) bg.parentNode.removeChild(bg);
       return 'ok';})()"""
 
 /** 从一段文本里抽出第一条 http(s) 链接（粘贴芯片 / 首页剪贴板浮卡共用）。 */

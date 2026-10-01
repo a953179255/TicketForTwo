@@ -37,12 +37,16 @@
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.TicketForTwo">
 
+        <!-- configChanges 尽量收全（2026-10-01）：HaoMirror 类投屏在手机上建/拆
+             虚拟显示器时，内置屏的 density/刷新率配置会连锁抖动 —— 白名单没盖住的
+             维度会触发 Activity 重建，放映中 WebView 被重挂（黑几秒）、Compose
+             非进程级状态全部归零（真机实测 v0.2.1 丢 pageUrl）。 -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
             android:supportsPictureInPicture="true"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode|density|fontScale|colorMode|layoutDirection|locale|touchscreen|navigation"
             android:theme="@style/Theme.TicketForTwo">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

@@ -106,6 +106,24 @@ class FloatPlayerService : android.app.Service() {
                 showPrewarmed(intent.getLongExtra(EXTRA_POS, -1L))
                 return START_NOT_STICKY
             }
+            /* 正式起浮窗（非预热）：原来这里**没有分支** —— startForegroundService
+               收到后什么都不做就 return，服务 30 秒不调 startForeground，
+               系统直接 ForegroundServiceDidNotStartInTimeException 把 App 崩掉
+               （2026-10-01 用户实测"浏览态点浮窗没反应"：其实一点就崩）。
+               以前没炸是因为有候选的站走 PREWARM→SHOW，这条路径从没被踩到。 */
+            ACTION_START -> {
+                mark("START 拉起浮窗")
+                start(
+                    url = intent.getStringExtra(EXTRA_URL) ?: return START_NOT_STICKY,
+                    title = intent.getStringExtra(EXTRA_TITLE) ?: "",
+                    referer = intent.getStringExtra(EXTRA_REFERER),
+                    cookie = intent.getStringExtra(EXTRA_COOKIE),
+                    ua = intent.getStringExtra(EXTRA_UA),
+                    posMs = intent.getLongExtra(EXTRA_POS, 0L),
+                    candidates = intent.getStringArrayExtra(EXTRA_CANDIDATES)?.toList()
+                        ?: emptyList(),
+                )
+            }
             ACTION_PREWARM -> { mark("收到预热指令"); prewarm(
                 url = intent.getStringExtra(EXTRA_URL) ?: return START_NOT_STICKY,
                 title = intent.getStringExtra(EXTRA_TITLE) ?: "",

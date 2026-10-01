@@ -110,6 +110,10 @@ private val theaterMode = androidx.compose.runtime.mutableStateOf(false)
 private val cinemaPageUrl = androidx.compose.runtime.mutableStateOf("")
 private val cinemaInputUrl = androidx.compose.runtime.mutableStateOf("")
 
+/* 放映全屏（2026-10-01 用户反馈"放映界面不能全屏"）：甲板收起、画面吃满；
+   轻点画面唤回甲板。进程级 —— 重建/覆盖层往返不丢。退出放映自动复位。 */
+private val deckHidden = androidx.compose.runtime.mutableStateOf(false)
+
 
 /**
  * 等多久就算"对方没给回执"。
@@ -268,6 +272,10 @@ fun CinemaScreen(
         // 新的一场还没片：别把上一场的放映模式带进来
         if (CallSession.cinema.value == null) theaterMode.value = false
     }
+    LaunchedEffect(theater) {
+        // 退出放映/收厅：全屏态复位（甲板回来）
+        if (!theater) deckHidden.value = false
+    }
     /* 进厅即输（方案A，2026-09-29 用户拍板）：引导页撤掉，空厅落地就是地址栏聚焦 +
        键盘弹起 —— 跟浏览器点开新标签页一个感觉。只拨一次：带着片回厅（pageUrl 非空）、
        递链接进来（initialUrl 非空）、已落在放映模式（地址行不在屏上）都不弹键盘。 */
@@ -395,6 +403,20 @@ fun CinemaScreen(
             return
         }
         val hit = h ?: CinemaProbe.bestOf(hits)
+            /* 嗅探候选没有可播地址（blob/MSE 站点：流在页面里合成，浮窗拿不到直链）
+               时，退而用**递给观众的片源地址** —— 只要开过放映它就在（会话里那份）。
+               没了 referer/cookie 可能被防盗链拦，但拦了有失败回退，总比"点了没反应"
+               好（2026-10-01 用户实测：浏览态点浮窗纹丝不动）。 */
+            ?: cinema?.track?.url?.takeIf { it.startsWith("http", true) }?.let { url ->
+                MediaSniffer.Hit(
+                    url = url,
+                    kind = MediaSniffer.Kind.Master,
+                    referer = pageUrl.takeIf { it.isNotBlank() },
+                    userAgent = null,
+                    cookie = null,
+                    firstSeenMs = System.currentTimeMillis(),
+                )
+            }
         if (hit == null) {
             note = "还没嗅到能播的地址 —— 先在这页把视频点成播放"
             return
@@ -482,8 +504,17 @@ fun CinemaScreen(
         CinemaBrowser.obtain(context).also { CinemaBrowser.install(it, host) }
     }
 
+    /**
+     * 自播接管的起播位置：网页探针读数与会话广播里的进度**取较大值**。
+     * 只信探针（player）有个坑：探针 2 秒一轮，刚进厅/快速切换时还是 0 或旧值 ——
+     * 接管就从 0 起播，观众端跟着被拽回开头（2026-10-01 用户实测"切换后进度归零"）。
+     * 广播值（cinema.posMs）最多旧半秒，比归零强得多。
+     */
+    fun resumePosMs(): Long =
+        maxOf(player?.posMs ?: 0L, cinema?.posMs ?: 0L)
+
     /** 起画面自播（2B）：挑档按放映预算 1920，从 posMs 接。幂等（在播就忽略）。 */
-    fun startTheater(h: MediaSniffer.Hit, posMs: Long = player?.posMs ?: 0L) {
+    fun startTheater(h: MediaSniffer.Hit, posMs: Long = resumePosMs()) {
         val headers = buildMap {
             h.referer?.takeIf { it.isNotBlank() }?.let { put("Referer", it) }
             h.cookie?.takeIf { it.isNotBlank() }?.let { put("Cookie", it) }
@@ -1512,9 +1543,13 @@ fun CinemaScreen(
                         modifier = Modifier.fillMaxSize(),
                         onLabel = "theater-relay",
                     )
-                } else if (tp.active) {
+                } else if (tp.active && tp.ready) {
                     /* 画面自播视图（2B）：画面是 TextureView —— 点击**进不到网页**，
-                       广告/整块画面跳转没有 DOM 可跳；轻点弹玻璃控制条（3 秒自动隐）。 */
+                       广告/整块画面跳转没有 DOM 可跳；轻点弹玻璃控制条（3 秒自动隐）。
+                       **ready 才接管画面**（2026-10-01）：起播要拉流 2-3 秒，原来
+                       active 就把黑 TextureView 盖上来 —— 浏览切放映"卡 3 秒黑屏"
+                       就是它。未 ready 时落到底下的网页钉屏分支，网页还在播（暂停
+                       交棒本来就发生在 ready），首帧一到无缝切换。 */
                     val tapInd = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
                     Box(
                         Modifier
@@ -1574,10 +1609,26 @@ fun CinemaScreen(
                 } else key(webGen) {
                     AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
                 }
+                /* 全屏态的唤回层：甲板收起后整块画面都可轻点，一下唤回控制甲板。
+                   只在全屏态出现，浏览态（网页要收点击）不受影响。 */
+                if (theater && deckHidden.value) {
+                    val tapInd = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                    Box(
+                        Modifier
+                            .matchParentSize()
+                            .clickable(interactionSource = tapInd, indication = null) {
+                                deckHidden.value = false
+                            },
+                    )
+                }
             }
             /* 甲板装进玻璃卡：裸文本浮在壁纸上读不清（真机截图实测），
-               和厅里其他卡片同一套玻璃语言。 */
-            if (theater) { GlassPanel(
+               和厅里其他卡片同一套玻璃语言。
+               注意 if/else 是配对的：theater 画甲板、否则画浏览底卡 —— 全屏态
+               （deckHidden）必须**只藏甲板**，不能把条件写进 if 让 else 的浏览底卡
+               顶出来（2026-10-01 实测踩过：全屏一点，底下蹦出"开始放映"卡）。 */
+            if (theater) {
+                if (!deckHidden.value) GlassPanel(
                 backdrop = backdrop,
                 modifier = Modifier
                     // 不给 weight —— 贴内容长；上限护栏防止极端小屏把视频挤没
@@ -1733,6 +1784,12 @@ fun CinemaScreen(
                     }
                     DockBtn("换片", backdrop, Modifier.weight(1f)) { askPickList = true }
                     DockBtn("邀请", backdrop, Modifier.weight(1f)) { copyInvite() }
+                    /* 全屏（2026-10-01 用户反馈"放映界面不能全屏"）：甲板整卡收起，
+                       画面吃满；轻点画面唤回。退出放映自动复位（见 theater effect）。 */
+                    DockBtn("全屏", backdrop, Modifier.weight(1f)) {
+                        deckHidden.value = true
+                        note = "全屏中 · 轻点画面唤出控制"
+                    }
                     /* 麦键（2026-10-01 用户计划：放映厅点麦克风就能连麦）。
                        文案直接说**状态**（原来说的是动作"关麦"，开/关样式又一模一样，
                        用户分不清现在到底是开还是关 —— 2026-10-01 实测反馈）。
