@@ -292,6 +292,15 @@ fun CinemaScreen(
         (context as? android.app.Activity)?.requestedOrientation =
             android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
     }
+    /* 离开放映厅（回首页/进覆盖层）：方向锁必须交还、全屏态复位 —— 否则全屏后
+       圆钮回首页，首页还挂在 SENSOR_LANDSCAPE 上，竖着拿手机 App 也横屏
+       （2026-10-01 用户复测）。theater 不动（会话还在，回来接着放）。 */
+    DisposableEffect(Unit) {
+        onDispose {
+            deckHidden.value = false
+            restoreOrientation()
+        }
+    }
     LaunchedEffect(deckHidden.value) {
         /* **任何路径退出全屏都交还方向**（2026-10-01 用户复测"返回后卡横屏"）：
             系统返回键、轻点唤回、收厅……只要 deckHidden 变 false 就 UNSPECIFIED。 */
