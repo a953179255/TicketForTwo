@@ -283,17 +283,31 @@ fun CinemaScreen(
         (context as? android.app.Activity)?.requestedOrientation =
             android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
     }
+    LaunchedEffect(deckHidden.value) {
+        /* **任何路径退出全屏都交还方向**（2026-10-01 用户复测"返回后卡横屏"）：
+            系统返回键、轻点唤回、收厅……只要 deckHidden 变 false 就 UNSPECIFIED。 */
+        if (!deckHidden.value) restoreOrientation()
+    }
     LaunchedEffect(theater) {
-        if (!theater) {
-            // 退出放映/收厅：全屏复位（甲板回来）+ 方向交还系统
+        val wv = CinemaBrowser.webView
+        if (theater) {
+            /* **View 层禁网页触摸**（2026-10-01 用户复测"点击画面仍跳广告"）：
+               自播 TextureView/VideoLayer 不消费 touch，touch 会穿到底下的 WebView
+              （AndroidView 分发顺序），JS 拦截层拦不住 View 层的这条路。
+               OnTouchListener 返回 true 从根上掐 —— 放映中网页一个 touch 都收不到，
+               控制全走甲板（hostCmd 走 evaluateJavascript，不依赖 touch）。 */
+            wv?.setOnTouchListener { _, _ -> true }
+        } else {
+            // 退出放映/收厅：全屏复位（甲板回来）+ 方向交还系统 + 网页触摸恢复
             deckHidden.value = false
             restoreOrientation()
+            wv?.setOnTouchListener(null)
             /* **统一拆钉屏**（2026-10-01 问题 1）：原来只有手动切「浏览」那一条路
                会 pinVideo(false)；投屏断开触发界面复位走的是 theaterMode 复位，
                钉屏留在网页上 —— 视频居中 + 黑底垫层盖住页面，"网页其他内容变黑
                只剩视频"。这里不管从哪条路退出放映都拆干净。 */
-            CinemaBrowser.webView?.post {
-                CinemaBrowser.webView?.evaluateJavascript(UNPIN_VIDEO_JS, null)
+            wv?.post {
+                wv?.evaluateJavascript(UNPIN_VIDEO_JS, null)
             }
         }
     }
@@ -667,6 +681,13 @@ fun CinemaScreen(
     BackHandler(enabled = askCloseRoom) { askCloseRoom = false }
     BackHandler(enabled = askPickList) { askPickList = false }
     BackHandler(enabled = pickTarget != null) { pickTarget = null }
+    /* 全屏态的系统返回 = 先退出全屏（方向随 deckHidden effect 交还），不放行到
+       浏览器后退。**必须注册在这批 BackHandler 之后**：Compose 的返回栈后注册
+       优先 —— 放在前面会被"浏览器后退"抢走（实测：返回键离开放映厅回首页，
+       App 卡在横屏）。 */
+    BackHandler(enabled = deckHidden.value) {
+        deckHidden.value = false
+    }
 
     /* 退回目标的安顿窗口：onPageStarted 落到目标 ≠ 站点安顿了 —— 页面可能紧接着
        又把自己 replace 成广告。窗口内出现新导航即视为"被弹走"（见 onPageStarted
@@ -1496,7 +1517,10 @@ fun CinemaScreen(
                         )
                     } else if (tp.active && tp.ready) {
                         AndroidView(
-                            factory = { android.view.TextureView(it).also { tv -> TheaterPlayer.attach(tv) } },
+                            factory = { android.view.TextureView(it).also { tv ->
+                                TheaterPlayer.attach(tv)
+                                tv.setOnTouchListener { _, _ -> true }   // 横屏自播画面同样拦 touch
+                            } },
                             update = { tv -> TheaterPlayer.attach(tv) },
                             onRelease = { TheaterPlayer.detach() },
                             modifier = Modifier.fillMaxSize(),
@@ -1608,7 +1632,13 @@ fun CinemaScreen(
                     ) {
                         AndroidView(
                             factory = {
-                                android.view.TextureView(it).also { tv -> TheaterPlayer.attach(tv) }
+                                android.view.TextureView(it).also { tv ->
+                                    TheaterPlayer.attach(tv)
+                                    /* 自播画面自己消费 touch（2026-10-01 复测穿透修复）：
+                                       TextureView 默认不消费，touch 穿到底下 WebView →
+                                       网页收点击 → 跳广告。拦下来并顺手弹自播控制条。 */
+                                    tv.setOnTouchListener { _, _ -> showTctl = true; true }
+                                }
                             },
                             update = { tv -> TheaterPlayer.attach(tv) },
                             onRelease = { TheaterPlayer.detach() },
