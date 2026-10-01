@@ -66,6 +66,10 @@ class ShareService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        android.util.Log.i(
+            "ShareService",
+            "onStartCommand action=${intent?.action ?: "null(intent)"} startId=$startId",
+        )
         /* START_STICKY 的 null-intent 重启只会在进程死后发生 —— 而 CallSession 与
            本服务同进程，那时会话也没了，继续跑只会立着一条没人认领的前台通知
            （实测出现过 id=1001 孤儿通知，REVIEW-2026-09-27 P2）。直接退出。 */
@@ -164,6 +168,7 @@ class ShareService : Service() {
     }
 
     override fun onDestroy() {
+        android.util.Log.i("ShareService", "onDestroy（诊断：谁停了我）")
         viewerJob?.cancel()
         uiScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
         _foregroundReady.value = false

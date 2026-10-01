@@ -899,6 +899,14 @@ object CallSession {
     }
 
     fun stop(context: Context) {
+        /* **诊断日志（2026-10-01）**：投屏连接/断开时会话被静默停掉（state=Idle 但
+           全程无停止日志）—— 打调用栈直接看是谁在调（ScreenShareController 撤销 /
+           ShareService ACTION_STOP / UI 收厅……）。定位后可删。 */
+        android.util.Log.i(
+            TAG,
+            "SESSION STOP 调用来源：" +
+                Throwable().stackTrace.take(6).joinToString(" <- ") { it.className.substringAfterLast('.') + "." + it.methodName },
+        )
         // 第一件事必须是道别，而且必须在拆 peer / 拆隧道 / 拆传话员之前做完：
         // SignalHub.stop() 会清掉待发队列，TunnelManager.stop() 直接杀 cloudflared 进程，
         // 任何一件先发生，这句"结束"就永远留在队列里。不发出去的后果不是"少一句提示"，
