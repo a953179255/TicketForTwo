@@ -272,9 +272,30 @@ fun CinemaScreen(
         // 新的一场还没片：别把上一场的放映模式带进来
         if (CallSession.cinema.value == null) theaterMode.value = false
     }
+    /** 视频宽高比（探针读页面 video 的真实尺寸）；拿不到按 16:9 兜底。 */
+    fun videoRatio(): Float {
+        val w = probe?.videoWidth?.takeIf { it > 0 }
+        val h = probe?.videoHeight?.takeIf { it > 0 }
+        return if (w != null && h != null) w.toFloat() / h else 16f / 9f
+    }
+    /** 方向交还系统（退出全屏/退出放映时）。 */
+    fun restoreOrientation() {
+        (context as? android.app.Activity)?.requestedOrientation =
+            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    }
     LaunchedEffect(theater) {
-        // 退出放映/收厅：全屏态复位（甲板回来）
-        if (!theater) deckHidden.value = false
+        if (!theater) {
+            // 退出放映/收厅：全屏复位（甲板回来）+ 方向交还系统
+            deckHidden.value = false
+            restoreOrientation()
+            /* **统一拆钉屏**（2026-10-01 问题 1）：原来只有手动切「浏览」那一条路
+               会 pinVideo(false)；投屏断开触发界面复位走的是 theaterMode 复位，
+               钉屏留在网页上 —— 视频居中 + 黑底垫层盖住页面，"网页其他内容变黑
+               只剩视频"。这里不管从哪条路退出放映都拆干净。 */
+            CinemaBrowser.webView?.post {
+                CinemaBrowser.webView?.evaluateJavascript(UNPIN_VIDEO_JS, null)
+            }
+        }
     }
     /* 进厅即输（方案A，2026-09-29 用户拍板）：引导页撤掉，空厅落地就是地址栏聚焦 +
        键盘弹起 —— 跟浏览器点开新标签页一个感觉。只拨一次：带着片回厅（pageUrl 非空）、
@@ -1454,7 +1475,9 @@ fun CinemaScreen(
         if (wide) {
             /* 横屏放映形态（2026-10-01）：画面铺满整行（竖屏同款钉屏逻辑把 video
                钉满 WebView 视口），控制交给网页播放器自己的控制条（轻点即出）；
-               浏览态仍是左右分栏。原来横屏不认 theater，切了开关界面纹丝不动。 */
+               浏览态仍是左右分栏。原来横屏不认 theater，切了开关界面纹丝不动。
+               画面优先级与竖屏**同一套**：转播回显 → 自播首帧 → 网页钉屏 ——
+               原来只有 WebView，自播交棒后横屏画面倒退回网页的旧进度（实测）。 */
             if (theater && pageUrl.isNotEmpty()) {
                 Box(
                     Modifier
@@ -1464,6 +1487,31 @@ fun CinemaScreen(
                 ) {
                     key(webGen) {
                         AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
+                    }
+                    if (TheaterPlayer.relaying && localVt != null) {
+                        VideoLayer(
+                            track = localVt,
+                            modifier = Modifier.fillMaxSize(),
+                            onLabel = "theater-relay-land",
+                        )
+                    } else if (tp.active && tp.ready) {
+                        AndroidView(
+                            factory = { android.view.TextureView(it).also { tv -> TheaterPlayer.attach(tv) } },
+                            update = { tv -> TheaterPlayer.attach(tv) },
+                            onRelease = { TheaterPlayer.detach() },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                    if (deckHidden.value) {
+                        val tapIndL = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                        Box(
+                            Modifier
+                                .matchParentSize()
+                                .clickable(interactionSource = tapIndL, indication = null) {
+                                    deckHidden.value = false
+                                    restoreOrientation()   // 唤回甲板 = 退出全屏，方向交还系统
+                                },
+                        )
                     }
                 }
             } else {
@@ -1618,6 +1666,7 @@ fun CinemaScreen(
                             .matchParentSize()
                             .clickable(interactionSource = tapInd, indication = null) {
                                 deckHidden.value = false
+                                restoreOrientation()   // 唤回甲板 = 退出全屏，方向交还系统
                             },
                     )
                 }
@@ -1785,9 +1834,16 @@ fun CinemaScreen(
                     DockBtn("换片", backdrop, Modifier.weight(1f)) { askPickList = true }
                     DockBtn("邀请", backdrop, Modifier.weight(1f)) { copyInvite() }
                     /* 全屏（2026-10-01 用户反馈"放映界面不能全屏"）：甲板整卡收起，
-                       画面吃满；轻点画面唤回。退出放映自动复位（见 theater effect）。 */
+                       画面吃满；轻点画面唤回。**横视频（16:9/宽屏）顺带把屏幕转成
+                       横屏 —— 真全屏**（用户手机自动旋转不常开）；竖屏视频（9:16）
+                       转横屏反而画面变小，保持竖屏吃满。方向在唤回/退出放映时
+                       交还系统（restoreOrientation）。 */
                     DockBtn("全屏", backdrop, Modifier.weight(1f)) {
                         deckHidden.value = true
+                        if (videoRatio() >= 1f) {
+                            (context as? android.app.Activity)?.requestedOrientation =
+                                android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                        }
                         note = "全屏中 · 轻点画面唤出控制"
                     }
                     /* 麦键（2026-10-01 用户计划：放映厅点麦克风就能连麦）。

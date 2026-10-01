@@ -380,6 +380,19 @@ internal const val PIN_VIDEO_JS =
             'background:#000;z-index:2147483646;pointer-events:none';
           document.documentElement.appendChild(bg);
         }
+        /* **点击拦截层**：放映画面是网页里的 video（只是被钉到顶层），不拦的话
+           点画面会穿透进网页 —— 触发网页播放器的控制条、甚至误点广告跳转
+           （2026-10-01 用户实测"点击放映画面会触发网页的播放器点击效果"）。
+           盖一层全屏透明 div（z 比 video 高）吃掉所有点击：放映中控制全走
+           甲板/自播控制条，网页一个点击都不该收到。UNPIN 时一并拆掉。 */
+        var trap=document.getElementById('__t2pintrap');
+        if(!trap){
+          trap=document.createElement('div');
+          trap.id='__t2pintrap';
+          trap.style.cssText='position:fixed;left:0;top:0;width:100%;height:100%;'+
+            'background:transparent;z-index:2147483647;pointer-events:auto';
+          document.documentElement.appendChild(trap);
+        }
         var ratio=(v.videoWidth&&v.videoHeight)?(v.videoWidth/v.videoHeight):(16/9);
         if(!isFinite(ratio)||ratio<=0) ratio=16/9;
         var w=vw, h=vw/ratio;
@@ -424,9 +437,11 @@ internal const val UNPIN_VIDEO_JS =
       [].slice.call(document.querySelectorAll('video')).forEach(function(v){
         if(v.dataset.t2saved===undefined) return;
         v.style.cssText=v.dataset.t2saved; delete v.dataset.t2saved;});
-      /* 黑底垫层一并拆掉，页面恢复原样 */
-      var bg=document.getElementById('__t2pinbg');
-      if(bg&&bg.parentNode) bg.parentNode.removeChild(bg);
+      /* 黑底垫层与点击拦截层一并拆掉，页面恢复原样 */
+      ['__t2pinbg','__t2pintrap'].forEach(function(id){
+        var el=document.getElementById(id);
+        if(el&&el.parentNode) el.parentNode.removeChild(el);
+      });
       return 'ok';})()"""
 
 /** 从一段文本里抽出第一条 http(s) 链接（粘贴芯片 / 首页剪贴板浮卡共用）。 */
