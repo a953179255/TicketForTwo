@@ -112,7 +112,8 @@ private val cinemaPageUrl = androidx.compose.runtime.mutableStateOf("")
 private val cinemaInputUrl = androidx.compose.runtime.mutableStateOf("")
 
 /* 放映全屏（2026-10-01 用户反馈"放映界面不能全屏"）：甲板收起、画面吃满；
-   轻点画面唤回甲板。进程级 —— 重建/覆盖层往返不丢。退出放映自动复位。 */
+   单击画面出控件（2026-10-02 改：不再唤回甲板，退出全屏走控件右下 ⛶）。
+   进程级 —— 重建/覆盖层往返不丢。退出放映自动复位。 */
 private val deckHidden = androidx.compose.runtime.mutableStateOf(false)
 
 /* 当前倍速（手势长按/上滑设的；1.0 = 常速）。进程级：
@@ -1619,17 +1620,10 @@ fun CinemaScreen(
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
-                    if (deckHidden.value) {
-                        val tapIndL = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-                        Box(
-                            Modifier
-                                .matchParentSize()
-                                .clickable(interactionSource = tapIndL, indication = null) {
-                                    deckHidden.value = false
-                                    restoreOrientation()   // 唤回甲板 = 退出全屏，方向交还系统
-                                },
-                        )
-                    }
+                    /* （2026-10-02 删除自播分支里的旧"全屏唤回层"）：全屏态点画面
+                       曾被这层抢先把甲板唤回、把新手势层的单击吃掉 —— 用户实测
+                       "全屏时点画面自动返回放映界面"。单击出控件/⛶退出统一走
+                       下面的 PlayerGestureOverlay。 */
                 }
             } else {
             Row(Modifier.fillMaxWidth().weight(1f)) {
@@ -1763,11 +1757,9 @@ fun CinemaScreen(
                 } else key(webGen) {
                     AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
                 }
-                /* 手势层（方案 C 定稿，2026-10-01）：三态之上、放映态常挂，
-                   **替代**原"全屏唤回层"——全屏态的轻点唤回并进 onSingleTap
-                   （效果图承诺的合并手势）。浏览态不挂（网页要收点击）。
-                   单击出 HUD、双击三区快进快退、横滑 seek、竖滑亮度/音量、
-                   长按+上滑倍速，全部在 PlayerGestureOverlay 里。 */
+                /* 手势层（方案 C，2026-10-02 按用户雨见截图升级）：三态之上、
+                   放映态常挂。单击 = 雨见式控制层（中央三键/进度条/时间/⛶/✕）；
+                   全屏态单击同样是出控件（**不再唤回甲板** —— 退出全屏走控件右下 ⛶）。 */
                 if (theater) {
                     val durForGesture = (if (tp.active) tp.durMs else 0L).takeIf { it > 0 }
                         ?: player?.durMs?.takeIf { it > 0 } ?: cinema?.durMs ?: 0L
@@ -1778,13 +1770,6 @@ fun CinemaScreen(
                         rate = boostRate.value,
                         ladder = PlayerPrefs.ladder(),
                         stepSec = PlayerPrefs.stepSec,
-                        isFullScreen = deckHidden.value,
-                        onSingleTap = {
-                            if (deckHidden.value) {
-                                deckHidden.value = false
-                                restoreOrientation()   // 唤回甲板 = 退出全屏，方向交还系统
-                            }
-                        },
                         onDoubleTap = { zone ->
                             val step = PlayerPrefs.stepSec * 1000L
                             when (zone) {
@@ -1807,6 +1792,20 @@ fun CinemaScreen(
                             }
                         },
                         onRate = { r -> applyBoost(r) },
+                        onToggleFullscreen = {
+                            if (deckHidden.value) {
+                                deckHidden.value = false
+                                restoreOrientation()   // 全屏控件里的 ⛶：退出全屏回放映界面
+                            } else {
+                                deckHidden.value = true
+                                if (videoRatio() >= 1f) {
+                                    (context as? android.app.Activity)?.requestedOrientation =
+                                        android.content.pm.ActivityInfo
+                                            .SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                                }
+                                note = "全屏中 · 点画面出控件，右下 ⛶ 退出"
+                            }
+                        },
                     )
                 }
             }

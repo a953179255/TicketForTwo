@@ -8,12 +8,16 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -45,6 +49,27 @@ import kotlinx.coroutines.launch
 
 /** 双击的落点分区：左 = 快退、中 = 播放/暂停、右 = 快进（雨见同款玩法）。 */
 enum class TapZone { Left, Center, Right }
+
+/** 控制层中央的圆钮（雨见形态：中键大、两侧小；半透明黑底白字）。 */
+@Composable
+private fun CtlCircle(label: String, big: Boolean, onClick: () -> Unit) {
+    val ind = remember { MutableInteractionSource() }
+    Box(
+        Modifier
+            .size(if (big) 74.dp else 58.dp)
+            .clip(RoundedCornerShape(99))
+            .background(Color(0x99000000))
+            .clickable(interactionSource = ind, indication = null) { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            color = Color.White,
+            fontSize = if (big) 24.sp else 14.sp,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
 
 /** 拖动此刻在干什么 —— 方向首决，之后锁定。 */
 private enum class DragMode { Undetermined, Seek, Vertical, Boost }
@@ -78,11 +103,10 @@ fun PlayerGestureOverlay(
     rate: Double,
     ladder: List<Double>,
     stepSec: Int,
-    isFullScreen: Boolean,
-    onSingleTap: () -> Unit,
     onDoubleTap: (TapZone) -> Unit,
     onSeek: (frac: Float) -> Unit,
     onRate: (Double) -> Unit,
+    onToggleFullscreen: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -104,7 +128,7 @@ fun PlayerGestureOverlay(
         hudJob?.cancel()
         hudVisible = true
         hudJob = scope.launch {
-            delay(1_500)
+            delay(3_000)   // 控件 3 秒不碰自动隐（雨见同款手感；原 1.5s 太急）
             hudVisible = false
         }
     }
@@ -194,8 +218,14 @@ fun PlayerGestureOverlay(
                                 // 会让落点变成"最后一帧的几像素"（实测横滑 400px
                                 // 只 seek 出 +5s，正是最后一帧 ~8px 的换算）。
                                 accX += drag.x
-                                val frac = (startFrac + accX / w).coerceIn(0f, 1f)
-                                seekPreviewMs = (frac * durMs).toLong()
+                                // **一屏 = ±120 秒**（对齐雨见/dkplayer 的
+                                // slideToChangePosition：(-dx/width)*120000）。
+                                // 按总时长百分比算的话，4 小时的片拖一屏会跳几小时，
+                                // 完全不可用；固定步长才拖得动、也追得回来。
+                                val deltaMs = (accX / w * 120_000f).toLong()
+                                val target = (startFrac * durMs.toFloat()).toLong().plus(deltaMs)
+                                    .coerceIn(0L, durMs)
+                                seekPreviewMs = target
                                 showHud()
                             }
                             DragMode.Vertical -> {
@@ -278,10 +308,12 @@ fun PlayerGestureOverlay(
                 }
             }
             // ── 点按：单击 / 双击三区 / 长按 ──
+            // 单击 = 呼出控制层（收起由控制层空白处的点击做 —— 控制层盖在上面，
+            // 单击先落它）。**全屏态同样是出控件**，不再唤回甲板
+            // （2026-10-02 用户截图定稿：退出全屏走控制层右下 ⛶）。
             .pointerInput(stepSec, ladder) {
                 detectTapGestures(
                     onTap = {
-                        if (isFullScreen) onSingleTap()   // 全屏态：唤回甲板 + HUD 一起给
                         showHud()
                     },
                     onDoubleTap = { at ->
@@ -357,34 +389,182 @@ fun PlayerGestureOverlay(
             )
         }
 
-        /* ── HUD：单击/操作时浮现 1.5 秒；倍速手势期间常驻 ── */
+        /* ── 控制层（照雨见形态，2026-10-02 用户截图定稿）：
+           单击出现、3 秒自动隐、空白处再单击收起；中央大三键、底部
+           时间 + 可拖进度条 + 全屏键、顶部倍速标 + ✕。
+           全屏态单击也是出这层（**不再唤回甲板** —— 退出全屏走右下 ⛶）。 */
         if (hudVisible || boostActive) {
             val show = seekPreviewMs ?: posMs
+            val dismissInd = remember { MutableInteractionSource() }
+            // 空白处点击 = 收起。clickable 在拖动超 slop 后不触发 onClick ——
+            // 控件显示时横滑/竖滑照常走根层的手势，互不打架。
             Box(
                 Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 22.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(Color(0xB30B0B14))
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                    .matchParentSize()
+                    .clickable(interactionSource = dismissInd, indication = null) {
+                        hudVisible = false
+                        hudJob?.cancel()
+                    },
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        feedback ?: (CinemaSync.formatTime(show) + " / " +
-                            CinemaSync.formatTime(durMs)),
-                        color = Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    val pv = seekPreviewMs
-                    if (pv != null) {
-                        val delta = (pv - posMs) / 1000
+                /* 顶行：×1.0 倍速标（点回 1x）· ✕ 收起 */
+                Row(
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .fillMaxWidth()
+                        .padding(top = 14.dp, start = 14.dp, end = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (rate != 1.0) {
+                        val rateInd = remember { MutableInteractionSource() }
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(99))
+                                .background(Color(0xB30B0B14))
+                                .clickable(interactionSource = rateInd, indication = null) {
+                                    onRate(1.0)
+                                }
+                                .padding(horizontal = 10.dp, vertical = 4.dp),
+                        ) {
+                            Text(
+                                "×" + ("%.1f".format(rate).trimEnd('0').trimEnd('.')),
+                                color = Color(0xFFFFD08A),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.weight(1f))
+                    val closeInd = remember { MutableInteractionSource() }
+                    Box(
+                        Modifier
+                            .size(34.dp)
+                            .clip(RoundedCornerShape(99))
+                            .background(Color(0x66000000))
+                            .clickable(interactionSource = closeInd, indication = null) {
+                                hudVisible = false
+                                hudJob?.cancel()
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("✕", color = Color.White, fontSize = 15.sp)
+                    }
+                }
+
+                /* 中央大三键：−步长 / 播放·暂停 / +步长（雨见同款布局） */
+                Row(
+                    Modifier.align(Alignment.Center),
+                    horizontalArrangement = Arrangement.spacedBy(34.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CtlCircle("-$stepSec", big = false) { onDoubleTap(TapZone.Left) }
+                    CtlCircle(if (playing) "❚❚" else "▶", big = true) {
+                        onDoubleTap(TapZone.Center)
+                    }
+                    CtlCircle("+$stepSec", big = false) { onDoubleTap(TapZone.Right) }
+                }
+
+                /* 底行：时间（或操作反馈）· 全屏键 + 可拖进度条 */
+                Column(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "  " + (if (delta >= 0) "+" else "−") + "${abs(delta)}s",
-                            color = Color(0xFF7AD8C3),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
+                            feedback ?: (CinemaSync.formatTime(show) + " / " +
+                                CinemaSync.formatTime(durMs)),
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
                         )
+                        val pv = seekPreviewMs
+                        if (pv != null) {
+                            val delta = (pv - posMs) / 1000
+                            Text(
+                                "  " + (if (delta >= 0) "+" else "−") + "${abs(delta)}s",
+                                color = Color(0xFF7AD8C3),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                        Spacer(Modifier.weight(1f))
+                        // 全屏 toggle：非全屏 → 进全屏；全屏 → 退出回放映界面
+                        val fsInd = remember { MutableInteractionSource() }
+                        Box(
+                            Modifier
+                                .size(34.dp)
+                                .clip(RoundedCornerShape(99))
+                                .background(Color(0x66000000))
+                                .clickable(interactionSource = fsInd, indication = null) {
+                                    hudJob?.cancel()
+                                    onToggleFullscreen()
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text("⛶", color = Color.White, fontSize = 16.sp)
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    // 进度条：拖动预览 + 松手提交（与发丝线同一套语义，控件内更粗）
+                    val barFrac =
+                        if (durMs > 0) (seekPreviewMs ?: posMs).toFloat() / durMs else 0f
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(24.dp)
+                            .pointerInput(durMs) {
+                                detectDragGestures(
+                                    onDragStart = { showHud() },
+                                    onDrag = { change, _ ->
+                                        change.consume()
+                                        if (durMs > 0) {
+                                            val frac = (change.position.x / size.width.toFloat())
+                                                .coerceIn(0f, 1f)
+                                            seekPreviewMs = (frac * durMs).toLong()
+                                            showHud()
+                                        }
+                                    },
+                                    onDragEnd = {
+                                        val t = seekPreviewMs
+                                        if (t != null && durMs > 0) {
+                                            onSeek((t.toFloat() / durMs).coerceIn(0f, 1f))
+                                            flash("→ " + CinemaSync.formatTime(t))
+                                        }
+                                        seekPreviewMs = null
+                                    },
+                                    onDragCancel = { seekPreviewMs = null },
+                                )
+                            },
+                    ) {
+                        Box(
+                            Modifier
+                                .align(Alignment.Center)
+                                .fillMaxWidth()
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(99))
+                                .background(Color(0x59FFFFFF)),
+                        )
+                        Box(
+                            Modifier
+                                .align(Alignment.CenterStart)
+                                .fillMaxWidth(barFrac.coerceIn(0f, 1f))
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(99))
+                                .background(
+                                    Brush.horizontalGradient(
+                                        listOf(Color(0xFF7AD8C3), Color(0xFFBFE7FF)),
+                                    ),
+                                ),
+                        ) {
+                            Box(
+                                Modifier
+                                    .align(Alignment.CenterEnd)
+                                    .size(13.dp)
+                                    .clip(RoundedCornerShape(99))
+                                    .background(Color.White),
+                            )
+                        }
                     }
                 }
             }

@@ -351,15 +351,34 @@ internal object CinemaBrowser {
  */
 internal const val PIN_VIDEO_JS =
     """(function(){
+      /* 收集本文件与同源 iframe 里的 <video>（FoFo 这类站播放器藏 iframe：
+         主文档查不到 -> pinNow 'none' -> 黑垫层盖住页面、iframe 视频露在下方
+         —— 用户实测"上半黑屏、视频偏下"的一种来源。跨域 iframe 访问会抛错，
+         catch 跳过（WebView 注入跨不了域，这是能力边界）。 */
+      function collect(root, out){
+        try{
+          var list=root.querySelectorAll('video');
+          for(var i=0;i<list.length;i++) out.push(list[i]);
+          var fr=root.querySelectorAll('iframe,frame');
+          for(var j=0;j<fr.length;j++){
+            try{ var d=fr[j].contentDocument; if(d) collect(d,out); }catch(e){}
+          }
+        }catch(e){}
+        return out;
+      }
       function pinNow(){
-        var vs=[].slice.call(document.querySelectorAll('video'));
+        var vs=collect(document, []);
         if(!vs.length) return 'none';
         var v=vs.sort(function(a,b){var A=a.getBoundingClientRect(),B=b.getBoundingClientRect();
           return B.width*B.height-A.width*A.height;})[0];
         if(v.dataset.t2saved!==undefined){
           var rr=v.getBoundingClientRect(), vw2=window.innerWidth, vh2=window.innerHeight;
-          // 盒子尺寸跟视口对得上才算钉住；对不上（布局换过、视口变了）就重钉一次
-          if(rr.height>0 && Math.abs(rr.height-vh2)<4 && Math.abs(rr.width-vw2)<4)
+          // 盒子尺寸**且位置**都对才算钉住 —— 只查 height/width 会漏掉
+          // "尺寸拉满但整体被 transform 祖先推偏"的假 ok（fixed 在 transform
+          // 祖先里会相对祖先定位），偏移后每次 2 秒重放都早退、错位永远不自愈
+          // （2026-10-02 用户实测"上半黑屏视频偏下持续不恢复"）。
+          if(rr.height>0 && Math.abs(rr.height-vh2)<4 && Math.abs(rr.width-vw2)<4 &&
+             rr.top<6 && rr.left<6)
             return 'ok|vp='+vw2+'x'+vh2+'|rs='+(window.__t2pinResizeCount||0);
         }
         if(v.dataset.t2saved===undefined) v.dataset.t2saved=v.style.cssText;
@@ -404,9 +423,10 @@ internal const val PIN_VIDEO_JS =
         if(!isFinite(ratio)||ratio<=0) ratio=16/9;
         var w=vw, h=vw/ratio;
         if(vh>0&&h>vh){ h=vh; w=vh*ratio; }
+        var el=Math.max(0,(vw-w)/2), et=Math.max(0,(vh-h)/2);
         v.style.setProperty('position','fixed','important');
-        v.style.setProperty('left',Math.max(0,(vw-w)/2)+'px','important');
-        v.style.setProperty('top',Math.max(0,(vh-h)/2)+'px','important');
+        v.style.setProperty('left',el+'px','important');
+        v.style.setProperty('top',et+'px','important');
         v.style.setProperty('width',w+'px','important');
         v.style.setProperty('height',h+'px','important');
         v.style.setProperty('display','block','important');
@@ -414,11 +434,36 @@ internal const val PIN_VIDEO_JS =
         v.style.setProperty('background','#000','important');
         v.style.setProperty('z-index','2147483647','important');
         var r=v.getBoundingClientRect();
+        /* **钉完复查处点**：fixed 只有在"无 transform 祖先"时才相对视口 ——
+           页面里一旦有 transform/filter/contain 容器装着这个 video，
+           写进去的 top 会相对祖先生效，结果"尺寸全对、整体偏下"（假 ok 的另一半）。
+           检测到偏移就把 video **拔到文档顶层**（脱离 transform 祖先），fixed
+           立刻恢复视口语义。拔出只发生在放映钉屏期间，UNPIN 还原样式后页面
+           本来就被黑垫盖着/会重新导航，代价可控；不拔则错位永不自愈。 */
+        if(Math.abs(r.top-et)>8 || Math.abs(r.left-el)>8){
+          try{ document.documentElement.appendChild(v); }catch(e){}
+          r=v.getBoundingClientRect();
+        }
         return 'fix|vp='+vw+'x'+vh+'|ar='+ratio.toFixed(3)+
           '|box='+Math.round(w)+'x'+Math.round(h)+
           '|rect='+[Math.round(r.top),Math.round(r.width),Math.round(r.height)].join(',');
       }
       window.__t2pin=pinNow;
+      /* **video 元素被换掉（换源/动态插入）就立刻钉新的** —— 老 video 的
+         t2saved 标记不在新元素上，resize/2 秒重放之外再补一路事件驱动
+         （2026-10-02 加固：FoFo 换 source 重建 video 后错位）。 */
+      if(!window.__t2mo){
+        window.__t2mo=1;
+        try{
+          new MutationObserver(function(){
+            if(!document.getElementById('__t2pinbg')) return;   // 只在钉屏态管
+            var all=document.querySelectorAll('video');
+            for(var i=0;i<all.length;i++){
+              if(all[i].dataset && all[i].dataset.t2saved===undefined){ pinNow(); return; }
+            }
+          }).observe(document.documentElement, {childList:true, subtree:true});
+        }catch(e){}
+      }
       /* 视口一变**当场**重钉：点「开始放映」时布局从浏览态切到300dp的画面框，
          第一次钉用的还是旧视口高度 —— contain 在旧高度里居中，顶部一条大黑边、
          画面偏下，要等2秒后的探针自检才恢复（用户实测"刚开始错位一两秒"）。
