@@ -297,14 +297,30 @@ fun CinemaScreen(
        （2026-10-01 用户复测）。theater 不动（会话还在，回来接着放）。 */
     DisposableEffect(Unit) {
         onDispose {
-            deckHidden.value = false
-            restoreOrientation()
+            /* 离开放映屏：交还方向、复位全屏 —— 但要区分两种 dispose：
+               · 配置变化重建（投屏连/断引发，Activity.isChangingConfigurations=true）：
+                 Compose 会马上重建，全屏态**必须保留** —— 否则全屏中开/关投屏，
+                 全屏效果被关掉（2026-10-01 用户复测）；方向锁重建后系统自动重置，
+                 靠 LaunchedEffect(deckHidden) 重跑时补回。
+               · 真离屏（回首页/进覆盖层）：正常复位（修"回首页还横着"）。 */
+            val changing = (context as? android.app.Activity)?.isChangingConfigurations == true
+            if (!changing) {
+                deckHidden.value = false
+                restoreOrientation()
+            }
         }
     }
     LaunchedEffect(deckHidden.value) {
         /* **任何路径退出全屏都交还方向**（2026-10-01 用户复测"返回后卡横屏"）：
-            系统返回键、轻点唤回、收厅……只要 deckHidden 变 false 就 UNSPECIFIED。 */
-        if (!deckHidden.value) restoreOrientation()
+            系统返回键、轻点唤回、收厅……只要 deckHidden 变 false 就 UNSPECIFIED。
+           反向：**重建后全屏态保留时把横屏锁补回**（Activity 新实例方向锁被系统
+            重置；投屏连/断引发的重建不能让全屏掉回竖屏，2026-10-01 复测）。 */
+        if (!deckHidden.value) {
+            restoreOrientation()
+        } else if (videoRatio() >= 1f) {
+            (context as? android.app.Activity)?.requestedOrientation =
+                android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        }
     }
     LaunchedEffect(theater) {
         android.util.Log.i("Cinema", "THEATER -> $theater pageUrl=${pageUrl.take(40)} cinema=${cinema != null} state=${CallSession.state.value}")
@@ -1623,8 +1639,20 @@ fun CinemaScreen(
                内容三四组却有一屏高 → 卡片底部一大块空玻璃（用户截图实测）。
                现在面板矮多少、视频就长高多少；面板在后测量、视频按剩余分配，空白恒为 0。 */
             /* 画面区黑底：投屏重建瞬间玻璃白雾/WebView 白帧压成黑（2026-10-01
-               用户反馈"背景变白闪烁一下"——深色厅里白闪一记很扎眼）。 */
-            Box(Modifier.weight(1f).background(Color.Black)) {
+               用户反馈"背景变白闪烁一下"——深色厅里白闪一记很扎眼）。
+               高度：常规放映态**按视频比例收紧到视频盒高** —— 否则"吃满剩余"
+               的画面区里 contain 居中的视频上下各留一大块黑（用户反馈"上下
+               黑边严重且多余"，2026-10-01 截图实测）。浏览/全屏态仍吃满剩余
+               （全屏黑边无妨、浏览态保持原布局）。ar 未探到时按 16:9 兜底。 */
+            val videoBoxH = (LocalConfiguration.current.screenWidthDp / videoRatio()).dp
+            Box(
+                Modifier
+                    .then(
+                        if (theater && !deckHidden.value) Modifier.height(videoBoxH)
+                        else Modifier.weight(1f),
+                    )
+                    .background(Color.Black),
+            ) {
                 // 没打开网页就不挂 WebView：空厅是一块深色的"待放"屏，不是白板
                 if (pageUrl.isEmpty()) EmptyStage(
                     if (theater) "还没选片 —— 去「浏览」打开一个视频页，或直接分享你的屏幕"
@@ -1947,6 +1975,12 @@ fun CinemaScreen(
                    这两个条件一叠加，整张卡直接消失，屏幕上只剩一块黑 —— 量具默认收起之后
                    第一时间就踩到了（截图实测）。 */
                 panel(Modifier)
+            }
+            /* 常规放映态：画面区按视频盒高收紧（不吃剩余）后，剩余空间由这个
+               Spacer 吃掉并垫黑 —— 否则甲板飘在中间、底下透出别的东西。
+               浏览态/全屏态画面区自己 weight 吃满，这个 Spacer 不出现。 */
+            if (theater && !deckHidden.value) {
+                Spacer(Modifier.weight(1f).background(Color.Black))
             }
         }
     }
