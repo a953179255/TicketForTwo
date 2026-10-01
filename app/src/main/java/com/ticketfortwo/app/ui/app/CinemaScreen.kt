@@ -1474,7 +1474,9 @@ fun CinemaScreen(
                整个放映厅让开导航栏：浏览底卡与放映甲板一起收进来。 */
             .navigationBarsPadding(),
     ) {
-        GlassPageBar(backdrop, title = "放映厅", onBack = onBack) {
+        /* 全屏态（deckHidden）顶栏也收：轻点画面或返回键唤回 —— 顶栏占的位置太大，
+           全屏就该给画面让路（2026-10-01 用户反馈+截图）。 */
+        if (!(theater && deckHidden.value)) GlassPageBar(backdrop, title = "放映厅", onBack = onBack) {
             /* 放映模式下顶栏要挤下「放映|浏览」，状态句换短版 + 让位（weight），
                否则标题被挤到换行（真机截图实测：放映/厅 断成两行）。 */
             Text(
@@ -1514,6 +1516,7 @@ fun CinemaScreen(
                     Modifier
                         .fillMaxWidth()
                         .weight(1f)
+                        .background(Color.Black)
                         .padding(bottom = 6.dp),
                 ) {
                     key(webGen) {
@@ -1610,7 +1613,9 @@ fun CinemaScreen(
                下面的甲板**贴内容**（不给 weight）。以前视频钉死 300dp、甲板 weight 拉满，
                内容三四组却有一屏高 → 卡片底部一大块空玻璃（用户截图实测）。
                现在面板矮多少、视频就长高多少；面板在后测量、视频按剩余分配，空白恒为 0。 */
-            Box(Modifier.weight(1f)) {
+            /* 画面区黑底：投屏重建瞬间玻璃白雾/WebView 白帧压成黑（2026-10-01
+               用户反馈"背景变白闪烁一下"——深色厅里白闪一记很扎眼）。 */
+            Box(Modifier.weight(1f).background(Color.Black)) {
                 // 没打开网页就不挂 WebView：空厅是一块深色的"待放"屏，不是白板
                 if (pageUrl.isEmpty()) EmptyStage(
                     if (theater) "还没选片 —— 去「浏览」打开一个视频页，或直接分享你的屏幕"
