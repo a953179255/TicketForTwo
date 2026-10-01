@@ -479,20 +479,9 @@ class FloatPlayerService : android.app.Service() {
         titleView = t
         bar.addView(t)
 
-        /* 换片：回到放映厅里挑 —— 列表在 App 内（浮窗只有 170dp 宽，塞不下一张列表），
-           所以这里只是发一个请求，由界面弹出来。 */
-        val pick = TextView(this).apply {
-            text = "换片"
-            setTextColor(0xFF9EE8B8.toInt())
-            textSize = 11f
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.END or Gravity.CENTER_VERTICAL,
-            ).apply { marginEnd = dp(62) }
-            setOnClickListener { FloatPlayer.onPickRequest?.invoke() }
-        }
-        bar.addView(pick)
+        /* 「换片」键已从浮窗控制条移除（2026-10-01 用户拍板：浮窗就是拿来播放的，
+           暂停 + 关闭就够；换片走放映厅甲板的「换片」键）。onPickRequest 回调
+           与顶替询问逻辑保留 —— 以后要恢复一颗键就能用。 */
         val close = TextView(this).apply {
             text = "×"
             setTextColor(0xFFFFFFFF.toInt())
