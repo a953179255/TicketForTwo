@@ -569,8 +569,16 @@ object ViewerSession {
             "cinema" -> {
                 lastCinemaAt = SystemClock.elapsedRealtime()
                 val f = obj.optString("f")
+                /* 取证日志（2026-10-04 用户联测"观众全黑屏"）：真机日志被系统屏蔽，
+                   观众端是唯一能看到"房主到底广播了什么"的窗口 —— 原始 f 前 80 字符
+                   + 解析结果，**无论成败都落一行**。parse 失败此前是静默的，
+                   "收到但解析错"和"压根没收到"在日志里无法区分，排查多绕一圈。 */
+                Log.i(TAG, "CINEMA_MSG len=${f.length} head=${f.take(80)}")
                 val st = com.ticketfortwo.app.cinema.CinemaSync.parseState(f)
                 _cinema.value = st
+                if (st == null && f.isNotBlank()) {
+                    Log.w(TAG, "CINEMA_PARSE_FAIL 段数=${f.split('|').size}")
+                }
                 /* 每条广播落一行位置：镜像条会自动收起、dump 在视频解码时还会间歇
                    拿不到 —— UI 判据两头都不可靠（E2E ⑩b 反复误报就是它）。 */
                 if (st != null) {
