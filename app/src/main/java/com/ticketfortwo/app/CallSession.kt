@@ -788,6 +788,32 @@ object CallSession {
 
             // 放映厅（S 档）：观众那边到底播出来了没有
             "cineack" -> onCinemaAckFromViewer(obj.optString("f"))
+
+            // App 内观众报告"这条片源我播不了"（App 没有 hls.js，直连模式发给它的
+            // URL 放不出来）→ 当场自动切「我播他看」，别让两边对着黑屏互相等。
+            "needrelay" -> onViewerNeedRelay()
+        }
+    }
+
+    /**
+     * 观众（App 内观看）请求转播。直连模式 + App 内观众是一个产品逻辑洞：
+     * 房主把片源地址发过去，观众端根本没有本地播放器，永远黑屏"语音对话中"。
+     * 收到这条就本场切换 playMode（**只改内存，不动用户设置**）→ 建转播轨
+     * （[attachTheaterPlayback] 内部会处理"观众已在连"的重协商）→ 把 cinema
+     * 状态的地址清空再广播一次（观众端拿到空地址就知道等轨、不再报放不了）。
+     */
+    private fun onViewerNeedRelay() {
+        if (_role.value != Role.Host) return
+        if (theaterCapture != null || capture != null) return   // 画面已经在传
+        if (_cinema.value == null) return                        // 厅里还没片
+        val context = sessionContext ?: return
+        note("对方是 App 内观看，播不了直连片源 —— 自动切换为「我播他看」")
+        quality = quality.copy(playMode = PlayMode.Relayed)
+        attachTheaterPlayback(context, quality.fps)
+        if (theaterCapture != null) {
+            val cur = _cinema.value ?: return
+            _cinema.value = cur.copy(track = cur.track.copy(url = ""))
+            broadcastCinema()
         }
     }
 

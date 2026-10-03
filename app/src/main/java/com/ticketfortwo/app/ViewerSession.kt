@@ -438,6 +438,7 @@ object ViewerSession {
         _cinema.value = null
         _cinemaAllowed.value = false
         cinemaAckedVersion = -1L
+        relayReqVersion = -1L
         /* 方向偏好跟着这一场走，散场就回"跟随"。
          *
          * 它以前是写进 SharedPreferences 的，于是某次看片时点的"锁横屏"会一直生效：
@@ -493,6 +494,9 @@ object ViewerSession {
 
     /** 上一次报给房主的"他正在看什么"。这句话变了也要重报，否则房主拿着过期结论。 */
     private var cinemaAckedSeeing = ""
+
+    /** 已为哪个 cinema 版本发过"要转播"（App 内播不了直连片源时的自动求救）。 */
+    private var relayReqVersion = -1L
 
     /** 把播放请求发回房主。权限位由房主那边说了算，这里只是提前拦一道。 */
     fun sendCinemaCmd(c: com.ticketfortwo.app.cinema.CinemaSync.Cmd) {
@@ -592,6 +596,19 @@ object ViewerSession {
                             """{"t":"cineack","f":"${st.version}|fail|appviewer|""" +
                                 "App 内不放原画，$seeing\"}",
                         )
+                    }
+                }
+                /* 直连片源 + App 内观众 = 永远黑屏（这里没有 hls.js，URL 放不出来）。
+                   2026-10-03：光报 cineack 不够（房主只会一直"等回执"），主动向他
+                   要一份转播 —— 房主收到后当场建「我播他看」轨道并重协商。
+                   按 version 去重（进度广播约 2 秒一条）；轨已到就不请求。 */
+                if (st != null && st.track.url.isNotEmpty() &&
+                    _remoteVideo.value == null && st.version != relayReqVersion
+                ) {
+                    relayReqVersion = st.version
+                    runCatching {
+                        send("""{"t":"needrelay"}""")
+                        Log.i(TAG, "直连片源播不了，已向房主请求转播")
                     }
                 }
             }

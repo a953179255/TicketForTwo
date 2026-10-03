@@ -687,7 +687,7 @@ private fun AppRouter(backdrop: LayerBackdrop) {
             val q = quality.copy(voiceMode = VoiceMode.VideoPlusCall)
             quality = q
             scope.launch(Dispatchers.IO) { ShareQuality.save(context, q) }
-            context.toast("「只连麦」不传画面：已改成「视频声 + 连麦」")
+            context.toast("「只连麦」不传画面：已改成「画面 + 连麦」")
         }
         showConsent = true
     }

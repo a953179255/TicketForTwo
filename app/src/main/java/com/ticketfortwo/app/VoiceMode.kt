@@ -59,11 +59,13 @@ enum class VoiceMode {
          */
         fun hostHearsViewer(mode: VoiceMode): Boolean = mode != VideoOnly
 
-        /** 一句话名字，给设置页和首页摘要用。 */
+        /** 一句话名字，给设置页和首页摘要用。
+         *  2026-10-03 用户反馈"视频声+连麦"读起来像"只传声音不传画面" ——
+         *  改成把"画面"两个字放在最前面，和「只连麦」形成正面区分。 */
         fun label(mode: VoiceMode): String = when (mode) {
-            VideoOnly -> "只有视频声"
-            VideoPlusCall -> "视频声 + 连麦"
-            CallOnly -> "只连麦"
+            VideoOnly -> "画面（不出声）"
+            VideoPlusCall -> "画面 + 连麦"
+            CallOnly -> "只连麦（无画面）"
         }
     }
 }

@@ -1577,11 +1577,11 @@ fun CinemaScreen(
     Column(
         Modifier
             .fillMaxSize()
-            /* 放映态整页垫黑（2026-10-02 用户截图"甲板下面露着壁纸"）：画面区按
-               视频比例收紧后，甲板与屏底之间的剩余区域原靠 Spacer 垫黑，但实际
-               露出了页面壁纸（剩余空间分配没落到它）。改为根容器直接铺黑 ——
-               甲板玻璃浮在纯黑上，影院氛围也对；浏览态保持透明露壁纸。 */
-            .then(if (theater) Modifier.background(Color.Black) else Modifier)
+            /* 2026-10-03 撤销整页铺黑：上一轮为修"甲板下露壁纸"加的
+               .background(Color.Black) 把"局部露壁纸"修成了"整页全黑" ——
+               玻璃只对背景层采样，底下一片纯黑就采不到壁纸，用户看到
+               "只有卡片位置有壁纸效果，其余全黑"。撤掉，壁纸全程透出；
+               画面区/全屏态自己有黑底（视频本来就该黑），不需要这层大锤。 */
             /* edge-to-edge 下底部卡片直接压到手势条上（2026-10-01 反馈）——
                整个放映厅让开导航栏：浏览底卡与放映甲板一起收进来。 */
             .navigationBarsPadding(),
@@ -2101,10 +2101,9 @@ fun CinemaScreen(
                 panel(Modifier)
             }
             /* 常规放映态：画面区按视频盒高收紧（不吃剩余）后，剩余空间由这个
-               Spacer 吃掉并垫黑 —— 否则甲板飘在中间、底下透出别的东西。
-               浏览态/全屏态画面区自己 weight 吃满，这个 Spacer 不出现。 */
+               Spacer 吃掉撑开甲板贴底。2026-10-03 去掉垫黑（同上：壁纸该透出）。 */
             if (theater && !deckHidden.value) {
-                Spacer(Modifier.weight(1f).background(Color.Black))
+                Spacer(Modifier.weight(1f))
             }
         }
     }
