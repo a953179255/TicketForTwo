@@ -335,6 +335,14 @@ object CallSession {
         applyVoicePolicy("回执 ${if (ack.ok) "ok" else "fail"}")
         // 这行是给统计脚本读的，措辞可以改，前缀和字段顺序不能改
         Log.i(TAG, "CINEMA_ACK ${ack.version}|${if (ack.ok) "ok" else "fail"}|${ack.code}|${ack.detail}")
+        /* 网页观众回"放不出"（2026-10-04）：直连模式下片源常带防盗链（Referer/UA），
+           观众浏览器自己拉流 403 —— 和 App 内观众播不了是同一堵墙。自动切转播
+           （与 needrelay 同一条路）：房主"我播他看"，观众不再需要能访问片源。
+           护栏在 onViewerNeedRelay 里（已在传画面/没有片源时直接返回）。 */
+        if (!ack.ok && ack.code != "appviewer" && ack.code != "gesture") {
+            Log.i(TAG, "网页观众放不出直连片源（${ack.code}）—— 自动切换转播")
+            onViewerNeedRelay()
+        }
         note(
             when {
                 ack.ok -> "对方已经播起来了（${ack.detail.ifBlank { "首帧已到" }}）"

@@ -1610,7 +1610,29 @@ fun CinemaScreen(
             ModeSeg(
                 theater = theater,
                 backdrop = backdrop,
-                onTheater = { theater = true; pinVideo(true) },
+                /* 2026-10-04 用户联测实锤的逻辑洞：这个开关原来只翻 UI 状态 ——
+                   浏览态切「放映」后网页自己继续播，看起来一切正常，但会话层
+                   _cinema 仍是 null：观众接入收到的广播是空状态（pos=-1 urlEmpty），
+                   网页观众没有片源、App 观众没有视频流，全部黑屏，而房主这边
+                   「正在放映」「等待对方出画面」全是假象（模拟器复现 + logcat 铁证：
+                   18:15:01 theater 进入，18:15:10 观众接入收到 urlEmpty 广播，
+                   全程无 setCinemaTrack 日志）。
+                   修：切「放映」时若还没递片，当场嗅探自动递一条（和「开始放映」
+                   按钮同一条路）；嗅不到才裸切 + 说清楚下一步。 */
+                onTheater = {
+                    if (cinema == null) {
+                        val h = autoPick()
+                        if (h != null) {
+                            screen(h)   // 内部置 theater + 钉屏 + 递片广播
+                        } else {
+                            theater = true; pinVideo(true)
+                            note = "还没选片 —— 这条网页视频没在传给对方。点「开始放映」递片，" +
+                                "或先把视频点成播放再试"
+                        }
+                    } else {
+                        theater = true; pinVideo(true)
+                    }
+                },
                 onBrowse = { theater = false; pinVideo(false) },
             )
             /* 顶栏不再放「复制邀请」：竖屏浏览有底卡邀请行、放映模式有甲板时间行胶囊、
