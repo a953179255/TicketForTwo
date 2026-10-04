@@ -61,16 +61,58 @@ data class ShareQuality(
         "${resolutionLabel(screenWidthPx)} · $fps 帧 · ${bpsLabel(maxVideoBps)}"
 
     /**
-     * 流量上限估算（MB/分钟）。1 Mbps = 7.5 MB/分钟，按码率上限算 —— 实际通常更低，
-     * 所以文案必须写"上限"。仅语音按 Opus ~32 kbps 算，约 0.25 → 报 0.3。
+     * 流量估算（MB/分钟）：**分辨率 × 帧率 × 码率三者一起算**（2026-10-05 用户要求，
+     * 此前只拿码率帽乘一下 —— 换分辨率/帧率数字纹丝不动，看起来就是"假估算"）。
+     *
+     * 两端夹出一个区间：
+     * - **下端「常见」**：编码需求 = 采出像素数 × fps × [EST_BPP]，但不超过码率帽 ——
+     *   屏显内容大面积静止，通常到不了帽；分辨率/帧率一降，这个数立刻跟着降。
+     * - **上端「上限」**：码率帽满载 —— 满屏放视频、画面剧烈变化时会顶到。
+     * - 两端都再加 [AUDIO_BPS] 音频与 [OVERHEAD] 协议/帧头开销（老公式只算视频净码率，
+     *   少算约一成，报出来的数偏小）。
+     *
+     * 返回 `"常见–上限"` 两个数（相等时只回一个），单位 MB/分钟；调用方拼成
+     * `"约 X–Y MB/分钟"`。纯语音档返回单值。
      */
-    fun estMbPerMinute(): String = if (!videoEnabled) {
-        "0.3"
-    } else {
-        ((maxVideoBps.toLong() * 60 / 8 + 999_999) / 1_000_000).toString()
+    fun estMbRange(screenWidthPx: Int, screenHeightPx: Int): String {
+        if (!videoEnabled) return mbLabel(0L)
+        val lo = mbLabel(typicalVideoBps(screenWidthPx, screenHeightPx))
+        val hi = mbLabel(maxVideoBps.toLong())
+        return if (lo == hi) lo else "$lo–$hi"
+    }
+
+    /**
+     * 常见码率（bps）：按当前档位的分辨率与帧率算编码需求，不超过用户设的码率帽。
+     *
+     * 采集尺寸口径和采集侧一致：屏幕尺寸 × [scale]（`resolutionLabelFor` 用的同一套）。
+     */
+    fun typicalVideoBps(screenWidthPx: Int, screenHeightPx: Int): Long {
+        val w = (screenWidthPx * scale).toLong()
+        val h = (screenHeightPx * scale).toLong()
+        val demand = (w * h * fps * EST_BPP).toLong()
+        return demand.coerceIn(0L, maxVideoBps.toLong())
+    }
+
+    /** 一个码率值 → "MB/分钟" 字符串：小于 10 留一位小数（纯语音 0.3 这种才立得住），否则取整。 */
+    private fun mbLabel(videoBps: Long): String {
+        val mb = (videoBps + AUDIO_BPS) * OVERHEAD * 60.0 / 8.0 / 1_000_000.0
+        return if (mb < 10.0) String.format(java.util.Locale.US, "%.1f", mb)
+        else kotlin.math.ceil(mb).toInt().toString()
     }
 
     companion object {
+        /**
+         * 编码效率系数（bit/像素/帧）：屏显内容（大量静止区域、滚动时才变化）在
+         * H.264 下拿到"看得清"量级的经验值。取 0.04 —— 1080×2340@60 约 6 Mbps、
+         * 同尺寸 @30 约 3 Mbps、半档 @30 约 0.8 Mbps，与实测观感同量级。
+         * 它决定"常见值"，码率帽决定"上限"，两者取小/取大就是那个区间。
+         */
+        private const val EST_BPP = 0.04
+        /** 音频上行：Opus 约 32 kbps（连麦/传画面声那条轨）。 */
+        private const val AUDIO_BPS = 32_000L
+        /** 协议与帧头开销（RTP/UDP/IP + 丢包补偿）按 10% 估。 */
+        private const val OVERHEAD = 1.10
+
         // 档位就是选项列表本身 —— UI 的分段按钮与持久化校验共用同一份枚举。
         val SCALES = listOf(0.5f, 0.75f, 1.0f)
 

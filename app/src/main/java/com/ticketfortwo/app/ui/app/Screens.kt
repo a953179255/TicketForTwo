@@ -330,11 +330,16 @@ fun HomeScreen(
         // 信息卡（原样保留：画质 / 流量 / 麦克风 / 上次连接）。
         // 圆放大到 160dp 后垂直空间变紧，这里的内边距与行距各收一档。
         GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
+            val screenW = rememberScreenWidthPx()
+            val screenH = rememberScreenHeightPx()
             val info = buildList {
                 add("声音" to VoiceMode.label(quality.voiceMode))
                 if (quality.videoEnabled) {
-                    add("分享画质" to quality.pictureSummary(rememberScreenWidthPx()))
-                    add("流量上限" to "约 ${quality.estMbPerMinute()} MB/分钟")
+                    add("分享画质" to quality.pictureSummary(screenW))
+                    /* 流量：给**区间**（常见–上限），公式见 ShareQuality.estMbRange ——
+                       分辨率/帧率降一档，下端立刻跟着降；只写"上限 + 约"是自相矛盾
+                       的旧文案（上限就不该是"约"，2026-10-05 用户反馈）。 */
+                    add("流量" to "约 ${quality.estMbRange(screenW, screenH)} MB/分钟")
                 }
                 /* 「麦克风 开」这一行以前是**写死的**，跟真实权限、跟声音档都没关系。
                    现在多了「只有视频声」这一档（放映厅里对方本地播时麦克风会被自动关掉），
@@ -675,6 +680,22 @@ private fun rememberScreenWidthPx(): Int {
 }
 
 /**
+ * 本机屏幕的**像素**高度 —— 与 [rememberScreenWidthPx] 成对，取值口径完全一致。
+ *
+ * 流量估算要算**像素数**（宽×高×帧率×效率，见 `ShareQuality.typicalVideoBps`），
+ * 只有宽度就得靠"假设一个屏幕比例"去补高度，折叠屏/分屏下误差会到两三成。
+ */
+@Composable
+private fun rememberScreenHeightPx(): Int {
+    val context = LocalContext.current
+    val heightDp = LocalConfiguration.current.screenHeightDp
+    return remember(context, heightDp) {
+        val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        wm.currentWindowMetrics.bounds.height()
+    }
+}
+
+/**
  * 分享设置：分辨率 / 帧率 / 码率 / 声音档。
  *
  * 分享进行中改档**即时生效**（见 [ShareQuality] 与 CallSession.updateQuality：
@@ -753,6 +774,7 @@ fun QualitySettingsScreen(
                 // 标签算法放在 ShareQuality 里，和「当前组合」那行共用同一个实现 ——
                 // 以前这页里有两套算法，2K 机上两行文案会互相打架。
                 val screenW = rememberScreenWidthPx()
+                val screenH = rememberScreenHeightPx()
                 SegmentRow(
                     options = ShareQuality.SCALES.map {
                         ShareQuality.resolutionLabelFor(it, screenW)
@@ -896,11 +918,16 @@ fun QualitySettingsScreen(
 
                 Box(Modifier.fillMaxWidth().height(1.dp).background(Ink.TextLow.copy(alpha = 0.25f)))
                 InfoRow("当前组合", quality.summary(screenW))
-                InfoRow("流量上限估算", "约 ${quality.estMbPerMinute()} MB/分钟")
+                // 区间 = 常见（按分辨率×帧率算的需求）– 上限（码率帽满载），
+                // 公式与首页那行同一份实现（ShareQuality.estMbRange），两页不会打架。
+                InfoRow("流量估算", "约 ${quality.estMbRange(screenW, screenH)} MB/分钟")
                 // 这两句提到具体档位，所以必须跟着本机档位取名 —— 写死 "540p"/"1080p"
                 // 会在 2K 机上指向根本不存在的选项（本机最低档叫 720p、最高档叫 2K）。
                 StatusChip(
-                    "省流量建议：${ShareQuality.lowestResolutionLabel(screenW)} · 30 帧 · 1M（约 8 MB/分钟）",
+                    "省流量建议：${ShareQuality.lowestResolutionLabel(screenW)} · 30 帧 · 1M" +
+                        "（约 ${ShareQuality(
+                            scale = ShareQuality.SCALES.first(), fps = 30, maxVideoBps = 1_000_000,
+                        ).estMbRange(screenW, screenH)} MB/分钟）",
                     ChipTone.Ok,
                 )
                 StatusChip(
@@ -933,7 +960,8 @@ fun QualitySettingsScreen(
                         else ->
                             "默认档。画面照常分享；能听对方、随时能说 —— 麦克风默认关着，" +
                                 "想说话在放映厅点麦克风按钮即可。\n" +
-                                "· 屏幕分享 / 我播他看：画面声靠你的麦 —— 一开就自动帮你开麦\n" +
+                                "· 屏幕分享 / 我播他看：画面声靠你的麦 —— **不自动开麦**，" +
+                                "要让对方听到画面声就点一下麦克风\n" +
                                 "· 放映中开麦会和对方那份原声叠成回声，说完再点一下关掉"
                     },
                     fontSize = 11.5.sp,
@@ -1030,11 +1058,13 @@ fun ConsentGuideScreen(backdrop: LayerBackdrop, onContinue: () -> Unit, onBack: 
                     Box(Modifier.fillMaxWidth().height(1.dp).background(Ink.TextLow.copy(alpha = 0.25f)))
                     GuideStep(
                         "2", "允许麦克风",
-                        /* 这句要说清"麦克风在分享屏幕时是干什么的"（2026-10-01 改版后
-                           默认档是「视频声+连麦」且麦默认关，开屏享会自动开麦）——
-                           真相仍是：屏幕分享时影片声唯一的通道就是外放→麦克风，不给就是**有画无声**。 */
+                        /* 这句要说清"麦克风在分享屏幕时是干什么的"（2026-10-05 改版：
+                           默认档是「视频声+连麦」、麦默认关，且**不再自动开麦**）——
+                           真相仍是：屏幕分享时影片声唯一的通道就是外放→麦克风，
+                           不给就是**有画无声**；给了也要点一下麦才开始收。 */
                         "不给也能分享画面，但对方听不到任何声音 —— 屏幕分享时影片声只能靠你的" +
-                            "外放灌进麦克风传过去。要连麦说话同样靠它。"
+                            "外放灌进麦克风传过去。授权后麦克风默认是关的：想让对方听到声音，" +
+                            "分享时点一下麦克风即可。"
                     )
                 }
             }

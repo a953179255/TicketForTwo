@@ -517,7 +517,7 @@ object CallSession {
         val vt = cap?.start(fps = quality.fps, scale = quality.scale)
         localVideoTrack = vt
         _localVideo.value = vt
-        if (vt != null) ensureMicForSoundRelay("屏幕分享")
+        if (vt != null) hintMicForSoundRelay("屏幕分享")
         val at = ensureMicTrack(context)
         if (vt == null && at == null) {
             // 一条媒体都没有：连上也没有任何可传的东西 —— 直接失败好过转圈。
@@ -585,7 +585,7 @@ object CallSession {
         localVideoTrack = vt
         _localVideo.value = vt
         // B 档观众拿不到地址、也没有音频轨 —— 房主的麦克风是他唯一的声源
-        ensureMicForSoundRelay("我播他看")
+        hintMicForSoundRelay("我播他看")
         val p = peer
         if (p == null) {
             note("转播轨已备好，等对方进厅就发过去")
@@ -641,7 +641,7 @@ object CallSession {
         }
         localVideoTrack = vt
         _localVideo.value = vt
-        ensureMicForSoundRelay("屏幕分享")
+        hintMicForSoundRelay("屏幕分享")
         val p = peer
         if (p == null) {
             // 观众还没进来：轨先备着，等人进来时 onViewerJoined 会把它加进 offer。
@@ -873,14 +873,16 @@ object CallSession {
     // ---- 公共 ----------------------------------------------------------
 
     /**
-     * **画面声音靠外放→麦克风**的两种模式（屏幕分享 / B 方案「我播他看」）：
-     * 麦关着 = 对方只看没声，所以这两种模式一激活就自动开麦 + 说明；
-     * 用户之后仍可手动关（关时 toggleMic 会给"对方会听不到画面声"的警告，不硬拦）。
+     * **画面声音靠外放→麦克风**的两种模式（屏幕分享 / B 方案「我播他看」）。
+     *
+     * 2026-10-05 用户拍板：**麦克风默认关着，不再自动开麦**（此前一分享就替用户把
+     * 麦打开，隐私上不对）。代价必须说清楚 —— 这两种模式下画面的声音**唯一**的通道
+     * 就是外放→麦克风，麦关着 = 对方只看没声；所以这里不硬开，只把这件事告诉用户，
+     * 要传声点一下麦克风即可（开麦时 toggleMic 也会再提示一次）。
      */
-    private fun ensureMicForSoundRelay(what: String) {
+    private fun hintMicForSoundRelay(what: String) {
         if (_micMuted.value) {
-            _micMuted.value = false
-            note("${what}的声音靠你的麦克风传 —— 已为你开麦；点麦克风可关（对方会听不到画面声）")
+            note("$what：麦克风默认关着 —— 画面的声音靠它传，想让对方听到就点一下麦克风")
         }
         applyVoicePolicy(what)
     }

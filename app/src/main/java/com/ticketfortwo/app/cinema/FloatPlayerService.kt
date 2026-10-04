@@ -673,10 +673,14 @@ class FloatPlayerService : android.app.Service() {
         android.util.Log.i("FloatPlay", "size -> ${SIZES[sizeIdx]}")
     }
 
-    /** 控制条自动收起：轻点唤出，3 秒不碰就藏（见 addOverlay 的轻点分支）。 */
+    /** 控制条自动收起：轻点唤出，3 秒不碰就藏（见 addOverlay 的轻点分支）。
+     *  顶部角键行（回显窗的 ✕/⤢）与它**同进同出** —— 藏的时候一起藏。 */
     private val hideBarRun = Runnable {
         bar?.animate()?.alpha(0f)?.setDuration(200)?.withEndAction {
             bar?.visibility = View.GONE
+        }
+        relayTop?.animate()?.alpha(0f)?.setDuration(200)?.withEndAction {
+            relayTop?.visibility = View.GONE
         }
     }
 
@@ -691,6 +695,8 @@ class FloatPlayerService : android.app.Service() {
     private var stepSec: Int = 10
     /** 快进快退的落点提示（画面中央闪一下）。 */
     private var hud: TextView? = null
+    /** 回显窗顶部角键行（✕ / ⤢）：与控制层同显同隐（2026-10-05 用户拍板：不再常显）。 */
+    private var relayTop: android.view.ViewGroup? = null
 
     /** 圆底半透明的键（角键 / 三键同语言：深底 + 极淡白描边 + 白字）。 */
     private fun roundKey(sizeDp: Int, text: String, fs: Float): TextView =
@@ -912,10 +918,10 @@ class FloatPlayerService : android.app.Service() {
             handler.postDelayed({ placeholder?.visibility = View.GONE }, 2_500)
         }
 
-        /* 控制层（2026-10-04 定稿，对标哔哩哔哩悬浮窗 + 用户三项拍板）：
-           ①角键 ✕/⤢ **常显**（窗的框架，藏起来就找不着怎么关了）；
-           ②三键 + 整条进度条**轻点唤出、3 秒自收**（复用播放窗那套 singleTapRun
-             + hideBarRun，所以 ctrl 直接挂到 this.bar 上）；
+        /* 控制层（2026-10-04 定稿，对标哔哩哔哩悬浮窗 + 2026-10-05 二次拍板）：
+           ①角键 ✕/⤢ **收起时藏起来**，随控制层一起出现 —— 常显太抢画面（用户反馈）；
+           ②三键 + 整条进度条**轻点唤出**：再点一下画面可**主动收起**，不点则 3 秒自收
+             （singleTapRun 做成开关，hideBarRun 管收，所以 ctrl 直接挂到 this.bar 上）；
            ③**不要时间小字**——小窗只管"看得见 + 能控制"，时间回放映页看。
            三键的步长跟设置里「快进步长」同一份配置（PlayerPrefs）。 */
         val step = PlayerPrefs.stepSecOf(this)
@@ -1012,10 +1018,15 @@ class FloatPlayerService : android.app.Service() {
         ctrl.addView(sb)
         root.addView(ctrl)
 
-        /* 角键：✕ 左上 / ⤢ 右上，常显（不进 ctrl，跟着窗一起在）。
+        /* 角键：✕ 左上 / ⤢ 右上，**跟控制层同进同出**（2026-10-05 用户拍板：
+           常显太抢画面 —— 收着时只有干净的画面，轻点唤出控制层时才一起出现，
+           再点一下画面就收）。放进顶部 topRow（自带一层极淡的顶渐变，
+           亮画面上键也看得清），topRow 的显隐由 hideBarRun 统一管。
            ✕ = **只收小窗**（2026-10-04 拍板 B）：放映照旧在后台播，不碰播放器、
            不跳页面 —— 给一句提示，免得人收完找不着画面入口。
-           ⤢ = 收小窗 + 跳回放映页（竖屏，画面回全屏）。 */
+           ⤢ = 收小窗 + 跳回放映页（竖屏，画面回全屏）。
+           两颗键同尺寸同字号：原来 ⤢ 用 13f、× 用 16f，右上那颗在真机上
+           明显小一圈（用户截图反馈"大小异常"）。 */
         val closeKey = cornerKey("×", 16f).apply {
             layoutParams = FrameLayout.LayoutParams(dp(26), dp(26), Gravity.TOP or Gravity.START)
                 .apply { leftMargin = dp(7); topMargin = dp(7) }
@@ -1029,13 +1040,26 @@ class FloatPlayerService : android.app.Service() {
                 ).show()
             }
         }
-        val expandKey = cornerKey("⤢", 13f).apply {
+        val expandKey = cornerKey("⤢", 16f).apply {
             layoutParams = FrameLayout.LayoutParams(dp(26), dp(26), Gravity.TOP or Gravity.END)
                 .apply { rightMargin = dp(7); topMargin = dp(7) }
             setOnClickListener { teardown(); stopSelf(); openCinema() }
         }
-        root.addView(closeKey)
-        root.addView(expandKey)
+        val topRow = android.widget.FrameLayout(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, dp(40), Gravity.TOP,
+            )
+            // 顶部向下的淡黑渐变：键压在亮画面上也看得清（与底部 ctrl 的渐变镜像）
+            background = android.graphics.drawable.GradientDrawable().apply {
+                colors = intArrayOf(0x7A000000, 0x00000000)
+                orientation = android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM
+            }
+            addView(closeKey)
+            addView(expandKey)
+            visibility = View.GONE
+        }
+        relayTop = topRow
+        root.addView(topRow)
 
         /* HUD 闪现：快进快退给个"⟲ 15 秒"的落点反馈（与全屏播放器手势同语言）。 */
         val hudTv = TextView(this).apply {
@@ -1079,10 +1103,15 @@ class FloatPlayerService : android.app.Service() {
         val slop = ViewConfiguration.get(this).scaledTouchSlop
         var lastTapAt = 0L
         val singleTapRun = Runnable {
-            bar?.let { b ->
-                b.removeCallbacks(hideBarRun)
+            val b = bar ?: return@Runnable
+            b.removeCallbacks(hideBarRun)
+            if (b.visibility == View.VISIBLE) {
+                // 再点一下画面 = **主动收起**（2026-10-05 用户拍板；3 秒自收仍保留）
+                hideBarRun.run()
+            } else {
                 b.visibility = View.VISIBLE
                 b.alpha = 1f
+                relayTop?.let { it.visibility = View.VISIBLE; it.alpha = 1f }
                 b.postDelayed(hideBarRun, 3_000)
             }
         }
@@ -1151,6 +1180,7 @@ class FloatPlayerService : android.app.Service() {
         titleView = null
         toggle = null
         hud = null
+        relayTop = null
         seekTracking = false
         videoView = null
         placeholder = null
