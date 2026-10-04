@@ -54,9 +54,12 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.ticketfortwo.app.rtc.RtcEngine
 import com.ticketfortwo.app.watch.WatchState
+import com.ticketfortwo.app.watch.WatchSync
 import com.ticketfortwo.app.ui.glass.GlassPanel
+import com.ticketfortwo.app.ui.glass.GlassTextButton
 import com.ticketfortwo.app.ui.theme.GlassDimens
 import com.ticketfortwo.app.ui.theme.Ink
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import org.webrtc.RendererCommon
@@ -202,8 +205,6 @@ fun CallScreen(
     cinemaAllowed: Boolean = false,
     onCinemaCmd: (com.ticketfortwo.app.cinema.CinemaSync.Cmd) -> Unit = {},
     onWatchCmd: (String, Long) -> Unit = { _, _ -> },
-    /** 房主侧：打开内置浏览器一起看。 */
-    onOpenWatch: () -> Unit = {},
     onOpenCinema: () -> Unit = {},
     /**
      * 房主侧：**此刻到底有没有在投屏**。
@@ -288,7 +289,7 @@ fun CallScreen(
         // 观众那屏视频压在最下面，SurfaceView 的内容抓不到（backdrop issue #98），只能退化成 scrim。
         if (isHost) {
             HostStage(
-                backdrop, peerLabel, onOpenWatch, onOpenCinema, screenSharing, onStartShare,
+                backdrop, peerLabel, onOpenCinema, screenSharing, onStartShare,
                 voiceLabel = voiceLabel, canHearViewer = canHearViewer, micOn = micOn,
             )
         } else {
@@ -711,7 +712,6 @@ private fun CinemaMirrorBar(
 private fun HostStage(
     backdrop: LayerBackdrop,
     peerLabel: String,
-    onOpenWatch: () -> Unit,
     onOpenCinema: () -> Unit,
     screenSharing: Boolean,
     onStartShare: () -> Unit,
@@ -783,19 +783,10 @@ private fun HostStage(
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
-                // 同屏放映（原"一起看片"）：播放器在我们手里，对方才可能真的动得到进度。
-                // 放在这张卡里而不是控制岛上 —— 控制岛要留给"通话级"的三个动作，
-                // 而这一颗是"接下来要干什么"，和卡片说的是同一件事。
-                PrimaryPill(
-                    text = "同屏放映",
-                    onClick = onOpenWatch,
-                    backdrop = backdrop,
-                    filled = false,
-                    modifier = Modifier.fillMaxWidth(),
-                )
                 // 放映厅（S 档）：对方本地播同一条片源，画质原生、也没有两层 UI。
                 // 会话进行中必须能进 —— 用户就是"先连上人、再决定看什么"，
                 // 入口只放在首页等于逼人退回首页，那会打断正在放的画面。
+                // （旧"同屏放映"入口已删：它的功能被放映厅完全覆盖，2026-10-04 用户确认。）
                 PrimaryPill(
                     text = "放映厅",
                     onClick = onOpenCinema,
@@ -808,3 +799,95 @@ private fun HostStage(
     }
 }
 
+/**
+ * 观众侧的同看条：房主播放器的只读镜像 + 三个控制键。
+ * （原在 WatchTogetherScreen.kt；旧"同屏放映"房主端下线后搬来 ——
+ *   对方如果还装着旧版 App 开同看，这里仍是那条遥控镜像。）
+ *
+ * 它压在观众自己的控制岛上方，和顶部条一样随控件一起收起 —— 全屏看片时不该有第三条横幅。
+ *
+ * 进度不做本地乐观更新：观众按了 +10 之后本地不动，等房主下一次广播（约 1 秒）把新进度带回来。
+ * 这样两边只有一个真相，不会出现"我这边看着跳了、他那边其实没动"这种更难解释的假象。
+ */
+@Composable
+fun WatchMirrorBar(
+    backdrop: LayerBackdrop,
+    state: WatchState?,
+    allowed: Boolean,
+    onCmd: (String, Long) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val s = state ?: return
+    /* 走秒（REVIEW-2026-09-27 P2-8）：广播 1 秒一条但按下 ±10 后数字最长 1 秒不动。
+       记收包时刻、播放中显示 pos + 已流逝；同看没有 rate 字段，按 1 倍估算即可。 */
+    val receivedAt = remember(state) { SystemClock.elapsedRealtime() }
+    var shownPosMs by remember(state) { mutableStateOf(s.posMs) }
+    LaunchedEffect(state) {
+        while (true) {
+            shownPosMs = if (s.playing) {
+                (s.posMs + (SystemClock.elapsedRealtime() - receivedAt).coerceAtLeast(0L))
+                    .let { if (s.durMs > 0) it.coerceAtMost(s.durMs) else it }
+            } else {
+                s.posMs
+            }
+            delay(500)
+        }
+    }
+    GlassPanel(
+        backdrop = backdrop,
+        modifier = modifier
+            // 同 CinemaMirrorBar：横屏不封顶会被撑成整屏宽的一条，文字两头读。
+            .widthIn(max = 560.dp)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        radius = GlassDimens.radiusIsland,
+        surfaceAlpha = 0.72f,
+        // 底下压着 SurfaceView 时玻璃抓不到画面，只能退成磨砂（见 CallScreen 的同一处说明）
+        refract = false,
+        content = {
+            Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        s.title.ifEmpty { "一起看" },
+                        fontSize = 12.sp, color = Ink.TextHi, maxLines = 1,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        if (allowed) "可控制" else "仅观看",
+                        fontSize = 10.5.sp,
+                        color = if (allowed) Ink.Live else Ink.TextLow,
+                    )
+                }
+                if (!s.found) {
+                    Text("对方还没打开播放器", fontSize = 11.sp, color = Ink.TextMid)
+                } else {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(top = 4.dp),
+                    ) {
+                        WatchKey("‑10", enabled = allowed) { onCmd("step", -10_000) }
+                        WatchKey(if (s.playing) "❚❚" else "▶", enabled = allowed) {
+                            onCmd(if (s.playing) "pause" else "play", 0)
+                        }
+                        WatchKey("+10", enabled = allowed) { onCmd("step", 10_000) }
+                        Text(
+                            "${WatchSync.formatTime(shownPosMs)} / ${WatchSync.formatTime(s.durMs)}",
+                            fontSize = 11.sp, color = Ink.TextMid,
+                        )
+                    }
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun WatchKey(text: String, enabled: Boolean, onClick: () -> Unit) {
+    GlassTextButton(
+        text = text,
+        onClick = onClick,
+        backdrop = null,
+        enabled = enabled,
+        refract = false,
+    )
+}

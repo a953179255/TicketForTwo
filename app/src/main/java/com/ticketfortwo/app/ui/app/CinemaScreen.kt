@@ -3202,3 +3202,13 @@ private fun ShortcutChip(
         )
     }
 }
+
+/** 补协议：只输入 bilibili.com 时按 https 打开。（原在 WatchTogetherScreen.kt，旧同屏放映下线后搬来） */
+fun normalizeUrl(input: String): String {
+    val t = input.trim()
+    return when {
+        t.isEmpty() -> t
+        t.startsWith("http://") || t.startsWith("https://") || t.startsWith("file://") -> t
+        else -> "https://$t"
+    }
+}

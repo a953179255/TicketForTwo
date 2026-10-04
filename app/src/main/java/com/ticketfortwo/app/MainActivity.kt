@@ -57,7 +57,6 @@ import android.os.Build
 import android.util.Rational
 import androidx.annotation.RequiresApi
 import kotlinx.coroutines.flow.MutableStateFlow
-import com.ticketfortwo.app.ui.app.WatchTogetherScreen
 import com.ticketfortwo.app.ui.app.ConsentGuideScreen
 import com.ticketfortwo.app.rtc.Verdict
 import com.ticketfortwo.app.signaling.SignalHub
@@ -203,7 +202,6 @@ private enum class UiRole { None, Host, Viewer }
 private sealed interface Page {
     object Home : Page
     object Settings : Page
-    object Watch : Page
 
     /** 放映厅：厅先开、人先进来、片子后选。从「分享画面」那一屏进来。 */
     object Cinema : Page
@@ -284,8 +282,6 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     var showConsent by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var viewerIntent by remember { mutableStateOf(false) }
-    /** 房主打开内置浏览器"一起看"。分享期间的一个覆盖层，不是独立会话。 */
-    var showWatch by rememberSaveable { mutableStateOf(false) }
     /** 放映厅（内测入口）：不依赖是否正在分享，所以是一个独立的页面意图。
      *  用 saveable 而不是 remember：改字体、切深色、系统"显示大小"这类**配置变化**
      *  会重建 Activity，`remember` 一丢就把人从厅里踢回首页（实测：`wm density`
@@ -349,10 +345,9 @@ private fun AppRouter(backdrop: LayerBackdrop) {
             leftCinemaFlag.value = false
             leftCallFlag.value = false
             /* 会话散场时把还挂着的覆盖层一起收掉：通知栏点「停止」后 state 走到 Idle，
-               但 showCinema/showWatch 停在原地 —— 界面还写着「厅已开 · 等对方进来」
+               但 showCinema 停在原地 —— 界面还写着「厅已开 · 等对方进来」
                而邀请链接早就没了（审查 A1-4）。 */
             showCinema = false
-            showWatch = false
             showConsent = false
         }
     }
@@ -663,7 +658,6 @@ private fun AppRouter(backdrop: LayerBackdrop) {
             (state is CallSession.State.WaitingViewer || state is CallSession.State.Connected),
     ) { leftCallFlag.value = true }
     BackHandler(enabled = showSettings) { showSettings = false }
-    BackHandler(enabled = showWatch) { showWatch = false }
     BackHandler(enabled = showCinema) { leaveCinema() }
     // 授权指引比放映厅更深（路由里它盖在厅上面），返回也要先关指引再谈离厅。
     BackHandler(enabled = showConsent) { showConsent = false }
@@ -778,9 +772,6 @@ private fun AppRouter(backdrop: LayerBackdrop) {
         // （下面的 Failed 分支排在观众路由之后，条件放行才轮得到它，审查 A1-5）。
         showCinema && state !is CallSession.State.Failed -> Page.Cinema
 
-        // 一起看：分享期间的覆盖层，盖在会话屏之上（它成立的前提就是"我还在分享"）
-        showWatch && state !is CallSession.State.Failed -> Page.Watch
-
         // ── 观众：App 内收看（与房主的 CallSession 互斥）──
         viewerState is ViewerSession.State.Connected -> Page.ViewerCall
         viewerState is ViewerSession.State.Connecting ->
@@ -868,12 +859,6 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 latencyMs = stats?.rttMs?.toLong(),
                 videoFps = quality.fps,
                 videoBps = quality.maxVideoBps,
-            )
-
-            Page.Watch -> WatchTogetherScreen(
-                backdrop = backdrop,
-                viewerOnline = viewerOnline,
-                onClose = { showWatch = false },
             )
 
             Page.Settings -> QualitySettingsScreen(
@@ -1012,7 +997,6 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 canHearViewer = hostHearsViewer,
                 latencyMs = stats?.rttMs,
                 netLabel = stats?.viaLabel ?: "直连",
-                onOpenWatch = { showWatch = true },
                 onOpenCinema = { openCinema() },
                 // 厅先开不投屏 ⇒ 这一屏不能再写"正在分享你的手机"（见 CallScreen 的注释）。
                 screenSharing = hostVideo != null,

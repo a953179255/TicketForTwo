@@ -132,8 +132,10 @@ object CallSession {
 
     // ---- 同看（同屏放映）---------------------------------------------------
     //
-    // 播放器在房主自己的 WebView 里（见 WatchTogetherScreen）。会话这边只做两件事：
-    // 把播放器状态广播给观众、把观众发来的指令交给那一屏。
+    // 房主端的旧"同屏放映"界面（WatchTogetherScreen）已下线（2026-10-04，功能被
+    // 放映厅覆盖），但**协议保留**：watch 状态广播与指令通道还在 —— 对方设备若还
+    // 装着旧版 App 开同看，新版的 CallScreen 仍能显示镜像条（WatchMirrorBar）。
+    // 会话这边只做两件事：把播放器状态广播给观众、把观众发来的指令交给那一屏。
     // 之所以不在这里直接持有 WebView：会话比 Activity 活得久，View 跟着会话活
     // 就变成"泄漏的窗口"，所以用一条注册进来的回调，那一屏卸载时必须摘掉。
     private val _watch = MutableStateFlow<WatchState?>(null)

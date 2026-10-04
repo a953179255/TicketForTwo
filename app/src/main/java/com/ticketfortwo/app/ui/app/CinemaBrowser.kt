@@ -67,6 +67,9 @@ import androidx.compose.runtime.setValue
 /** 试嗅探用的公开 HLS 测试流（Mux 官方测试台，无需登录、无 DRM）。 */
 const val CINEMA_TEST_HLS = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
 
+/** 试嗅探用的本地验证页：一个真正的 <video>，用来确认探针读得到、指令改得动。 */
+const val WATCH_TEST_URL = "file:///android_asset/watch/test.html"
+
 /** 试嗅探用的普通单文件页（本地资产，不依赖网络）。 */
 const val CINEMA_TEST_LOCAL = WATCH_TEST_URL
 
