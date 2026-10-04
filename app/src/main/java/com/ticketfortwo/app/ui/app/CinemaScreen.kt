@@ -12,7 +12,10 @@ import android.webkit.WebView
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -423,6 +426,9 @@ fun CinemaScreen(
     var askCloseRoom by remember { mutableStateOf(false) }
     /** 「换片」候选列表（浮窗上点换片、或手挑候选时弹出）。 */
     var askPickList by remember { mutableStateOf(false) }
+    /** 放映甲板下层「更多工具」卡是否展开（方案 3 双层卡，2026-10-04 用户拍板）。
+        saveable：横竖屏旋转不把手 bool 拍回收起。 */
+    var toolsOpen by rememberSaveable { mutableStateOf(false) }
     /** 顶替询问：浮窗正在播，又选了另一条 —— 换不换由房主定（2026-09-30 定案）。 */
     var pickTarget by remember { mutableStateOf<MediaSniffer.Hit?>(null) }
     fun persistFavs() {
@@ -1537,6 +1543,12 @@ fun CinemaScreen(
         inviteUrl?.let { context.shareInvite(it) }
     }
 
+    /** 测试流胶囊共用（放映甲板下层卡）：填地址栏并导航（与浏览面板 onTestUrl 同一行为）。 */
+    val testUrl: (String) -> Unit = { u ->
+        inputUrl = u
+        if (u == pageUrl) reloadSeq++ else pageUrl = u
+    }
+
     val panel: @Composable (Modifier) -> Unit = { panelModifier -> CinemaPanel(
         modifier = panelModifier,
         wide = wide,
@@ -1916,14 +1928,22 @@ fun CinemaScreen(
                （deckHidden）必须**只藏甲板**，不能把条件写进 if 让 else 的浏览底卡
                顶出来（2026-10-01 实测踩过：全屏一点，底下蹦出"开始放映"卡）。 */
             if (theater) {
-                if (!deckHidden.value) GlassPanel(
-                backdrop = backdrop,
-                modifier = Modifier
-                    // 不给 weight —— 贴内容长；上限护栏防止极端小屏把视频挤没
-                    .heightIn(max = 520.dp)
+                /* ══ 方案 3 · 双层卡（2026-10-04 用户在交互 mockup 上拍板）══
+                   上下两张玻璃卡放进**同一个 Column 栈**：下层「更多工具」收起时
+                   上层自动贴下来，不会悬空留缝。上层 = 常驻遥控器（状态 + 主动作 +
+                   对方状态条），下层 = 低频工具（默认收起，点把手展开）。 */
+                if (!deckHidden.value) Column(
+                Modifier
+                    // 不给 weight —— 贴内容长；上限护栏防止极端小屏把视频挤没。
+                    // 520 是老单卡甲板的数字，双层展开（3×3 工具 + 开关 + 统计）实测
+                    // 总高恰好顶到它，最后一行统计被无声裁掉 —— 放宽到 680。
+                    .heightIn(max = 680.dp)
                     .fillMaxWidth()
                     .padding(horizontal = GlassDimens.screenH, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                /* ── 上层卡：厅的常驻遥控器。状态两行 + 主动作行 + 对方状态条。 ── */
+                GlassPanel(backdrop = backdrop, modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.fillMaxWidth().padding(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -1991,20 +2011,6 @@ fun CinemaScreen(
                     }
                 }
                 Box(Modifier.height(14.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    /* 动作行顺序（2026-10-01 用户反馈"后退下意识应该在左边"，雨见
-                       底部五键同款）：后退最左 · 分享居中 · 破坏性的「收厅」靠右。 */
-                    DockBtn("后退", backdrop, Modifier.weight(1f)) { browserBack() }
-                    if (!screenShared) {
-                        DockBtn("分享我的屏幕", backdrop, Modifier.weight(1f)) { onStartShare() }
-                    }
-                    if (cinema != null) {
-                        DockBtn("收厅", backdrop, Modifier.weight(1f), hot = true) {
-                            askCloseRoom = true     // 与动作行同一个二次确认
-                        }
-                    }
-                }
-                Box(Modifier.height(14.dp))
                 /* 对方状态条（方案二）：一起看的核心是「两个人」—— 对方在哪一步必须像
                    播放键一样显眼，而不是藏在一行灰字里（面板/提示位此前都没有）。 */
                 val ackLine = CinemaSync.describeAck(playback, viewerOnline, timedOut = false)
@@ -2042,25 +2048,21 @@ fun CinemaScreen(
                     }
                 }
                 Box(Modifier.height(12.dp))
-                /* 快捷工具（方案二）：放映态补上原本只有浏览态才有的四个入口 ——
-                   浮窗（已做）、换片（候选列表）、邀请、画质。 */
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    DockBtn(
-                        if (float.active || float.prewarm) "收起浮窗" else "浮窗",
-                        backdrop,
-                        Modifier.weight(1f),
+                /* 主动作行（方案 3）：邀请是厅的头号动作（实底 —— 全 App 实底语言
+                   是 AccentSolid+白字，与地址行「打开」同款），全屏次之。
+                   其余低频工具（后退/分享屏幕/浮窗/换片/麦/收厅/测试流）沉下层卡，
+                   见下方「更多工具」。 */
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    LiquidGlassButton(
+                        onClick = copyInvite,
+                        backdrop = backdrop,
+                        modifier = Modifier.weight(1.5f).height(50.dp),
+                        shape = RoundedCornerShape(15.dp),
+                        surfaceColor = Ink.AccentSolid,
+                        contentAlignment = Alignment.Center,
                     ) {
-                        /* 放映中点「浮窗」要先退出放映（画面还给网页）再起浮窗 ——
-                           否则浮窗刚起就被"放映时收浮窗"的规则立刻杀掉，
-                           用户看到的就是点了没反应（2026-10-01 反馈）。 */
-                        if (theater) { theater = false; pinVideo(false) }
-                        toggleFloat()
+                        Text("邀请", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
                     }
-                    DockBtn("换片", backdrop, Modifier.weight(1f)) { askPickList = true }
-                    DockBtn("邀请", backdrop, Modifier.weight(1f)) { copyInvite() }
                     /* 全屏（2026-10-01 用户反馈"放映界面不能全屏"）：甲板整卡收起，
                        画面吃满；轻点画面唤回。**横视频（16:9/宽屏）顺带把屏幕转成
                        横屏 —— 真全屏**（用户手机自动旋转不常开）；竖屏视频（9:16）
@@ -2074,43 +2076,133 @@ fun CinemaScreen(
                         }
                         note = "全屏中 · 轻点画面唤出控制"
                     }
-                    /* 麦键（2026-10-01 用户计划：放映厅点麦克风就能连麦）。
-                       文案直接说**状态**（原来说的是动作"关麦"，开/关样式又一模一样，
-                       用户分不清现在到底是开还是关 —— 2026-10-01 实测反馈）。
-                       开麦中加绿色强调（与"对方已播起来"的绿点同一套语言）：
-                       绿 + 已开麦 = 正在传声；灰 + 已关麦 = 没在传。
-                       点击后的动作提示（回声/画面声）由 toggleMic 自带。 */
-                    DockBtn(
-                        if (micLive) "已开麦" else "已关麦",
-                        backdrop,
-                        Modifier.weight(1f),
-                        hot = micLive,
-                    ) { CallSession.toggleMic() }
-                }
-                Box(Modifier.height(12.dp))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text(
-                        "直连 ${latencyMs?.let { "${it}ms" } ?: "—"}",
-                        fontSize = 12.sp,
-                        color = Ink.TextLow,
-                    )
-                    Text(
-                        if (videoFps > 0) "$videoFps fps" else "— fps",
-                        fontSize = 12.sp,
-                        color = Ink.TextLow,
-                    )
-                    Text(
-                        if (videoBps > 0) String.format("%.1f Mbps", videoBps / 1_000_000f) else "码率自动",
-                        fontSize = 12.sp,
-                        color = Ink.TextLow,
-                    )
                 }
                 if (note.isNotBlank()) {
                     Box(Modifier.height(8.dp))
                     Text(note, fontSize = 11.5.sp, color = Ink.TextMid, maxLines = 2)
+                }
+                }
+                }
+                /* ── 下层卡：更多工具（默认收起，方案 3，2026-10-04 拍板）──
+                   低频工具 3 行（动作 / 厅管理 / 测试流）+ 允许对方控制 + 统计。
+                   收起时只剩一条把手；animateContentSize 给展开/收纳高度动画，
+                   上层卡跟着栈（spacedBy 8）平滑贴下来，不留缝。 */
+                GlassPanel(
+                    backdrop = backdrop,
+                    modifier = Modifier.fillMaxWidth().animateContentSize(),
+                ) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
+                    /* 把手行：整行可点（indication=null —— 玻璃上裸 clickable 会出
+                       方形光晕，铁律）；收起时右侧带一行摘要，展开后让位给箭头。 */
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                            ) { toolsOpen = !toolsOpen },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("🛠", fontSize = 13.sp)
+                        Box(Modifier.width(8.dp))
+                        Text(
+                            "更多工具",
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Ink.TextHi,
+                        )
+                        Box(Modifier.weight(1f))
+                        if (!toolsOpen) {
+                            Text(
+                                "后退 · 浮窗 · 换片 · 麦 · 测试流",
+                                fontSize = 10.5.sp, color = Ink.TextLow, maxLines = 1,
+                            )
+                            Box(Modifier.width(8.dp))
+                        }
+                        Text(if (toolsOpen) "⌃" else "⌄", fontSize = 13.sp, color = Ink.TextMid)
+                    }
+                    if (toolsOpen) {
+                        Box(Modifier.height(12.dp))
+                        /* 第 1 行 · 动作：后退（雨见序：最左）/ 分享屏幕 / 浮窗。 */
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            DockBtn("后退", backdrop, Modifier.weight(1f)) { browserBack() }
+                            if (!screenShared) {
+                                DockBtn("分享我的屏幕", backdrop, Modifier.weight(1f)) { onStartShare() }
+                            }
+                            DockBtn(
+                                if (float.active || float.prewarm) "收起浮窗" else "浮窗",
+                                backdrop,
+                                Modifier.weight(1f),
+                            ) {
+                                /* 放映中点「浮窗」要先退出放映（画面还给网页）再起浮窗 ——
+                                   否则浮窗刚起就被"放映时收浮窗"的规则立刻杀掉，
+                                   用户看到的就是点了没反应（2026-10-01 反馈）。 */
+                                if (theater) { theater = false; pinVideo(false) }
+                                toggleFloat()
+                            }
+                        }
+                        Box(Modifier.height(8.dp))
+                        /* 第 2 行 · 厅管理：换片 / 麦（状态文案+绿染）/ 收厅（破坏性，hot）。 */
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            DockBtn("换片", backdrop, Modifier.weight(1f)) { askPickList = true }
+                            /* 麦键文案直接说**状态**（原来说的是动作"关麦"，开/关样式
+                               又一模一样，用户分不清 —— 2026-10-01 实测反馈）。 */
+                            DockBtn(
+                                if (micLive) "已开麦" else "已关麦",
+                                backdrop,
+                                Modifier.weight(1f),
+                                hot = micLive,
+                            ) { CallSession.toggleMic() }
+                            if (cinema != null) {
+                                DockBtn("收厅", backdrop, Modifier.weight(1f), hot = true) {
+                                    askCloseRoom = true     // 与旧动作行同一个二次确认
+                                }
+                            }
+                        }
+                        Box(Modifier.height(8.dp))
+                        /* 第 3 行 · 测试流（量具，和浏览态嗅探区同一组地址）。 */
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            DockBtn("HLS 测试流", backdrop, Modifier.weight(1f)) { testUrl(CINEMA_TEST_HLS) }
+                            DockBtn("本地测试页", backdrop, Modifier.weight(1f)) { testUrl(CINEMA_TEST_LOCAL) }
+                            DockBtn("换一条流", backdrop, Modifier.weight(1f)) { testUrl(CINEMA_TEST_HLS_2) }
+                        }
+                        Box(Modifier.height(12.dp))
+                        /* 允许对方控制：原来只有浏览底卡能切，放映态只能看只读胶囊 ——
+                           现在下层卡里直接给真开关（同一份状态，改动立即生效）。 */
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            LiquidToggle(allowControl, {
+                                allowControl = it
+                                CallSession.setViewerMayControl(it)
+                            }, backdrop)
+                            Box(Modifier.width(8.dp))
+                            Text(
+                                if (allowControl) "对方可以控制进度" else "进度只由我这边动",
+                                fontSize = 11.sp,
+                                color = if (allowControl) Ink.Live else Ink.TextMid,
+                            )
+                        }
+                        Box(Modifier.height(12.dp))
+                        /* 统计行（原甲板统计行原样搬入，量具读数平时收着不占地方）。 */
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text(
+                                "直连 ${latencyMs?.let { "${it}ms" } ?: "—"}",
+                                fontSize = 12.sp,
+                                color = Ink.TextLow,
+                            )
+                            Text(
+                                if (videoFps > 0) "$videoFps fps" else "— fps",
+                                fontSize = 12.sp,
+                                color = Ink.TextLow,
+                            )
+                            Text(
+                                if (videoBps > 0) String.format("%.1f Mbps", videoBps / 1_000_000f) else "码率自动",
+                                fontSize = 12.sp,
+                                color = Ink.TextLow,
+                            )
+                        }
+                    }
                 }
                 }
             }
