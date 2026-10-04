@@ -66,6 +66,8 @@ class FloatPlayerService : android.app.Service() {
     private var windowLp: WindowManager.LayoutParams? = null
     private var lastSeekMs = -1L
     private var titleView: TextView? = null
+    /** 播放/暂停键（两种窗共用一个引用：relayTicker 要跟着放映态翻图标）。 */
+    private var toggle: TextView? = null
     /** 控制条进度线 + 时间（2026-10-01 用户要求：浮窗也要能看进度、拖进度）。 */
     private var seekBar: android.widget.SeekBar? = null
     private var timeView: TextView? = null
@@ -139,6 +141,13 @@ class FloatPlayerService : android.app.Service() {
                 candidates = intent.getStringArrayExtra(EXTRA_CANDIDATES)?.toList()
                     ?: emptyList(),
             ) }
+            /* 回显浮窗（2026-10-04 放映离场）：不建第二个播放器，把正在放映的画面
+               （TheaterPlayer 直连输出 / 转播轨回显）装进系统级窗 —— 播放、进度、
+               观众那条流全程不动。与播放窗互斥：进门先 teardown 清场。 */
+            ACTION_RELAY_START -> {
+                mark("RELAY 拉起回显浮窗")
+                startRelay()
+            }
         }
         return START_NOT_STICKY
     }
@@ -190,10 +199,11 @@ class FloatPlayerService : android.app.Service() {
             cookie?.takeIf { it.isNotBlank() }?.let { put("Cookie", it) }
         }
         val token = ++startToken
-        // 幂等：已有活着的 session（预热或正式）就不再起新的
+        // 幂等：已有活着的 session（预热/正式/**回显**）就不再起新的 ——
+        // 回显窗挂着时再点"浮窗播"不该叠出第二个窗（先收回显窗才能播新的）
         val st = FloatPlayer.state.value
-        if (player != null && (st.active || st.prewarm)) {
-            mark("已有浮窗 session，忽略本次${if (prewarm) "预热" else "启动"}")
+        if ((player != null || relayMode) && (st.active || st.prewarm)) {
+            mark("已有浮窗 session（relay=$relayMode），忽略本次${if (prewarm) "预热" else "启动"}")
             return
         }
         inPrewarm = prewarm
@@ -571,6 +581,7 @@ class FloatPlayerService : android.app.Service() {
             }
         }
         bar.addView(toggle)
+        this.toggle = toggle
         root.addView(bar)
 
         val lp = WindowManager.LayoutParams(
@@ -669,9 +680,322 @@ class FloatPlayerService : android.app.Service() {
         }
     }
 
+    // ───────────────────────── 回显浮窗（放映离场） ─────────────────────────
+
+    /** relay 模式标记：teardown / 幂等 / 播放窗互斥都看它。 */
+    private var relayMode = false
+    /** 转播中的画面源：轨回显渲染器（relaying=true 时用，直连自播时为 null）。 */
+    private var relayRenderer: org.webrtc.SurfaceViewRenderer? = null
+    private var relayTrack: org.webrtc.VideoTrack? = null
+
+    /**
+     * 起回显窗（2026-10-04 放映离场）：**不建第二个播放器**。
+     * 画面源二选一：
+     *  - 转播中（relaying）：播放器输出在帧桥上 → 浮窗渲**轨回显**（观众看到的同一条轨）；
+     *  - 直连自播：播放器输出空闲 → 直接把画面切给浮窗的 TextureView。
+     * 与播放窗互斥：进门先 teardown 清场（预热窗/播放窗都收掉）。
+     */
+    private fun startRelay() {
+        teardown()
+        val t = TheaterPlayer.state.value
+        if (!t.active) { mark("放映没在跑，回显窗不开"); stopSelf(); return }
+        /* 权限闸（2026-10-04）：TYPE_APPLICATION_OVERLAY 没授权时 addView 会抛
+           BadTokenException —— 播放窗路径有"浮窗播失败退网页"兜底，回显窗没有
+           可退的东西，这里显式拒绝并把原因打进日志（界面侧离场前也会先查）。 */
+        if (!FloatPlayer.canDrawOverlays(this)) {
+            mark("无悬浮窗权限，回显窗开不了（放映继续，只是没小窗）")
+            FloatPlayer.update { FloatState() }
+            stopSelf()
+            return
+        }
+        relayMode = true
+        FloatPlayer.update {
+            FloatState(active = true, relay = true, title = "放映中", ready = true)
+        }
+        addRelayOverlay()
+        startForeground(NOTIF_ID, buildNotification("放映中 · 小窗"))
+        handler.post(relayTicker)
+        mark("回显窗已挂 relaying=${TheaterPlayer.relaying}")
+    }
+
+    /** 回显窗的进展拍：刷时间/进度线/播放键，顺带把状态回灌界面。500ms 一拍。 */
+    private val relayTicker = object : Runnable {
+        override fun run() {
+            /* 收厅了（首页"关闭放映厅"）→ 窗跟着散场。不判 t.active：换片有
+               stop→start 的瞬时空档，误判会把换片时的窗杀掉（换片只发生在厅内，
+               那时回显窗本来就不在 —— 这里真正的信号只有"会话没了"）。 */
+            if (!com.ticketfortwo.app.CallSession.isActive) {
+                teardown(); stopSelf(); return
+            }
+            val t = TheaterPlayer.state.value
+            if (!seekTracking) {
+                seekBar?.let { sb ->
+                    if (t.durMs > 0) {
+                        sb.max = 1000
+                        sb.progress = ((t.posMs * 1000) / t.durMs).toInt().coerceIn(0, 1000)
+                        sb.isEnabled = true
+                    } else {
+                        sb.progress = 0
+                        sb.isEnabled = false
+                    }
+                }
+                timeView?.text = com.ticketfortwo.app.cinema.CinemaSync.formatTime(t.posMs) +
+                    " / " + com.ticketfortwo.app.cinema.CinemaSync.formatTime(t.durMs)
+                toggle?.text = if (t.playing) "❚❚" else "▶"
+            }
+            FloatPlayer.update {
+                it.copy(playing = t.playing, posMs = t.posMs, durMs = t.durMs, ready = t.active)
+            }
+            handler.postDelayed(this, 500)
+        }
+    }
+
+    /** 回显窗视图：骨架照播放窗（拖动/单击唤控制条/双击调大小），控制键指 TheaterPlayer。 */
+    private fun addRelayOverlay() {
+        val m = getSystemService(WINDOW_SERVICE) as WindowManager
+        wm = m
+        val w = dp(SIZES[sizeIdx].first)
+        val h = dp(SIZES[sizeIdx].second)
+
+        val radius = dp(14).toFloat()
+        val root = FrameLayout(this).apply { applyGlassLook(this, radius) }
+
+        if (TheaterPlayer.relaying) {
+            /* 转播中：SurfaceViewRenderer 渲轨回显（观众看到的同一条）。
+               这个 webrtc-sdk（150.7871.01）只有 SurfaceViewRenderer 没有 TextureView
+               版 —— 代价是画面四角切不出圆角（挖洞层不吃 outline 裁剪），方角压在
+               圆角窗上，轻微瑕疵先接受。init 必须给 RendererEvents（CallScreen 的
+               结论：没有它"黑屏"和"还没来帧"分不开）；缩放等比留边，不裁内容。 */
+            val renderer = org.webrtc.SurfaceViewRenderer(this)
+            runCatching {
+                com.ticketfortwo.app.rtc.RtcEngine.init(this)
+                renderer.init(
+                    com.ticketfortwo.app.rtc.RtcEngine.eglBase.eglBaseContext,
+                    object : org.webrtc.RendererCommon.RendererEvents {
+                        override fun onFirstFrameRendered() {
+                            handler.post { placeholder?.visibility = View.GONE }
+                        }
+
+                        override fun onFrameResolutionChanged(w: Int, h: Int, rot: Int) = Unit
+                    },
+                )
+                renderer.setScalingType(org.webrtc.RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+                com.ticketfortwo.app.CallSession.localVideo.value?.let { track ->
+                    track.addSink(renderer)
+                    relayTrack = track
+                }
+            }.onFailure { mark("回显渲染器初始化失败: ${it.message}") }
+            relayRenderer = renderer
+            root.addView(
+                renderer,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                ),
+            )
+        } else {
+            /* 直连自播：播放器输出空闲，临时切给浮窗（不记 surface —— UI 的位置留着）。 */
+            val tv = TextureView(this).apply {
+                layoutParams = FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                )
+            }
+            root.addView(tv)
+            TheaterPlayer.attachRelayView(tv)
+        }
+
+        // 占位：转播首帧没到之前是黑的，给一句话撑着
+        val ph = TextView(this).apply {
+            text = "放映画面回显中…"
+            setTextColor(0xFF9AA6B8.toInt())
+            textSize = 11f
+            gravity = android.view.Gravity.CENTER
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            )
+            isClickable = false
+            isFocusable = false
+        }
+        placeholder = ph
+        root.addView(ph)
+        // 转播轨有首帧就撤占位；直连自播切过去就是画面，直接撤
+        if (!TheaterPlayer.relaying) {
+            ph.visibility = View.GONE
+        } else {
+            handler.postDelayed({ placeholder?.visibility = View.GONE }, 2_500)
+        }
+
+        // 控制条：进度线 + 标题·时间 · 暂停 · 关闭（关闭=收窗并回放映厅）
+        val bar = FrameLayout(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, dp(BAR_H_DP), Gravity.BOTTOM,
+            )
+            setBackgroundColor(0xB3000000.toInt())
+            visibility = View.GONE
+        }
+        this.bar = bar
+
+        val sb = android.widget.SeekBar(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, dp(22), Gravity.TOP,
+            ).apply { topMargin = dp(2); marginStart = dp(8); marginEnd = dp(70) }
+            max = 1000
+            splitTrack = false
+            progressTintList = android.content.res.ColorStateList.valueOf(0xFF7AD8C3.toInt())
+            thumbTintList = android.content.res.ColorStateList.valueOf(0xFFFFFFFF.toInt())
+            setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: android.widget.SeekBar, p: Int, fromUser: Boolean) = Unit
+                override fun onStartTrackingTouch(s: android.widget.SeekBar) { seekTracking = true }
+                override fun onStopTrackingTouch(s: android.widget.SeekBar) {
+                    val d = TheaterPlayer.state.value.durMs
+                    if (d > 0) TheaterPlayer.seek(d * s.progress / 1000L)
+                    seekTracking = false
+                }
+            })
+        }
+        seekBar = sb
+        bar.addView(sb)
+
+        val t = TextView(this).apply {
+            text = "放映中"
+            setTextColor(0xFFFFFFFF.toInt())
+            textSize = 11f
+            maxLines = 1
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.START or Gravity.BOTTOM,
+            ).apply { marginStart = dp(8); bottomMargin = dp(7) }
+        }
+        titleView = t
+        bar.addView(t)
+
+        val tm = TextView(this).apply {
+            text = "0:00 / 0:00"
+            setTextColor(0xCCFFFFFF.toInt())
+            textSize = 9.5f
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.END or Gravity.BOTTOM,
+            ).apply { marginEnd = dp(66); bottomMargin = dp(9) }
+        }
+        timeView = tm
+        bar.addView(tm)
+
+        // 关闭 = 收窗并回放映厅（画面回全屏）。拖动/暂停照常。
+        val close = TextView(this).apply {
+            text = "×"
+            setTextColor(0xFFFFFFFF.toInt())
+            textSize = 16f
+            layoutParams = FrameLayout.LayoutParams(
+                dp(28), dp(28), Gravity.END or Gravity.BOTTOM,
+            ).apply { marginEnd = dp(6); bottomMargin = dp(4) }
+            setOnClickListener {
+                teardown(); stopSelf(); openCinema()
+            }
+        }
+        bar.addView(close)
+        val tg = TextView(this).apply {
+            text = "❚❚"
+            setTextColor(0xFFFFFFFF.toInt())
+            textSize = 13f
+            layoutParams = FrameLayout.LayoutParams(
+                dp(28), dp(28), Gravity.END or Gravity.BOTTOM,
+            ).apply { marginEnd = dp(34); bottomMargin = dp(4) }
+            setOnClickListener {
+                val st = TheaterPlayer.state.value
+                if (st.playing) TheaterPlayer.pause() else TheaterPlayer.play()
+            }
+        }
+        toggle = tg
+        bar.addView(tg)
+        root.addView(bar)
+
+        // 手势：照播放窗 —— 拖动挪窗、单击唤控制条（3s 自收）、双击调大小
+        val lp = WindowManager.LayoutParams(
+            w, h,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = dp(16)
+            y = dp(120)
+        }
+        var lastX = 0f
+        var lastY = 0f
+        var downX = 0
+        var downY = 0
+        var moved = false
+        val slop = ViewConfiguration.get(this).scaledTouchSlop
+        var lastTapAt = 0L
+        val singleTapRun = Runnable {
+            bar?.let { b ->
+                b.removeCallbacks(hideBarRun)
+                b.visibility = View.VISIBLE
+                b.alpha = 1f
+                b.postDelayed(hideBarRun, 3_000)
+            }
+        }
+        root.setOnTouchListener { v, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    lastX = e.rawX; lastY = e.rawY
+                    downX = lp.x; downY = lp.y
+                    moved = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = e.rawX - lastX
+                    val dy = e.rawY - lastY
+                    if (moved || abs(dx) > slop || abs(dy) > slop) {
+                        moved = true
+                        lp.x = (downX + dx).toInt().coerceAtLeast(0)
+                        lp.y = (downY + dy).toInt().coerceAtLeast(0)
+                        runCatching { m.updateViewLayout(v, lp) }
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (e.action == MotionEvent.ACTION_UP && !moved) {
+                        val now = android.os.SystemClock.uptimeMillis()
+                        if (now - lastTapAt < 380) {
+                            v.removeCallbacks(singleTapRun)
+                            lastTapAt = 0
+                            cycleSize(v)
+                        } else {
+                            lastTapAt = now
+                            v.postDelayed(singleTapRun, 290)
+                        }
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
+
+        overlay = root
+        windowLp = lp
+        runCatching { m.addView(root, lp) }
+            .onFailure { mark("回显窗 addView 失败: ${it.javaClass.simpleName} ${it.message}") }
+    }
+
+    /** 收窗并跳回放映厅（关闭键）：MainActivity 收到 action 就 openCinema。 */
+    private fun openCinema() {
+        val i = Intent(this, com.ticketfortwo.app.MainActivity::class.java)
+            .setAction(com.ticketfortwo.app.MainActivity.ACTION_OPEN_CINEMA)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { startActivity(i) }.onFailure { mark("回放映厅跳转失败: ${it.message}") }
+    }
+
     private fun teardown() {
         startToken++               // 让未完成的异步起播作废并自释放
         handler.removeCallbacks(ticker)
+        handler.removeCallbacks(relayTicker)
         runCatching { overlay?.let { wm?.removeView(it) } }
         overlay = null
         windowLp = null
@@ -680,9 +1004,20 @@ class FloatPlayerService : android.app.Service() {
         seekBar = null
         timeView = null
         titleView = null
+        toggle = null
         seekTracking = false
         videoView = null
         placeholder = null
+        /* 回显窗的清理（2026-10-04）：渲染器摘 sink 并释放、归还播放器画面。
+           只在 relay 模式做 —— 播放窗模式这些引用本来就是空的。 */
+        if (relayMode) {
+            relayTrack?.let { tr -> relayRenderer?.let { r -> runCatching { tr.removeSink(r) } } }
+            relayRenderer?.let { r -> runCatching { r.release() } }
+            relayRenderer = null
+            relayTrack = null
+            relayMode = false
+            runCatching { TheaterPlayer.restoreFromRelay() }
+        }
         runCatching { player?.release() }
         player = null
         FloatPlayer.update { FloatState() }
@@ -729,6 +1064,7 @@ class FloatPlayerService : android.app.Service() {
         const val ACTION_PREWARM = "com.ticketfortwo.app.float.PREWARM"
         const val ACTION_SHOW = "com.ticketfortwo.app.float.SHOW"
         const val ACTION_STOP = "com.ticketfortwo.app.float.STOP"
+        const val ACTION_RELAY_START = "com.ticketfortwo.app.float.RELAY_START"
         const val EXTRA_URL = "url"
         const val EXTRA_TITLE = "title"
         const val EXTRA_REFERER = "referer"

@@ -42,6 +42,12 @@ data class FloatState(
     /** 预热态：1×1 窗口在屏上、播放器已在播，但还没亮出来（show 时才转 active）。 */
     val prewarm: Boolean = false,
     /**
+     * 回显浮窗（2026-10-04）：放映中离场，把**正在放映的画面**投影到系统级浮窗。
+     * 与播放模式（本服务自己持有 ExoPlayer）的本质区别：这里**没有第二个播放器**，
+     * 只是给 TheaterPlayer / 转播轨开一扇窗 —— 播放、进度、观众那条流全程不动。
+     */
+    val relay: Boolean = false,
+    /**
      * 元数据已到且真的在播。
      * 交接的判据就是这个：不能刚调了 play() 就认为它起来了（HLS 常常要缓冲一两秒），
      * 否则会出现"网页那个已停、浮窗这个还没起"的空白，观众收到假暂停。
@@ -134,6 +140,26 @@ object FloatPlayer {
             Intent(context, FloatPlayerService::class.java)
                 .setAction(FloatPlayerService.ACTION_STOP),
         )
+    }
+
+    /**
+     * 回显浮窗（放映离场专用，2026-10-04）：**不建第二个播放器**，服务直接把
+     * TheaterPlayer / 转播轨的画面装进系统级窗。播放器、进度、观众全都不动。
+     * 前台点击/离场钩子里调用（Android 12+ 后台起前台服务的限制同 [start]）。
+     */
+    fun showRelay(context: Context) {
+        startMs = android.os.SystemClock.uptimeMillis()
+        android.util.Log.i("FloatPlay", "+0ms 请求回显浮窗（放映离场）")
+        context.startForegroundService(
+            Intent(context, FloatPlayerService::class.java)
+                .setAction(FloatPlayerService.ACTION_RELAY_START),
+        )
+    }
+
+    /** 收回显窗：只在 relay 模式下有效（浏览态的播放窗别误伤）。播放器没动过，无需交接。 */
+    fun closeRelay(context: Context) {
+        if (!state.value.relay) return
+        stop(context)
     }
 
     /** 分享屏幕时把窗藏掉：只摘视图，播放器不动（观众还在跟这条进度）。 */

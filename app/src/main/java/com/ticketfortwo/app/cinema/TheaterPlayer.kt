@@ -70,15 +70,29 @@ object TheaterPlayer {
     private val ticker = object : Runnable {
         override fun run() {
             val p = exo ?: return
+            val pos = p.currentPosition.coerceAtLeast(0L)
+            val dur = p.duration.takeIf { it > 0 } ?: 0L
+            val playing = p.isPlaying
             _state.value = _state.value.copy(
-                playing = p.isPlaying,
-                posMs = p.currentPosition.coerceAtLeast(0L),
-                durMs = p.duration.takeIf { it > 0 } ?: 0L,
-                ready = p.isPlaying && p.currentPosition > 0L,
+                playing = playing,
+                posMs = pos,
+                durMs = dur,
+                ready = playing && pos > 0L,
             )
+            /* 进度出口（2026-10-04）：广播不放在组合作用域里 —— 那会随页面卸载而断，
+               观众端对钟失联（离场暂停问题的另一半）。CinemaScreen 组合时挂上，
+               离场**不摘**：只要自播活着（回显浮窗模式下它一直活着），广播一直走。 */
+            progressSink?.invoke(pos, dur, playing, rate)
             handler.postDelayed(this, 1_000)
         }
     }
+
+    /**
+     * 自播进度出口：CinemaScreen 挂上（转 [CallSession.publishCinemaProgress]），
+     * 页面卸载不摘 —— 见 ticker 内注释。null = 没人听，跳过即可。
+     */
+    @Volatile
+    var progressSink: ((posMs: Long, durMs: Long, playing: Boolean, rate: Double) -> Unit)? = null
 
     /**
      * 当前倍速（手势层长按/上滑设置）。[exo] 为 null 时先记着 —— [start] 建好
@@ -157,6 +171,22 @@ object TheaterPlayer {
     fun detach() {
         surface = null
         exo?.setVideoSurface(null)
+    }
+
+    /**
+     * 回显浮窗专用（2026-10-04）：把输出临时切给浮窗的视图。
+     * 与 [attach] 的差别是**不记 surface** —— 那个字段永远指 UI 的视图，
+     * [restoreFromRelay] 归还时才知道该还给谁。
+     */
+    fun attachRelayView(view: TextureView) {
+        if (external == null) exo?.setVideoTextureView(view)
+    }
+
+    /** 回显窗收场：画面还给 UI（页面还活着），UI 不在（回厅路上）就先摘掉防黑帧。 */
+    fun restoreFromRelay() {
+        if (external != null) return
+        val p = exo ?: return
+        surface?.let { p.setVideoTextureView(it) } ?: p.setVideoSurface(null)
     }
 
     /** 停掉并复位（退出放映 / 起播失败回退 / 换片）。 */

@@ -90,6 +90,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        /* 回显浮窗的关闭键（2026-10-04）：收窗并跳回放映厅。冷启动时 onNewIntent
+           不会走，这里从 intent 直接识别（onNewIntent 管热启动那一条）。 */
+        if (intent?.action == ACTION_OPEN_CINEMA) openCinemaFlag.value += 1
         /* App 壁纸是暗色系，系统浅色模式下状态栏图标是黑的 —— 压在暗壁纸上
            看不清（2026-10-01 用户反馈）。全局强制白图标。 */
         WindowCompat.getInsetsController(window, window.decorView).apply {
@@ -119,6 +122,8 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        /* 回显浮窗关闭键的热启动路径（冷启动走 onCreate）。 */
+        if (intent.action == ACTION_OPEN_CINEMA) openCinemaFlag.value += 1
         CinemaIntents.push(extractSharedUrl(intent))
     }
 
@@ -161,6 +166,11 @@ class MainActivity : ComponentActivity() {
         runCatching { b.setAspectRatio(Rational((r * 1000).toInt(), 1000)) }
         return b.build()
     }
+
+    companion object {
+        /** 回显浮窗关闭键 → 跳回放映厅（见 [onNewIntent] / onCreate 与 openCinemaFlag）。 */
+        const val ACTION_OPEN_CINEMA = "com.ticketfortwo.app.action.OPEN_CINEMA"
+    }
 }
 
 /**
@@ -188,6 +198,14 @@ private val leftCinemaFlag = MutableStateFlow(false)
  * 首页那颗变身圆钮负责"回去"和"停止"（见 HomeScreen 的 session 参数）。
  */
 private val leftCallFlag = MutableStateFlow(false)
+
+/**
+ * 「回显浮窗点了关闭」= 收小窗回放映厅（2026-10-04）。进程级计数器：
+ * FloatPlayerService 发带 [MainActivity.ACTION_OPEN_CINEMA] 的 intent 过来，
+ * onCreate/onNewIntent 各认领一次，AppRouter 里的 LaunchedEffect 消费它调 openCinema。
+ * 计数而不是布尔：连点两次也不能丢一次。
+ */
+private val openCinemaFlag = MutableStateFlow(0)
 
 private enum class UiRole { None, Host, Viewer }
 
@@ -507,6 +525,14 @@ private fun AppRouter(backdrop: LayerBackdrop) {
     LaunchedEffect(Unit) {
         // 冷启动时 onNewIntent 不会走，只能从 Activity 手里那份 intent 捞
         CinemaIntents.fromActivity(context as? android.app.Activity)?.let { enterCinema(it) }
+    }
+    /* 回显浮窗关闭键 → 回放映厅（openCinema 幂等：厅活着就只把人带回这一屏）。 */
+    val openCinemaReq by openCinemaFlag.collectAsState()
+    LaunchedEffect(openCinemaReq) {
+        if (openCinemaReq > 0) {
+            leftCinemaFlag.value = false
+            openCinema()
+        }
     }
     LaunchedEffect(sharedUrl) {
         val u = sharedUrl ?: return@LaunchedEffect

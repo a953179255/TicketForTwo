@@ -1094,7 +1094,9 @@ fun CinemaScreen(
        创建 0.5 秒即 Release，浮窗根本活不过 ON_STOP）。 */
     var appResumed by remember { mutableStateOf(true) }
     LaunchedEffect(theater, float.active, appResumed) {
-        if (theater && float.active && appResumed) {
+        /* relay（回显窗）例外：它就是"放映本体换了扇窗"，全屏放映在跑时它也合法
+           （人正在别的页面，靠它看到画面）—— 按播放窗那条规则收掉它，画面就没了。 */
+        if (theater && float.active && !float.relay && appResumed) {
             closeFloat()
             note = "放映时画面已经全屏，浮窗收起来了"
         }
@@ -1160,14 +1162,16 @@ fun CinemaScreen(
         }
     }
 
-    /* 自播指挥官的广播循环（与浮窗同款）。 */
-    LaunchedEffect(commander, tp.active) {
-        if (commander != Commander.Theater || !tp.active) return@LaunchedEffect
-        while (true) {
-            delay(500)
-            val t = TheaterPlayer.state.value
-            if (!t.active) break
-            if (cinema != null) CallSession.publishCinemaProgress(t.posMs, t.durMs, t.playing, rate = boostRate.value)
+    /* 自播指挥官的进度广播：挂到 TheaterPlayer 的常驻出口（2026-10-04）。
+       原来这循环跑在组合作用域里，页面一卸载广播就断 —— 观众端对钟失联，
+       这正是"离场两边都暂停"的另一半。挂 sink 后广播跟着播放器走（每秒一拍），
+       离场不摘：回显浮窗模式下播放器一直活着，广播也一直活着。 */
+    DisposableEffect(Unit) {
+        TheaterPlayer.progressSink = { pos, dur, playing, rate ->
+            CallSession.publishCinemaProgress(pos, dur, playing, rate = rate)
+        }
+        onDispose {
+            // 故意不摘 —— 见上。收厅时 TheaterPlayer 的 ticker 停摆，广播自然停。
         }
     }
 
@@ -1208,10 +1212,28 @@ fun CinemaScreen(
         )
     }
     DisposableEffect(Unit) {
+        /* 从别的页面回来（组合重建，如设置页返回）：回显浮窗还挂着就收掉 ——
+           播放器全程没停过，画面直接回全屏，无需任何交接。 */
+        if (FloatPlayer.state.value.relay) {
+            runCatching { FloatPlayer.closeRelay(context) }
+        }
         onDispose {
             val st = FloatPlayer.state.value
-            if (st.prewarm) FloatPlayer.stop(context)
-            TheaterPlayer.stop()   // 离场兜底：自播别留着出声
+            if (theater && TheaterPlayer.state.value.active) {
+                /* 离场不散场（2026-10-04）：放映画面转系统级回显浮窗，播放器/
+                   帧桥/观众那条流全程不动 —— 原来"离场兜底 stop"把两边一起暂停
+                   （用户实测：回主页调个设置，自己和对端都卡住）。
+                   没悬浮窗权限时开不了窗：那就什么都不做，放映继续（声音在），
+                   只是没有小窗 —— 底线是"绝不为了离场把放映停了"。 */
+                if (FloatPlayer.canDrawOverlays(context)) {
+                    runCatching { FloatPlayer.showRelay(context) }
+                } else {
+                    note = "没有悬浮窗权限：放映继续，但没有小窗画面"
+                }
+            } else {
+                if (st.prewarm) FloatPlayer.stop(context)
+                TheaterPlayer.stop()   // 离场兜底：自播别留着出声（浏览态，保持原行为）
+            }
         }
     }
 
@@ -1234,13 +1256,11 @@ fun CinemaScreen(
                     appResumed = false
                     if (theater && cinema != null && !float.active && !screenShared) {
                         if (commander == Commander.Theater) {
-                            /* 自播在放：浮窗按**自播位置**接棒（show 支持 seekMs），
-                               然后停自播 —— 声音只活一个，指挥权归浮窗。 */
-                            val at = tp.posMs
-                            runCatching { openFloat(null, at) }
-                            commander = Commander.Float
-                            TheaterPlayer.stop()
-                            note = "自播已交棒悬浮窗（按当前位置接着播）"
+                            /* 自播在放（2026-10-04 改）：不再"浮窗接棒+停自播"（那是
+                               播放器换人，1-3s 断档+降清），直接开回显浮窗 —— 播放器/
+                               观众全不动，回前台收窗即回全屏。 */
+                            runCatching { FloatPlayer.showRelay(context) }
+                            note = "放映转到悬浮窗继续（回来点一下就回全屏）"
                         } else {
                             runCatching {
                                 openFloat(null)
@@ -1251,6 +1271,11 @@ fun CinemaScreen(
                 }
                 androidx.lifecycle.Lifecycle.Event.ON_START -> {
                     appResumed = true
+                    if (float.active && float.relay) {
+                        /* 回显窗在场：只收窗，播放器从没停 —— 画面直接回全屏。 */
+                        runCatching { FloatPlayer.closeRelay(context) }
+                        note = "回到放映厅，画面回全屏"
+                    }
                     if (theater && float.active && commander == Commander.Float) {
                         val at = float.posMs
                         closeFloat()   // 浮窗进度拨回网页 + 停浮窗 + commander=Page
