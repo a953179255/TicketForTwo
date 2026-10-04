@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -52,6 +54,7 @@ import com.ticketfortwo.app.PlayMode
 import com.ticketfortwo.app.ShareQuality
 import com.ticketfortwo.app.VoiceMode
 import com.ticketfortwo.app.ui.glass.GlassCard
+import com.ticketfortwo.app.ui.glass.GlassPageBar
 import com.ticketfortwo.app.ui.glass.GlassTextButton
 import com.ticketfortwo.app.ui.theme.GlassDimens
 import com.ticketfortwo.app.ui.theme.Ink
@@ -427,18 +430,31 @@ fun ShareKindScreen(
      * 第一版横屏给 Row 加了 weight(1f)，实测（.dev/kind-03-chooser.png）两张卡被压成
      * 170dp 高的空壳、正文只剩 2px —— 这一屏存在的意义就是那句"对方会看到什么"，
      * 它被吃掉等于没做。weight 在矮屏上分给卡片的空间比内容需要的少，
-     * 而 Compose 不会因此把页面撑开，只会裁。改成"卡片按内容长、页面不够就滚"。 */
-    PageScaffold {
-        /* 滚动只包内容，「返回」留在滚动列**外面**、由外层 Column 的 weight(1f)
-           吃掉剩余高度 —— 用户反馈"返回按钮太靠上了"就是整页滚动的后果：
-           按钮跟着内容排，内容短时它悬在屏幕半空，下面一大片壁纸。
-           FailedScreen 已是这个结构（滚动列 weight(1f)，按钮钉底），这里对齐它。 */
+     * 而 Compose 不会因此把页面撑开，只会裁。改成"卡片按内容长、页面不够就滚"。
+     *
+     * 2026-10-04 用户反馈"返回有的在顶栏有的在底部，统一一下"：返回挪进顶栏
+     * （GlassPageBar，与放映厅/邀请页同款），底部那颗删除。外层不用 PageScaffold
+     * 是因为顶栏必须全宽（radius=0 通到屏幕边），PageScaffold 的左右 padding 会把它挤窄；
+     * 状态栏 inset 由 GlassPageBar 自己处理，内容壳只补导航栏/键盘。 */
+    Column(Modifier.fillMaxSize()) {
+        GlassPageBar(backdrop, title = "分享画面", onBack = onBack)
         Column(
-            Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+            Modifier
+                .fillMaxSize()
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(horizontal = GlassDimens.screenH),
             verticalArrangement = Arrangement.spacedBy(GlassDimens.sp4),
         ) {
-            Spacer(Modifier.height(GlassDimens.sp4))
-            Headline("分享画面", "先选给对方看什么。两种都可以中途换，不用重来。")
+            Column(
+                Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(GlassDimens.sp4),
+            ) {
+                Spacer(Modifier.height(GlassDimens.sp4))
+                Text(
+                    "先选给对方看什么。两种都可以中途换，不用重来。",
+                    fontSize = 13.5.sp, color = Ink.TextMid,
+                )
             if (wide) {
                 Row(
                     Modifier.fillMaxWidth(),
@@ -467,11 +483,8 @@ fun ShareKindScreen(
                 )
                 GlassTextButton("去改", onClick = onSettings, backdrop = backdrop)
             }
+            }
         }
-        PrimaryPill("返回", onBack, backdrop, Modifier.fillMaxWidth(), filled = false)
-        // 底部要留够：横屏时系统那根手势白条正好压在按钮上（实测 .dev/kind-08-land.png
-        // 里「返回」和白条重叠），navigationBarsPadding 在这一屏没替我们让开。
-        Spacer(Modifier.height(34.dp))
     }
 }
 
@@ -682,9 +695,27 @@ fun QualitySettingsScreen(
 
     // 整页可滚：内容高于一屏（真机 3200px 下「完成」会掉出屏幕外，实测够不到）。
     // 滚动列里不能用 SpacerWeight（weight 在无限高约束下直接崩），所以这里只垫小间距。
-    PageScaffold(modifier = Modifier.verticalScroll(rememberScrollState())) {
-        Spacer(Modifier.height(GlassDimens.sp6))
-        Headline("分享设置", "这些是上限不是保证值：网络差或发热时会自动再降。分享中改了立即生效；开画面要重新授权一次。")
+    // 2026-10-04 统一操作逻辑：返回挪进顶栏（GlassPageBar），底部那颗删除——
+    // 顶栏必须全宽，所以不套 PageScaffold（它左右 padding 会把顶栏挤窄），
+    // 状态栏 inset 由 GlassPageBar 自理，内容壳补导航栏/键盘，inset 在滚动外层。
+    Column(Modifier.fillMaxSize()) {
+        GlassPageBar(backdrop, title = "分享设置", onBack = onBack)
+        Column(
+            Modifier
+                .fillMaxSize()
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(horizontal = GlassDimens.screenH),
+        ) {
+            Column(
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(GlassDimens.sp4),
+            ) {
+                Spacer(Modifier.height(GlassDimens.sp4))
+                Text(
+                    "这些是上限不是保证值：网络差或发热时会自动再降。分享中改了立即生效；开画面要重新授权一次。",
+                    fontSize = 13.5.sp, color = Ink.TextMid,
+                )
 
         SectionTitle("放映方式")
         GlassCardPanel(backdrop, Modifier.fillMaxWidth()) {
@@ -964,11 +995,12 @@ fun QualitySettingsScreen(
         }
 
         // 没有「完成」按钮：这里的每一项都是**改了立即保存**（onChange 里就写盘了）。
-        // 底部补一颗「返回」—— 原注释声称"左上角返回"可这屏根本没有返回控件，
-        // 只能靠系统手势（REVIEW-2026-09-27 P3）。多一个确认键才会让人以为"不点就不生效"。
+        // 底部的「返回」已挪进顶栏（2026-10-04 统一操作逻辑）；这行提示保留，
+        // 告诉人"不用找保存键"。
         StatusChip("改动立即生效，直接返回即可", ChipTone.Ok)
-        PrimaryPill("返回", onBack, backdrop, Modifier.fillMaxWidth(), filled = false)
-        Spacer(Modifier.height(GlassDimens.sp6))
+                Spacer(Modifier.height(GlassDimens.sp6))
+            }
+        }
     }
 }
 
@@ -1108,6 +1140,8 @@ fun InviteScreen(
     inviteUrl: String,
     onCopy: () -> Unit,
     onStop: () -> Unit,
+    /** 回首页但**不停分享**（会话是前台服务撑着的，2026-10-04 统一顶栏加的返回）。 */
+    onBack: () -> Unit = {},
     /**
      * 有没有真的在投屏。厅先开只起信令 + 语音，这时这颗钮按下去是"把厅关掉"，
      * 写「停止分享」会让人以为自己在分享（而"我没在分享"恰恰是他想知道的那件事）。
@@ -1116,14 +1150,26 @@ fun InviteScreen(
 ) {
     val context = LocalContext.current
     /* 滚动 + 按钮钉底（同 ConsentGuideScreen）：横屏内容约 560dp > 可用 359dp，
-       不可滚时底部这颗唯一的停止入口在屏幕外（REVIEW-2026-09-27 P1）。 */
-    PageScaffold {
+       不可滚时底部这颗唯一的停止入口在屏幕外（REVIEW-2026-09-27 P1）。
+       2026-10-04 用户反馈这页没有返回主界面的入口：加 GlassPageBar 顶栏（← 回首页
+       不停分享），底部那颗"停止分享"语义不同（结束会话），保留。顶栏要全宽，
+       所以不套 PageScaffold，内容壳自己补导航栏/键盘 inset。 */
+    Column(Modifier.fillMaxSize()) {
+        GlassPageBar(backdrop, title = "邀请", onBack = onBack)
         Column(
-            Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+            Modifier
+                .fillMaxSize()
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(horizontal = GlassDimens.screenH),
             verticalArrangement = Arrangement.spacedBy(GlassDimens.sp4),
         ) {
-            Spacer(Modifier.height(GlassDimens.sp6))
-            Headline("把这条发给朋友", "他点开就能看，不用装东西、也不用回传任何东西给你。")
+            Column(
+                Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(GlassDimens.sp4),
+            ) {
+                Spacer(Modifier.height(GlassDimens.sp6))
+                Headline("把这条发给朋友", "他点开就能看，不用装东西、也不用回传任何东西给你。")
 
             GlassCardPanel(backdrop, Modifier.fillMaxWidth(), floating = true) {
                 Column(Modifier.padding(GlassDimens.sp4), verticalArrangement = Arrangement.spacedBy(GlassDimens.sp3)) {
@@ -1159,9 +1205,9 @@ fun InviteScreen(
 
             StatusChip("链接里有接入凭证，别转发给不想让看的人", ChipTone.Warn)
             StatusChip("你可以一直开着，他随时点开都能进", ChipTone.Ok)
+            }
         }
         PrimaryPill(if (screenSharing) "停止分享" else "结束连麦", onStop, backdrop, Modifier.fillMaxWidth(), filled = false)
-        Spacer(Modifier.height(GlassDimens.sp6))
     }
 }
 

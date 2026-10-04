@@ -495,7 +495,7 @@ fun CallScreen(
             micOn = micOn,
             onToggleMic = onToggleMic,
             onStop = onStop,
-            latencyLabel = latencyMs?.let { "$it" } ?: "—",
+            latencyLabel = latencyMs?.let { "$it ms" } ?: "—",
             netLabel = netLabel,
             orientationLabel = orientationLabel,
             onCycleOrientation = onCycleOrientation,

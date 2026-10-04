@@ -1024,6 +1024,8 @@ private fun AppRouter(backdrop: LayerBackdrop) {
                 onCopy = { context.copy("邀请链接", p.url) },
                 screenSharing = hostVideo != null,
                 onStop = stop,
+                // 顶栏 ←：回首页但不停分享（与 CallScreen 返回键同一语义，leftCall 标记）
+                onBack = { leftCallFlag.value = true },
             )
 
             is Page.Preparing -> PreparingScreen(

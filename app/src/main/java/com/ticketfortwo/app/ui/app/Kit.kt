@@ -474,10 +474,13 @@ fun ControlIsland(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 CircleControl(onClick = onToggleMic, backdrop = backdrop) {
+                    /* 着色跟"岛面亮度"走：岛浮在画面/壁纸上，深色壁纸时玻璃采样后很暗，
+                       原来开着麦用近黑 0xFF04160A —— 图标整个隐形（2026-10-04 真机截图实测）。
+                       开着 = 亮绿（活跃语义 + 暗岛可读），关着 = 白色 MicOff（斜杠自明）。 */
                     Icon(
                         if (micOn) Icons.Filled.Mic else Icons.Filled.MicOff,
                         contentDescription = if (micOn) "静音" else "取消静音",
-                        tint = if (micOn) Color(0xFF04160A) else Ink.TextHi,
+                        tint = if (micOn) Ink.Live else Ink.TextHi,
                         modifier = Modifier.size(GlassDimens.iconSize),
                     )
                 }
