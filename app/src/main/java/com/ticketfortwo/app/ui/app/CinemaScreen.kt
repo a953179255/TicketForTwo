@@ -39,6 +39,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.first
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.key
@@ -1993,12 +1995,13 @@ fun CinemaScreen(
                     }
                 }
             }
-            /* 面板沉底（2026-10-05 用户拍板）：放映甲板贴屏幕底部，「更多工具」
-               展开时**向上生长** —— 甲板前的这条 weight 空隙吃掉全部剩余，
-               甲板长多高、空隙就缩多少。注意全文件只有这一处：原 2026-10-03
-               在甲板**后面**也有一条同样的 Spacer（把甲板推去贴视频下沿），
-               两条并存会平分剩余、甲板被夹在正中间（用户实测"更像居中"）。 */
-            if (theater && !deckHidden.value) Spacer(Modifier.weight(1f))
+            /* 面板沉底（2026-10-05 用户拍板）改由**甲板自身**实现：甲板 Column
+               weight(1f) 吃掉视频以下的全部剩余 + Arrangement.Bottom 让内容
+               贴自己底部 + verticalScroll 兜底 —— **自由窗口/小窗这类矮窗口**，
+               剩余不够装下整个甲板时，甲板内可滚（统计行滚上来可见），
+               而不是像 weight 前时代那样整个溢出被窗口裁掉。甲板后面
+               2026-10-03 埋的那条旧 Spacer 已删（两条并存会平分剩余，
+               甲板被夹到正中间 —— 用户实测"更像居中"）。 */
             /* 甲板装进玻璃卡：裸文本浮在壁纸上读不清（真机截图实测），
                和厅里其他卡片同一套玻璃语言。
                注意 if/else 是配对的：theater 画甲板、否则画浏览底卡 —— 全屏态
@@ -2009,15 +2012,29 @@ fun CinemaScreen(
                    上下两张玻璃卡放进**同一个 Column 栈**：下层「更多工具」收起时
                    上层自动贴下来，不会悬空留缝。上层 = 常驻遥控器（状态 + 主动作 +
                    对方状态条），下层 = 低频工具（默认收起，点把手展开）。 */
+                val deckScroll = rememberScrollState()
+                /* 矮窗口（自由窗口/分屏）里甲板被 weight 限高、内容超高可滚 ——
+                   **初始滚到底**：把手/统计行这些"操作入口"在栈底，先保证它们
+                   可见；上卡的状态句要往上滚才看得到（比什么都看不见强）。
+                   maxValue 要等首次测量才有值（0 就是还没量出来），snapshotFlow
+                   等它 >0 再滚，滚一次就完。 */
+                LaunchedEffect(deckScroll) {
+                    val m = snapshotFlow { deckScroll.maxValue }.first { it > 0 }
+                    deckScroll.scrollTo(m)
+                }
                 if (!deckHidden.value) Column(
                 Modifier
-                    // 不给 weight —— 贴内容长；上限护栏防止极端小屏把视频挤没。
-                    // 520 是老单卡甲板的数字，双层展开（3×3 工具 + 开关 + 统计）实测
-                    // 总高恰好顶到它，最后一行统计被无声裁掉 —— 放宽到 680。
-                    .heightIn(max = 680.dp)
+                    // weight(1f)：吃掉视频以下的剩余 —— 甲板锚在窗口底；
+                    // verticalScroll：自由窗口这类矮窗口剩余不够装时内滚，
+                    // 统计行等滚上来可见（2026-10-05 用户小窗实测溢出）；
+                    // Arrangement.Bottom：内容短于剩余时贴甲板底部（= 屏幕底），
+                    // 长于剩余时正常从顶滚 —— 两条路都是"贴底"。
+                    // 原 heightIn(max=680) 上限被 weight 的天然约束取代（更准）。
+                    .weight(1f)
+                    .verticalScroll(deckScroll)
                     .fillMaxWidth()
                     .padding(horizontal = GlassDimens.screenH, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.Bottom,
             ) {
                 /* ── 上层卡：厅的常驻遥控器。状态两行 + 主动作行 + 对方状态条。 ── */
                 GlassPanel(backdrop = backdrop, modifier = Modifier.fillMaxWidth()) {
@@ -2163,7 +2180,10 @@ fun CinemaScreen(
                 /* ── 下层卡：更多工具（默认收起，方案 3，2026-10-04 拍板）──
                    低频工具 3 行（动作 / 厅管理 / 测试流）+ 允许对方控制 + 统计。
                    收起时只剩一条把手；animateContentSize 给展开/收纳高度动画，
-                   上层卡跟着栈（spacedBy 8）平滑贴下来，不留缝。 */
+                   上层卡跟着栈平滑贴下来，不留缝。
+                   两卡间的 8dp 间距：原 spacedBy(8) 随 2026-10-05 甲板改
+                   Arrangement.Bottom 退场，改手动垫一条。 */
+                Box(Modifier.height(8.dp))
                 GlassPanel(
                     backdrop = backdrop,
                     modifier = Modifier.fillMaxWidth().animateContentSize(),

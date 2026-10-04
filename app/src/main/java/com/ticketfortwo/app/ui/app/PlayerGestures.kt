@@ -343,7 +343,11 @@ fun PlayerGestureOverlay(
                 )
             },
     ) {
-        /* ── 发丝进度线：常驻画面底边，横拖 = 绝对定位 seek ── */
+        /* ── 发丝进度线：常驻画面底边，横拖 = 绝对定位 seek ──
+           **控制层（hudVisible）出着时不画**（2026-10-05 用户反馈：呼出控制层
+           后下方同时出现常驻发丝线 + 控制层可拖进度条，变两条）——控制层那条
+           更粗、信息更全，这里让位；控制层收起即恢复常驻。 */
+        if (!hudVisible) {
         val hairFrac = if (durMs > 0) (seekPreviewMs ?: posMs).toFloat() / durMs else 0f
         Box(
             Modifier
@@ -392,6 +396,7 @@ fun PlayerGestureOverlay(
                         Brush.horizontalGradient(listOf(Color(0xFF7AD8C3), Color(0xFFBFE7FF))),
                     ),
             )
+        }
         }
 
         /* ── 控制层（照雨见形态，2026-10-02 用户截图定稿）：

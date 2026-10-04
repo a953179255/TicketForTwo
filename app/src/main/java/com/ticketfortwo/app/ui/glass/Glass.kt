@@ -793,14 +793,20 @@ fun GlassPageBar(
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (onBack != null) {
-                androidx.compose.material3.IconButton(onClick = onBack) {
+                /* 箭头/标题色彩**钉死 Ink.TextHi**（固定白，2026-10-05 用户两轮反馈：
+                   系统深色模式下箭头变黑看不清 —— 原来 tint/color 走
+                   MaterialTheme.colorScheme.onBackground，跟了主题变体就可能落黑；
+                   现在 Icon tint 与 IconButton 的 contentColor 双保险都钉死，
+                   主题怎么翻都亮）。 */
+                androidx.compose.material3.IconButton(
+                    onClick = onBack,
+                    colors = androidx.compose.material3.IconButtonDefaults.iconButtonColors(
+                        contentColor = com.ticketfortwo.app.ui.theme.Ink.TextHi,
+                    ),
+                ) {
                     androidx.compose.material3.Icon(
                         Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "返回",
-                        /* 色彩**钉死 Ink 亮色**（2026-10-05 用户反馈：系统深色模式下
-                           箭头变黑看不清）—— 原 tint 跟 MaterialTheme.colorScheme
-                           走，而全 App 的页面文字都用 Ink 暗壁纸色板，就这里俩
-                           落单跟了主题。App 是"壁纸+玻璃"视觉，永远压在暗底上。 */
                         tint = com.ticketfortwo.app.ui.theme.Ink.TextHi
                     )
                 }
