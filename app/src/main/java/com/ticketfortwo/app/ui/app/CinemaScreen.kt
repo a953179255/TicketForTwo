@@ -14,6 +14,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.layout.Arrangement
@@ -2124,7 +2126,14 @@ fun CinemaScreen(
                 ) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
                     /* 把手行：整行可点（indication=null —— 玻璃上裸 clickable 会出
-                       方形光晕，铁律）；收起时右侧带一行摘要，展开后让位给箭头。 */
+                       方形光晕，铁律）。2026-10-05 用户拍板：右侧那串"后退 · 浮窗…"
+                       摘要去掉（展开一眼就看到，没必要预告）；展开箭头从 13sp 的
+                       ⌄ 文字换成矢量 ArrowDropDown + 旋转动画 —— 文字字形又小又
+                       没分量，矢量箭头大一号且展开时平滑转 180°。 */
+                    val chevRot by androidx.compose.animation.core.animateFloatAsState(
+                        targetValue = if (toolsOpen) 180f else 0f,
+                        label = "moreToolsChevron",
+                    )
                     Row(
                         Modifier.fillMaxWidth()
                             .clickable(
@@ -2142,14 +2151,29 @@ fun CinemaScreen(
                             color = Ink.TextHi,
                         )
                         Box(Modifier.weight(1f))
-                        if (!toolsOpen) {
-                            Text(
-                                "后退 · 浮窗 · 换片 · 麦 · 测试流",
-                                fontSize = 10.5.sp, color = Ink.TextLow, maxLines = 1,
+                        /* 自绘 chevron（V 形两笔圆头线）：material-icons 不在依赖里，
+                           为一颗箭头引 10MB+ 的 icons-extended 不值；文字 ⌄ 字形小
+                           又没分量（用户反馈）。展开时随 chevRot 平滑转 180°。 */
+                        androidx.compose.foundation.Canvas(
+                            Modifier
+                                .size(width = 24.dp, height = 24.dp)
+                                .rotate(chevRot),
+                        ) {
+                            val p = androidx.compose.ui.graphics.Path().apply {
+                                moveTo(size.width * 0.26f, size.height * 0.38f)
+                                lineTo(size.width * 0.5f, size.height * 0.64f)
+                                lineTo(size.width * 0.74f, size.height * 0.38f)
+                            }
+                            drawPath(
+                                p,
+                                color = Ink.TextMid,
+                                style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                    width = 2.4.dp.toPx(),
+                                    cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                                    join = androidx.compose.ui.graphics.StrokeJoin.Round,
+                                ),
                             )
-                            Box(Modifier.width(8.dp))
                         }
-                        Text(if (toolsOpen) "⌃" else "⌄", fontSize = 13.sp, color = Ink.TextMid)
                     }
                     if (toolsOpen) {
                         Box(Modifier.height(12.dp))
@@ -2190,11 +2214,15 @@ fun CinemaScreen(
                             }
                         }
                         Box(Modifier.height(8.dp))
-                        /* 第 3 行 · 测试流（量具，和浏览态嗅探区同一组地址）。 */
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            DockBtn("HLS 测试流", backdrop, Modifier.weight(1f)) { testUrl(CINEMA_TEST_HLS) }
-                            DockBtn("本地测试页", backdrop, Modifier.weight(1f)) { testUrl(CINEMA_TEST_LOCAL) }
-                            DockBtn("换一条流", backdrop, Modifier.weight(1f)) { testUrl(CINEMA_TEST_HLS_2) }
+                        /* 第 3 行 · 测试流（量具，和浏览态嗅探区同一组地址）。
+                           **只进调试包**（2026-10-05 用户拍板：正式版这些是测试功能，
+                           不该露给用户）；联测/复现照旧用调试包。 */
+                        if (com.ticketfortwo.app.BuildConfig.DEBUG) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                DockBtn("HLS 测试流", backdrop, Modifier.weight(1f)) { testUrl(CINEMA_TEST_HLS) }
+                                DockBtn("本地测试页", backdrop, Modifier.weight(1f)) { testUrl(CINEMA_TEST_LOCAL) }
+                                DockBtn("换一条流", backdrop, Modifier.weight(1f)) { testUrl(CINEMA_TEST_HLS_2) }
+                            }
                         }
                         Box(Modifier.height(12.dp))
                         /* 允许对方控制：原来只有浏览底卡能切，放映态只能看只读胶囊 ——
