@@ -44,6 +44,8 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.DpOffset
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.contentDescription
 import com.kyant.backdrop.highlight.Highlight
 import com.kyant.backdrop.shadow.InnerShadow
 import com.kyant.backdrop.shadow.Shadow
@@ -793,21 +795,25 @@ fun GlassPageBar(
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (onBack != null) {
-                /* 箭头/标题色彩**钉死 Ink.TextHi**（固定白，2026-10-05 用户两轮反馈：
-                   系统深色模式下箭头变黑看不清 —— 原来 tint/color 走
-                   MaterialTheme.colorScheme.onBackground，跟了主题变体就可能落黑；
-                   现在 Icon tint 与 IconButton 的 contentColor 双保险都钉死，
-                   主题怎么翻都亮）。 */
+                /* 箭头改**文本画法**（2026-10-05 用户第三轮反馈，真机深色模式下
+                   Material Icon 仍渲染成黑）：标题也是 Text + Ink.TextHi，用户
+                   同屏实测"标题白、箭头黑" —— 这就是证据链：系统没反色（反了
+                   标题也黑），黑在 Icon/IconButton 那套着色链路上（钉了 tint
+                   和 contentColor 两道都没救回来）。不再和组件斗法：直接用
+                   和标题**完全同一种渲染**（Text），标题能白它就一定白。 */
                 androidx.compose.material3.IconButton(
                     onClick = onBack,
                     colors = androidx.compose.material3.IconButtonDefaults.iconButtonColors(
                         contentColor = com.ticketfortwo.app.ui.theme.Ink.TextHi,
                     ),
                 ) {
-                    androidx.compose.material3.Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "返回",
-                        tint = com.ticketfortwo.app.ui.theme.Ink.TextHi
+                    androidx.compose.material3.Text(
+                        "←",
+                        fontSize = 21.sp,
+                        color = com.ticketfortwo.app.ui.theme.Ink.TextHi,
+                        modifier = Modifier.semantics {
+                            contentDescription = "返回"
+                        },
                     )
                 }
             }
