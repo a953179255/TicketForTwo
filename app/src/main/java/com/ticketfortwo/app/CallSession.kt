@@ -973,6 +973,17 @@ object CallSession {
         hostJob?.cancel(); hostJob = null
         viewerGoneJob?.cancel(); viewerGoneJob = null
         teardownPeer()
+        /* 自播播放器是"放映"这一整条线的源头，停会必须跟着停（2026-10-05）：
+           它的停止原本只挂在放映厅页面里（页面在，才有人管）—— 人离场后
+           关厅就没人收了，表现为"厅关了、人也回首页了，电影声音还在放"
+           （用户实测）。这里是所有结束路径的汇聚点（主动收厅 / 失败 /
+           被系统撤销），放在这里才不会漏某一条。回显浮窗同理：ticker 查
+           isActive 会自己散场，但那要等半拍 —— 直接收掉更干脆。 */
+        com.ticketfortwo.app.cinema.TheaterPlayer.stop()
+        val fs = com.ticketfortwo.app.cinema.FloatPlayer.state.value
+        if (fs.active || fs.prewarm || fs.relay) {
+            com.ticketfortwo.app.cinema.FloatPlayer.stop(context)
+        }
         runCatching { capture?.release() }
         capture = null
         runCatching { theaterCapture?.release() }
