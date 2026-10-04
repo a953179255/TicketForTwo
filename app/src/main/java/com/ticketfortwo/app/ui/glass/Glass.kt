@@ -797,7 +797,11 @@ fun GlassPageBar(
                     androidx.compose.material3.Icon(
                         Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "返回",
-                        tint = androidx.compose.material3.MaterialTheme.colorScheme.onBackground
+                        /* 色彩**钉死 Ink 亮色**（2026-10-05 用户反馈：系统深色模式下
+                           箭头变黑看不清）—— 原 tint 跟 MaterialTheme.colorScheme
+                           走，而全 App 的页面文字都用 Ink 暗壁纸色板，就这里俩
+                           落单跟了主题。App 是"壁纸+玻璃"视觉，永远压在暗底上。 */
+                        tint = com.ticketfortwo.app.ui.theme.Ink.TextHi
                     )
                 }
             }
@@ -805,7 +809,7 @@ fun GlassPageBar(
                 title,
                 style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                color = androidx.compose.material3.MaterialTheme.colorScheme.onBackground,
+                color = com.ticketfortwo.app.ui.theme.Ink.TextHi,
                 modifier = Modifier.weight(1f).padding(horizontal = 6.dp)
             )
             actions()

@@ -16,6 +16,7 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.draw.rotate
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.layout.Arrangement
@@ -1628,20 +1629,9 @@ fun CinemaScreen(
         /* 全屏态（deckHidden）顶栏也收：轻点画面或返回键唤回 —— 顶栏占的位置太大，
            全屏就该给画面让路（2026-10-01 用户反馈+截图）。 */
         if (!(theater && deckHidden.value)) GlassPageBar(backdrop, title = "放映厅", onBack = onBack) {
-            /* 放映模式下顶栏要挤下「放映|浏览」，状态句换短版 + 让位（weight），
-               否则标题被挤到换行（真机截图实测：放映/厅 断成两行）。 */
-            Text(
-                when {
-                    theater && viewerOnline -> "1 人已直连"
-                    theater -> "等对方进来"
-                    viewerOnline -> "对方已在厅里"
-                    else -> "厅已开 · 等对方进来"
-                },
-                fontSize = 11.5.sp,
-                color = if (viewerOnline) Ink.Live else Ink.TextLow,
-                maxLines = 1,
-                modifier = Modifier.weight(1f),
-            )
+            /* 顶栏状态句已删（2026-10-05 用户拍板）：与甲板"对方还没进厅"完全重复，
+               对方在不在以甲板状态条/全屏右上角胶囊为准，顶栏只留标题+模式开关。 */
+            Box(Modifier.weight(1f))
             /* 放映/浏览 模式开关（方案B）：**横竖屏都显示** —— 原来横屏隐藏这颗开关，
                而横屏布局又不认 theater 状态，于是"横过来就回到浏览界面"且无从切回
                （2026-10-01 用户反馈）。配合下方横屏放映形态一起修。 */
@@ -1763,6 +1753,32 @@ fun CinemaScreen(
                                 note = "已退出全屏"
                             },
                         )
+                    }
+                    /* 横屏全屏同款对方在场胶囊（2026-10-05）—— 与竖屏全屏同一套。 */
+                    if (deckHidden.value) {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .statusBarsPadding()
+                                .padding(top = 4.dp, end = 12.dp),
+                            horizontalArrangement = Arrangement.End,
+                        ) {
+                            Box(
+                                Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(
+                                        if (viewerOnline) Ink.Live.copy(alpha = 0.22f)
+                                        else Color(0x96000000)
+                                    )
+                                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                            ) {
+                                Text(
+                                    if (viewerOnline) "对方已在厅里" else "对方还没进厅",
+                                    fontSize = 11.sp,
+                                    color = if (viewerOnline) Ink.Live else Ink.TextMid,
+                                )
+                            }
+                        }
                     }
                 }
             } else {
@@ -1947,6 +1963,34 @@ fun CinemaScreen(
                             }
                         },
                     )
+                }
+                /* 全屏态右上角：对方在场指示（2026-10-05 用户要求）—— 顶栏收掉了，
+                   全屏里也得能看出对方还在不在，以防他出去了都没发现。
+                   纯显示、不消费点击：点了会落回下面的手势层（单击出控制层）。 */
+                if (theater && deckHidden.value) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .statusBarsPadding()
+                            .padding(top = 4.dp, end = 12.dp),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(
+                                    if (viewerOnline) Ink.Live.copy(alpha = 0.22f)
+                                    else Color(0x96000000)
+                                )
+                                .padding(horizontal = 10.dp, vertical = 4.dp),
+                        ) {
+                            Text(
+                                if (viewerOnline) "对方已在厅里" else "对方还没进厅",
+                                fontSize = 11.sp,
+                                color = if (viewerOnline) Ink.Live else Ink.TextMid,
+                            )
+                        }
+                    }
                 }
             }
             /* 面板沉底（2026-10-05 用户拍板）：放映甲板贴屏幕底部，「更多工具」
