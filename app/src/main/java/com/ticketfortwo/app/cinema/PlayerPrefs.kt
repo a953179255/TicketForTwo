@@ -48,6 +48,16 @@ object PlayerPrefs {
         ladderIndex = sp.getInt("ladder", 1).coerceIn(0, LADDERS.size - 1)
     }
 
+    /**
+     * 同步读盘拿快进步长：**给浮窗服务这类非 Compose 场景用**（2026-10-04）。
+     * [stepSec] 是进程级 state，要有人调过 [init] 才准 —— 而浮窗服务不一定赶在
+     * 放映页之后起来（进程冷启动 + 小窗先复活时它可能更早），直接读盘才稳。
+     */
+    fun stepSecOf(context: Context): Int =
+        context.applicationContext
+            .getSharedPreferences("t2_player", Context.MODE_PRIVATE)
+            .getInt("step_sec", 10).coerceIn(5, 120)
+
     fun setStep(sec: Int, context: Context) {
         val v = sec.coerceIn(5, 120)
         stepSec = v
