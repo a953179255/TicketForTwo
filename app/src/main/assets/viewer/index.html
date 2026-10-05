@@ -682,18 +682,26 @@ function askToPlay(title, body){
   panelIsGesture = true;   // 手势卡不许被"连上了"之类的常规收卡顺手关掉（2026-10-01 实测：弹一下即逝 → 观众黑屏）
   show(`<h1>${escapeHtml(title || '画面已到')}</h1>
     <p class="muted">${escapeHtml(body || '浏览器的自动播放被拦住了，点一下开始。')}</p>
-    <button class="primary" id="btnListen">开始播放</button>`);
+    <button class="primary" id="btnListen">开始播放</button>
+    <button id="btnLater" style="margin-left:8px;background:transparent;color:#9aa6b8;border:none;cursor:pointer;font-size:14px">先不看了</button>`);
   /* 点了之后**必须补一条回执**。
      原来这里只有 `video.play().then(hidePanel)`，而回执只挂在 ontrack 那一支
      `play().then` 上 —— 手机浏览器几乎必然先拦一次自动播放（画面里带声音时必拦），
      于是走了 ontrack 的 catch（弹卡），人点完按钮画面虽然出来了，回执却永远不发
      → 房主那边一直挂"等对方那边出画面…"（2026-10-01 双端实测：主机日志里
-     CINEMA_ACK 一行都没有，而观众其实已经在看了）。 */
+     CINEMA_ACK 一行都没有，而观众其实已经在看了）。
+     转播态（B 档）补一手（2026-10-06 用户实测）：房主暂停中帧桥零帧，
+     video.play() 对无帧流可能悬而不决 —— 点"开始播放"就**同时遥控房主播放**，
+     帧一开始流动画面自然出来，卡也就有了收起的理由。 */
   $('btnListen').onclick = () => video.play().then(() => {
     // 转播态（B 档）：画面是房主转过来的，出画面就等于"放映成功"，按当前版本回执
-    if (cine && !cine.url) cineAck(true, 'ok', '转发画面已到', cine.ver);
+    if (cine && !cine.url) {
+      cineAck(true, 'ok', '转发画面已到', cine.ver);
+      runCute(() => send({ t: 'ccmd', f: 'play' }));   // 遥控房主开播（闸门在房主侧判 allow）
+    }
     hidePanel();
   }).catch(()=>{});
+  $('btnLater').onclick = () => { panelIsGesture = false; hidePanel(); };
 }
 
 /**
@@ -998,8 +1006,13 @@ function onCinema(f) {
   document.getElementById('watchBar').classList.add('hide');  // 一次只留一条横条
   bWanted = true; syncBCards();   // 方案B：竖屏换卡片（见 syncBCards）
   /* 顶栏那句"语音已通"是等候期的话；开始放映之后它还挂着，
-     观众会以为仍然没画面。状态换了，措辞也要跟着换。 */
-  $('topRight').textContent = relayed ? '画面正直接转过来…' : '同步放映中';
+     观众会以为仍然没画面。状态换了，措辞也要跟着换。
+     转播态再按**房主的播放状态**分（2026-10-06 用户实测）：暂停中就是
+     "房主已暂停"—— 之前永远写"画面正在接转过来…"，配合零帧黑屏，
+     看着就像卡死了。 */
+  $('topRight').textContent = relayed
+    ? (st.playing ? '画面正直接转过来…' : '房主已暂停 · 播放键让他继续')
+    : '同步放映中';
   // 两种模式的画质来源不一样，那行小字要跟着换：转播态说"本地播同一条源"是假的
   const bsub = document.getElementById('bSub');
   if (bsub) bsub.textContent = relayed
@@ -1447,6 +1460,11 @@ document.getElementById('bFull').onclick = () => document.getElementById('btnFul
   bind(document.getElementById('cTrack'));
   bind(document.getElementById('bTrack'));   // 方案B 卡片里的进度轨：同一套点/拖逻辑
 })();
+/* 转播态首帧真流动后，右上角从"画面正在接转过来…"换成定心丸（2026-10-06）。
+   用 video 的 playing 事件驱动，cine 判转播分支。 */
+video.addEventListener('playing', () => {
+  if (cine && !cine.url && video.videoWidth > 0) $('topRight').textContent = '转播中';
+});
 lv.addEventListener('loadedmetadata', () => {
   // 首帧出来才敢说"原生画质"：这一行是 S 档成没成的直接证据
   if (!lv.videoWidth) return;

@@ -35,13 +35,20 @@ class PlayerShareController(private val context: Context) {
     private var videoTrack: VideoTrack? = null
     private var capturer: PlayerCapturer? = null
     private var surfaceHelper: SurfaceTextureHelper? = null
+    /** 当前帧桥尺寸（重建判据）与节流帧率。 */
+    private var curW = 0
+    private var curH = 0
+    private var lastFps = 30
 
     /**
-     * 起轨。[fps] 只影响 helper 线程节流提示（帧来自播放器，尺寸也由播放器决定）。
-     * 返回 null = RtcEngine 还没初始化（调用方负责 init）。
+     * 起轨。[videoW/videoH] 是**视频真实尺寸**（调用方等 onVideoSizeChanged 探到再调，
+     * 见 CallSession.attachTheaterPlayback）—— 帧桥缓冲必须一次到位：运行中改
+     * SurfaceTexture 缓冲实测会把解码器投帧整个弄断（改完只剩 1 帧，2026-10-06）。
+     * 之后尺寸再变（换片竖横切换）走 [rebuildBridge] 整链重建。
      */
-    fun start(fps: Int = 30): VideoTrack? {
+    fun start(fps: Int = 30, videoW: Int = 1920, videoH: Int = 1080): VideoTrack? {
         if (videoTrack != null) return videoTrack
+        lastFps = fps
         return runCatching {
             val source = RtcEngine.factory.createVideoSource(true, false)
             val helper = SurfaceTextureHelper.create(
@@ -49,28 +56,44 @@ class PlayerShareController(private val context: Context) {
             )
             val cap = PlayerCapturer()
             cap.initialize(helper, context, source.capturerObserver)
-            /* 帧桥缓冲按**视频真实尺寸**建（2026-10-06 竖屏修复）：以前写死
-               1920×1080 —— 竖屏帧被 MediaCodec 拉伸进横屏缓冲，观众端和本地
-               回显从源头就是变形画面，网页端 contain 救不回来。
-               起轨时视频多半已在播（尺寸已知）；还没探到就按 16:9 起，
-               onVideoSizeChanged 一到立即换（sizeSink → adjustSize）。 */
-            val vs = TheaterPlayer.state.value
-            val w0 = vs.videoW.takeIf { it > 0 } ?: 1920
-            val h0 = vs.videoH.takeIf { it > 0 } ?: 1080
-            cap.startCapture(w0, h0, fps)
-            TheaterPlayer.sizeSink = { w, h -> cap.adjustSize(w, h) }
+            curW = videoW
+            curH = videoH
+            cap.startCapture(videoW, videoH, fps)
+            TheaterPlayer.sizeSink = { w, h ->
+                if (w != curW || h != curH) rebuildBridge(w, h)
+            }
             val track = RtcEngine.factory.createVideoTrack("theater", source)
             videoSource = source
             videoTrack = track
             capturer = cap
             surfaceHelper = helper
             TheaterPlayer.relaying = true
-            Log.i("PlayerShare", "转播轨已建 fps=$fps ${track.id()}")
+            Log.i("PlayerShare", "转播轨已建 ${videoW}×$videoH fps=$fps ${track.id()}")
             track
         }.getOrElse {
             Log.w("PlayerShare", "转播轨建失败: ${it.message}")
             null
         }
+    }
+
+    /**
+     * 尺寸变化（换片竖↔横 / 换清晰度档）：**整条帧桥链重建** —— 全新
+     * SurfaceTextureHelper/SurfaceTexture，播放器输出切到新面。绝不改旧
+     * SurfaceTexture 的缓冲（实测断帧流）；重建瞬间画面闪一帧可接受。
+     */
+    private fun rebuildBridge(w: Int, h: Int) {
+        if (w <= 0 || h <= 0) return
+        Log.i("PlayerShare", "尺寸变化 ${curW}×$curH → ${w}×$h，重建帧桥")
+        runCatching { capturer?.stopCapture() }   // 播放器输出暂回 UI 面
+        runCatching { surfaceHelper?.dispose() }
+        val helper = SurfaceTextureHelper.create(
+            "TheaterCaptureThread", RtcEngine.eglBase.eglBaseContext,
+        )
+        surfaceHelper = helper
+        capturer?.rebind(helper)
+        capturer?.startCapture(w, h, lastFps)
+        curW = w
+        curH = h
     }
 
     fun stopCapture() {
@@ -143,18 +166,9 @@ class PlayerShareController(private val context: Context) {
 
         override fun changeCaptureFormat(width: Int, height: Int, fps: Int) = Unit
 
-        /**
-         * 放映中视频换尺寸（竖屏片首探 / 换清晰度档）：帧桥缓冲跟着换。
-         * 两个口都要动（见 startCapture 注释）：setDefaultBufferSize 管解码器
-         * 投帧的缓冲，setTextureSize 管 helper 打包 VideoFrame 时报的尺寸。
-         * WebRTC 编码器收到新尺寸的帧会自行重新协商 —— 单轨中途变分辨率是
-         * libwebrtc 支持的路径（屏幕分享旋转横竖屏走的就是它）。
-         */
-        fun adjustSize(w: Int, h: Int) {
-            if (w <= 0 || h <= 0) return
-            helper?.surfaceTexture?.setDefaultBufferSize(w, h)
-            runCatching { helper?.setTextureSize(w, h) }
-            Log.i("PlayerShare", "帧桥缓冲跟随视频 ${w}×$h")
+        /** 重建帧桥后把新 helper 换进来（observer 等不变）。 */
+        fun rebind(newHelper: SurfaceTextureHelper?) {
+            helper = newHelper
         }
 
         override fun dispose() { stopCapture() }

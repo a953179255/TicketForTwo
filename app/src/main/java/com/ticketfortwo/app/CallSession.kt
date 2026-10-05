@@ -8,6 +8,7 @@ import android.util.Log
 import com.ticketfortwo.app.capture.ScreenShareController
 import com.ticketfortwo.app.PlayMode
 import com.ticketfortwo.app.cinema.CinemaSync
+import com.ticketfortwo.app.cinema.TheaterPlayer
 import com.ticketfortwo.app.rtc.Peer
 import com.ticketfortwo.app.rtc.RtcEngine
 import com.ticketfortwo.app.signaling.SignalHub
@@ -574,35 +575,52 @@ object CallSession {
             return
         }
         RtcEngine.init(context)
-        val cap = com.ticketfortwo.app.capture.PlayerShareController(context.applicationContext).also {
-            theaterCapture = it
+        note("等画面出来就开转…")
+        /* 帧桥尺寸必须**一次到位**（2026-10-06 竖屏双修实测）：运行中改
+           SurfaceTexture 缓冲会把解码器投帧整个弄断（改完只剩 1 帧）。所以
+           等自播探到真实尺寸（onVideoSizeChanged，约等于首帧时刻）再建轨 ——
+           等待窗口就是起播那两三秒，观众端本来就在"接转中"。等待期间自播
+           照常在本地播（relaying 还没置位，画面走 TextureView）。 */
+        scope.launch {
+            var w = 0
+            var h = 0
+            for (i in 0 until 40) {
+                val vs = TheaterPlayer.state.value
+                if (vs.videoW > 0) { w = vs.videoW; h = vs.videoH; break }
+                delay(250)
+            }
+            if (localVideoTrack != null) return@launch   // 等待期间被换片/收厅
+            if (w <= 0) { w = 1920; h = 1080 }           // 超时兜底：至少不比写死差
+            val cap = com.ticketfortwo.app.capture.PlayerShareController(context.applicationContext).also {
+                theaterCapture = it
+            }
+            val vt = cap.start(fps = fps, videoW = w, videoH = h)
+            if (vt == null) {
+                note("自播画面没能接上转播轨 —— 本场退回发地址（对方自己播）")
+                return@launch
+            }
+            localVideoTrack = vt
+            _localVideo.value = vt
+            // B 档观众拿不到地址、也没有音频轨 —— 房主的麦克风是他唯一的声源
+            hintMicForSoundRelay("我播他看")
+            val p = peer
+            if (p == null) {
+                note("转播轨已备好，等对方进厅就发过去")
+                return@launch
+            }
+            val senders = runCatching { p.addLocalTracks(vt, null) }.getOrNull()
+            if (senders?.video == null) {
+                note("转播轨接不进这条连接 —— 让对方重新点一次链接")
+                return@launch
+            }
+            videoSender = senders.video
+            applyVideoBitrateCap(quality.maxVideoBps)
+            p.startOffer()
+            if (p.connectionState == org.webrtc.PeerConnection.IceConnectionState.CONNECTED) {
+                _state.value = State.Connected
+            }
+            note("画面已接上，正在转给对方（他不用挂代理）")
         }
-        val vt = cap.start(fps = fps)
-        if (vt == null) {
-            note("自播画面没能接上转播轨 —— 本场退回发地址（对方自己播）")
-            return
-        }
-        localVideoTrack = vt
-        _localVideo.value = vt
-        // B 档观众拿不到地址、也没有音频轨 —— 房主的麦克风是他唯一的声源
-        hintMicForSoundRelay("我播他看")
-        val p = peer
-        if (p == null) {
-            note("转播轨已备好，等对方进厅就发过去")
-            return
-        }
-        val senders = runCatching { p.addLocalTracks(vt, null) }.getOrNull()
-        if (senders?.video == null) {
-            note("转播轨接不进这条连接 —— 让对方重新点一次链接")
-            return
-        }
-        videoSender = senders.video
-        applyVideoBitrateCap(quality.maxVideoBps)
-        p.startOffer()
-        if (p.connectionState == org.webrtc.PeerConnection.IceConnectionState.CONNECTED) {
-            _state.value = State.Connected
-        }
-        note("画面已接上，正在转给对方（他不用挂代理）")
     }
 
     /**

@@ -62,8 +62,15 @@ object TheaterPlayer {
         Log.i("TheaterPlay", "attachExternal s=" + (s != null) + " exoAlive=" + (exo != null))
         handler.post {
             val p = exo ?: return@post
-            if (s != null) p.setVideoSurface(s)
-            else surface?.let { p.setVideoTextureView(it) } ?: p.setVideoSurface(null)
+            if (s != null) {
+                p.setVideoSurface(s)
+                /* 切面后强制重新出帧（2026-10-06 实测）：播放器已开播再换输出面，
+                   ExoPlayer 只补 1 帧就停（解码器不自动向新 surface 续渲染）——
+                   seek 到当前位置触发 flush+重新解码，帧流恢复。旧时序"先建轨后
+                   起播"没这问题（首帧就投在帧桥面上），但等尺寸必须先起播，
+                   这一刀躲不掉。 */
+                runCatching { p.seekTo(p.currentPosition) }
+            } else surface?.let { p.setVideoTextureView(it) } ?: p.setVideoSurface(null)
         }
     }
     /**
@@ -75,6 +82,8 @@ object TheaterPlayer {
     var sizeSink: ((w: Int, h: Int) -> Unit)? = null
 
     private var startMs = 0L
+    /** 暂停保帧上次重发时刻（见 ticker 内注释）。 */
+    private var lastFreezeSeek = 0L
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
 
@@ -85,6 +94,36 @@ object TheaterPlayer {
             val pos = p.currentPosition.coerceAtLeast(0L)
             val dur = p.duration.takeIf { it > 0 } ?: 0L
             val playing = p.isPlaying
+            /* 尺寸探测**双保险**（2026-10-06 实测）：onVideoSizeChanged 在
+               "没挂任何 surface"时不可靠（自播起播早于画面挂载/帧桥挂载的窗口期，
+               整段播完回调一次没来）—— ticker 直接轮询 videoSize，1 秒内必到。 */
+            if (_state.value.videoW <= 0) {
+                val vs = p.videoSize
+                val rot = vs.unappliedRotationDegrees
+                val w: Int
+                val h: Int
+                if (rot == 90 || rot == 270) { w = vs.height; h = vs.width }
+                else { w = vs.width; h = vs.height }
+                if (w > 0 && h > 0) {
+                    Log.i("TheaterPlay", "视频尺寸(轮询) $w×$h rot=$rot")
+                    _state.value = _state.value.copy(videoW = w, videoH = h)
+                    sizeSink?.invoke(w, h)
+                }
+            }
+            /* 暂停保帧（2026-10-06 用户实测）：转播中房主一暂停，解码器不再出帧
+               → 帧桥零帧 → 观众端纯黑：轨到了但 play() 对无帧流悬而不决，
+               "画面已到"卡点了没反应还关不掉，右上角"画面正在接转过来…"永挂。
+               每 2.5 秒把播放器往当前位置重 seek 一次 —— 强制解码器重新输出
+               当前帧，观众看到的就是冻结的暂停画面（与放映端所见一致）。
+               只在转播中做（直连自播无观众）；播到结尾（pos==dur）不折腾。 */
+            if (!playing && relaying && pos > 0 && dur > 0 && pos < dur) {
+                val now = android.os.SystemClock.uptimeMillis()
+                if (now - lastFreezeSeek > 2500) {
+                    lastFreezeSeek = now
+                    Log.i("TheaterPlay", "暂停保帧 seek @$pos")
+                    runCatching { p.seekTo(pos) }
+                }
+            }
             _state.value = _state.value.copy(
                 playing = playing,
                 posMs = pos,
