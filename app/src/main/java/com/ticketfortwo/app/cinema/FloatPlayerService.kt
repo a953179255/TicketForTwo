@@ -65,12 +65,11 @@ class FloatPlayerService : android.app.Service() {
     private var inPrewarm = false
     private var windowLp: WindowManager.LayoutParams? = null
     private var lastSeekMs = -1L
-    private var titleView: TextView? = null
     /** 播放/暂停键（两种窗共用一个引用：relayTicker 要跟着放映态翻图标）。 */
     private var toggle: TextView? = null
-    /** 控制条进度线 + 时间（2026-10-01 用户要求：浮窗也要能看进度、拖进度）。 */
+    /** 控制条进度线（2026-10-01 用户要求：浮窗也要能看进度、拖进度）。
+     *  时间小字与标题 2026-10-05 随"B 站式统一"去掉 —— 两种窗一套排版。 */
     private var seekBar: android.widget.SeekBar? = null
-    private var timeView: TextView? = null
     /** 用户正拖着进度条 —— 拖动期间 publish 别把进度拽回去（和滑块打架）。 */
     private var seekTracking = false
     private val handler = Handler(Looper.getMainLooper())
@@ -394,8 +393,7 @@ class FloatPlayerService : android.app.Service() {
                     sb.isEnabled = false   // 时长未知（直播/未探到）：线留着、拖不了
                 }
             }
-            timeView?.text = com.ticketfortwo.app.cinema.CinemaSync.formatTime(pos) +
-                " / " + com.ticketfortwo.app.cinema.CinemaSync.formatTime(dur)
+            toggle?.text = if (p.isPlaying) "❚❚" else "▶"
         }
     }
 
@@ -412,7 +410,6 @@ class FloatPlayerService : android.app.Service() {
         FloatPlayer.update {
             it.copy(url = req.url, title = req.title, ready = false, error = null, durMs = 0L)
         }
-        titleView?.text = req.title
     }
 
     /** 只摘视图，播放器不动 —— 分享屏幕时用（观众还在跟这条进度）。 */
@@ -485,104 +482,21 @@ class FloatPlayerService : android.app.Service() {
         placeholder = ph
         root.addView(ph)
 
-        /* 控制条**覆盖在画面内部**（不再占独立空间）：默认藏起来，
-           轻点窗身从画面里浮出来，3 秒自动收（2026-09-30 用户要求）。
-           2026-10-01 加高为两行：上 = 可拖进度线（能看放哪了、能拖），
-           下 = 标题 · 时间 · 暂停 · 关闭（用户反馈"看不到进度也拖不了"）。 */
-        val bar = FrameLayout(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, dp(BAR_H_DP), Gravity.BOTTOM,
-            )
-            // 半透明压在画面上：看得清按钮，又不把画面整体遮掉一条
-            setBackgroundColor(0xB3000000.toInt())
-            visibility = View.GONE
-        }
-        this.bar = bar
-
-        // 进度线：拖动 seek（松手才提交，拖动中 publish 让位）
-        val sb = android.widget.SeekBar(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, dp(22),
-                Gravity.TOP,
-            ).apply { topMargin = dp(2); marginStart = dp(8); marginEnd = dp(70) }
-            max = 1000
-            splitTrack = false
-            progressTintList = android.content.res.ColorStateList.valueOf(0xFF7AD8C3.toInt())
-            thumbTintList = android.content.res.ColorStateList.valueOf(0xFFFFFFFF.toInt())
-            setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(sb: android.widget.SeekBar, p: Int, fromUser: Boolean) = Unit
-                override fun onStartTrackingTouch(sb: android.widget.SeekBar) {
-                    seekTracking = true
-                }
-                override fun onStopTrackingTouch(sb: android.widget.SeekBar) {
-                    val d = player?.duration ?: 0L
-                    if (d > 0) player?.seekTo(d * sb.progress / 1000L)
-                    seekTracking = false
-                }
-            })
-        }
-        seekBar = sb
-        bar.addView(sb)
-
-        val t = TextView(this).apply {
-            text = title
-            setTextColor(0xFFFFFFFF.toInt())
-            textSize = 11f
-            maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.START or Gravity.BOTTOM,
-            ).apply { marginStart = dp(8); bottomMargin = dp(7) }
-        }
-        // 底行左侧空间 = 窗宽 - 时间 - 两颗键（约 130dp）—— 不限宽会顶到时间上
-        t.maxWidth = (w * 45) / 100
-        titleView = t
-        bar.addView(t)
-
-        // 时间：底行右侧、按钮左边
-        val tm = TextView(this).apply {
-            text = "0:00 / 0:00"
-            setTextColor(0xCCFFFFFF.toInt())
-            textSize = 9.5f
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.END or Gravity.BOTTOM,
-            ).apply { marginEnd = dp(66); bottomMargin = dp(9) }
-        }
-        timeView = tm
-        bar.addView(tm)
-
-        /* 「换片」键已从浮窗控制条移除（2026-10-01 用户拍板：浮窗就是拿来播放的，
-           暂停 + 关闭就够；换片走放映厅甲板的「换片」键）。onPickRequest 回调
-           与顶替询问逻辑保留 —— 以后要恢复一颗键就能用。 */
-        val close = TextView(this).apply {
-            text = "×"
-            setTextColor(0xFFFFFFFF.toInt())
-            textSize = 16f
-            layoutParams = FrameLayout.LayoutParams(
-                dp(28), dp(28), Gravity.END or Gravity.BOTTOM,
-            ).apply { marginEnd = dp(6); bottomMargin = dp(4) }
-            setOnClickListener { teardown(); stopSelf() }
-        }
-        bar.addView(close)
-        val toggle = TextView(this).apply {
-            text = "❚❚"
-            setTextColor(0xFFFFFFFF.toInt())
-            textSize = 13f
-            layoutParams = FrameLayout.LayoutParams(
-                dp(28), dp(28), Gravity.END or Gravity.BOTTOM,
-            ).apply { marginEnd = dp(34); bottomMargin = dp(4) }
-            setOnClickListener {
-                val p = player ?: return@setOnClickListener
-                if (p.isPlaying) { p.pause(); text = "▶" } else { p.play(); text = "❚❚" }
-            }
-        }
-        bar.addView(toggle)
-        this.toggle = toggle
-        root.addView(bar)
+        /* 控制层：B 站式统一排版（2026-10-05 用户拍板"两种悬浮窗只留一种样式"）——
+           顶部 ✕/⤢ 角键行 + 底部三键（-N/❚❚/+N）与整条进度条，
+           轻点唤出 / 再点收起 / 3 秒自收，和回显窗一模一样；唯一区别是动作对象：
+           本窗控 ExoPlayer（浮窗自己那份），回显窗控自播播放器。 */
+        addBStyleControls(
+            root,
+            onStep = { d ->
+                player?.let { pl -> runCatching { pl.seekTo((pl.currentPosition + d).coerceAtLeast(0L)) } }
+            },
+            onToggle = { player?.let { pl -> if (pl.isPlaying) pl.pause() else pl.play() } },
+            onSeek = { ms -> player?.seekTo(ms) },
+            durMs = { player?.duration?.takeIf { it > 0 } ?: 0L },
+            onClose = { teardown(); stopSelf() },
+            onExpand = { teardown(); stopSelf(); openCinema() },
+        )
 
         val lp = WindowManager.LayoutParams(
             w, h,
@@ -607,10 +521,15 @@ class FloatPlayerService : android.app.Service() {
         val slop = ViewConfiguration.get(this).scaledTouchSlop
         var lastTapAt = 0L
         val singleTapRun = Runnable {
-            bar?.let { b ->
-                b.removeCallbacks(hideBarRun)
+            val b = bar ?: return@Runnable
+            b.removeCallbacks(hideBarRun)
+            if (b.visibility == View.VISIBLE) {
+                // 再点一下画面 = 主动收起（与回显窗同款；3 秒自收保留）
+                hideBarRun.run()
+            } else {
                 b.visibility = View.VISIBLE
                 b.alpha = 1f
+                topRowView?.let { it.visibility = View.VISIBLE; it.alpha = 1f }
                 b.postDelayed(hideBarRun, 3_000)
             }
         }
@@ -679,8 +598,8 @@ class FloatPlayerService : android.app.Service() {
         bar?.animate()?.alpha(0f)?.setDuration(200)?.withEndAction {
             bar?.visibility = View.GONE
         }
-        relayTop?.animate()?.alpha(0f)?.setDuration(200)?.withEndAction {
-            relayTop?.visibility = View.GONE
+        topRowView?.animate()?.alpha(0f)?.setDuration(200)?.withEndAction {
+            topRowView?.visibility = View.GONE
         }
     }
 
@@ -696,7 +615,7 @@ class FloatPlayerService : android.app.Service() {
     /** 快进快退的落点提示（画面中央闪一下）。 */
     private var hud: TextView? = null
     /** 回显窗顶部角键行（✕ / ⤢）：与控制层同显同隐（2026-10-05 用户拍板：不再常显）。 */
-    private var relayTop: android.view.ViewGroup? = null
+    private var topRowView: android.view.ViewGroup? = null
 
     /** 圆底半透明的键（角键 / 三键同语言：深底 + 极淡白描边 + 白字）。 */
     private fun roundKey(sizeDp: Int, text: String, fs: Float): TextView =
@@ -722,6 +641,162 @@ class FloatPlayerService : android.app.Service() {
         }
 
     private fun cornerKey(glyph: String, fs: Float): TextView = roundKey(26, glyph, fs)
+
+    /**
+     * B 站式控制层（**两种悬浮窗共用** —— 2026-10-05 用户拍板："没必要做两种悬浮窗
+     * 样式，保留一种就行了"）。
+     *
+     * 布局：顶部 ✕/⤢ 角键行 + 底部三键（-N/❚❚/+N）横排居中 + 整条贴底进度条 + HUD。
+     * 显隐：轻点唤出、再点收起、3 秒自收（bar 与 topRowView 由 hideBarRun 同收）。
+     * 动作差异由调用方回调注入：网页浮窗 = ExoPlayer，回显窗 = 自播播放器。
+     */
+    private fun addBStyleControls(
+        root: FrameLayout,
+        onStep: (Long) -> Unit,
+        onToggle: () -> Unit,
+        onSeek: (Long) -> Unit,
+        durMs: () -> Long,
+        onClose: () -> Unit,
+        onExpand: () -> Unit,
+    ) {
+        val step = PlayerPrefs.stepSecOf(this)
+        stepSec = step
+
+        val ctrl = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            gravity = Gravity.BOTTOM
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM,
+            )
+            // 底部向上的黑渐变：键和条压在画面上也看得清（B 站同款，不糊黑底条）
+            background = android.graphics.drawable.GradientDrawable().apply {
+                colors = intArrayOf(0x00000000, 0xA6000000.toInt())
+                orientation = android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM
+            }
+            visibility = View.GONE
+        }
+        this.bar = ctrl
+
+        val keys = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT, dp(40),
+            )
+        }
+        /* 三键：小窗最窄才 170dp，所以侧键 28 / 主键 36、间距 7dp ——
+           塞进去还剩两边留白（实测 170dp 档下排布不挤）。形状与全屏播放器
+           的 CtlCircle 同语言（圆底半透明白描边）。步长与设置「快进步长」同源。 */
+        val btnBack = relayKey(28, "-$step", 11.5f).apply {
+            setOnClickListener {
+                onStep(-step * 1000L)
+                flash("⟲ $step 秒")
+                parkCtrl()
+            }
+        }
+        val btnPlay = relayKey(36, "❚❚", 13f).apply {
+            setOnClickListener { onToggle(); parkCtrl() }
+        }
+        val btnFwd = relayKey(28, "+$step", 11.5f).apply {
+            setOnClickListener {
+                onStep(step * 1000L)
+                flash("⟳ $step 秒")
+                parkCtrl()
+            }
+        }
+        keys.addView(btnBack)
+        keys.addView(btnPlay)
+        keys.addView(btnFwd)
+        ctrl.addView(keys)
+        toggle = btnPlay
+
+        /* 整条贴底的进度条：轨道 3dp 半透明白、已播 3dp 品牌青（与全屏同色）。
+           两层必须带 id（background/progress），否则 SeekBar 不认、会整条被拉满。 */
+        val sb = android.widget.SeekBar(this).apply {
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT, dp(18),
+            )
+            max = 1000
+            min = 0
+            splitTrack = false
+            setPadding(0, 0, 0, 0)
+            thumbOffset = 0
+            background = null
+            progressDrawable = buildSeekDrawable()
+            thumb = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.OVAL
+                setColor(0xFFFFFFFF.toInt())
+                setSize(dp(9), dp(9))
+            }
+            setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: android.widget.SeekBar, p: Int, fromUser: Boolean) = Unit
+                override fun onStartTrackingTouch(s: android.widget.SeekBar) {
+                    seekTracking = true
+                    s.removeCallbacks(hideBarRun)      // 拖的时候别把控制层收了
+                }
+                override fun onStopTrackingTouch(s: android.widget.SeekBar) {
+                    val d = durMs()
+                    if (d > 0) onSeek(d * s.progress / 1000L)
+                    seekTracking = false
+                    parkCtrl()
+                }
+            })
+        }
+        seekBar = sb
+        ctrl.addView(sb)
+        root.addView(ctrl)
+
+        /* 角键 ✕/ 随控制层同进同出（常显太抢画面）。两颗键同尺寸同字号。 */
+        val closeKey = cornerKey("×", 16f).apply {
+            layoutParams = FrameLayout.LayoutParams(dp(26), dp(26), Gravity.TOP or Gravity.START)
+                .apply { leftMargin = dp(7); topMargin = dp(7) }
+            setOnClickListener { onClose() }
+        }
+        val expandKey = cornerKey("⤢", 16f).apply {
+            layoutParams = FrameLayout.LayoutParams(dp(26), dp(26), Gravity.TOP or Gravity.END)
+                .apply { rightMargin = dp(7); topMargin = dp(7) }
+            setOnClickListener { onExpand() }
+        }
+        val topRow = android.widget.FrameLayout(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, dp(40), Gravity.TOP,
+            )
+            // 顶部向下的淡黑渐变：键压在亮画面上也看得清（与底部 ctrl 的渐变镜像）
+            background = android.graphics.drawable.GradientDrawable().apply {
+                colors = intArrayOf(0x7A000000, 0x00000000)
+                orientation = android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM
+            }
+            addView(closeKey)
+            addView(expandKey)
+            visibility = View.GONE
+        }
+        topRowView = topRow
+        root.addView(topRow)
+
+        /* HUD 闪现：快进快退给个"⟲ 15 秒"的落点反馈（与全屏播放器手势同语言）。 */
+        val hudTv = TextView(this).apply {
+            visibility = View.GONE
+            setTextColor(0xFFFFFFFF.toInt())
+            textSize = 12.5f
+            gravity = Gravity.CENTER
+            setPadding(dp(13), dp(6), dp(13), dp(6))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(0x99101216.toInt())
+                cornerRadius = dp(14).toFloat()
+            }
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER,
+            )
+            isClickable = false
+            isFocusable = false
+        }
+        hud = hudTv
+        root.addView(hudTv)
+    }
 
     /**
      * 整条贴底的细进度条：轨道 3dp 半透明白、已播 3dp 品牌青（与全屏播放器同色），
@@ -918,119 +993,19 @@ class FloatPlayerService : android.app.Service() {
             handler.postDelayed({ placeholder?.visibility = View.GONE }, 2_500)
         }
 
-        /* 控制层（2026-10-04 定稿，对标哔哩哔哩悬浮窗 + 2026-10-05 二次拍板）：
-           ①角键 ✕/⤢ **收起时藏起来**，随控制层一起出现 —— 常显太抢画面（用户反馈）；
-           ②三键 + 整条进度条**轻点唤出**：再点一下画面可**主动收起**，不点则 3 秒自收
-             （singleTapRun 做成开关，hideBarRun 管收，所以 ctrl 直接挂到 this.bar 上）；
-           ③**不要时间小字**——小窗只管"看得见 + 能控制"，时间回放映页看。
-           三键的步长跟设置里「快进步长」同一份配置（PlayerPrefs）。 */
-        val step = PlayerPrefs.stepSecOf(this)
-        stepSec = step
-
-        val ctrl = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            gravity = Gravity.BOTTOM
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM,
-            )
-            // 底部向上的黑渐变：键和条压在画面上也看得清（B 站同款，不糊黑底条）
-            background = android.graphics.drawable.GradientDrawable().apply {
-                colors = intArrayOf(0x00000000, 0xA6000000.toInt())
-                orientation = android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM
-            }
-            visibility = View.GONE
-        }
-        this.bar = ctrl
-
-        val keys = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            layoutParams = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.MATCH_PARENT, dp(40),
-            )
-        }
-
-        /* 三键：小窗最窄才 170dp，所以侧键 28 / 主键 36、间距 7dp ——
-           塞进去还剩两边留白（实测 170dp 档下排布不挤）。形状与全屏播放器
-           的 CtlCircle 同语言（圆底半透明白描边）。 */
-        val btnBack = relayKey(28, "-$step", 11.5f).apply {
-            setOnClickListener {
-                TheaterPlayer.step(-step * 1000L)
-                flash("⟲ $step 秒")
-                parkCtrl()
-            }
-        }
-        val btnPlay = relayKey(36, "❚❚", 13f).apply {
-            setOnClickListener {
+        /* 控制层：B 站式统一排版共用函数（2026-10-05 "两种悬浮窗只留一种样式"）。
+           回显窗的动作全部打在**自播播放器**（TheaterPlayer）上：
+           ✕ = 只收小窗（放映后台继续，拍板 B），⤢ = 收小窗 + 跳回放映页。 */
+        addBStyleControls(
+            root,
+            onStep = { d -> TheaterPlayer.step(d) },
+            onToggle = {
                 val st = TheaterPlayer.state.value
                 if (st.playing) TheaterPlayer.pause() else TheaterPlayer.play()
-                parkCtrl()
-            }
-        }
-        val btnFwd = relayKey(28, "+$step", 11.5f).apply {
-            setOnClickListener {
-                TheaterPlayer.step(step * 1000L)
-                flash("⟳ $step 秒")
-                parkCtrl()
-            }
-        }
-        keys.addView(btnBack)
-        keys.addView(btnPlay)
-        keys.addView(btnFwd)
-        ctrl.addView(keys)
-        toggle = btnPlay
-
-        /* 整条贴底的进度条：轨道 3dp 半透明白、已播 3dp 品牌青（与全屏同色）。
-           两层必须带 id（background/progress），否则 SeekBar 不认、会整条被拉满。 */
-        val sb = android.widget.SeekBar(this).apply {
-            layoutParams = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.MATCH_PARENT, dp(18),
-            )
-            max = 1000
-            min = 0
-            splitTrack = false
-            setPadding(0, 0, 0, 0)
-            thumbOffset = 0
-            background = null
-            progressDrawable = buildSeekDrawable()
-            thumb = android.graphics.drawable.GradientDrawable().apply {
-                shape = android.graphics.drawable.GradientDrawable.OVAL
-                setColor(0xFFFFFFFF.toInt())
-                setSize(dp(9), dp(9))
-            }
-            setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(s: android.widget.SeekBar, p: Int, fromUser: Boolean) = Unit
-                override fun onStartTrackingTouch(s: android.widget.SeekBar) {
-                    seekTracking = true
-                    s.removeCallbacks(hideBarRun)      // 拖的时候别把控制层收了
-                }
-                override fun onStopTrackingTouch(s: android.widget.SeekBar) {
-                    val d = TheaterPlayer.state.value.durMs
-                    if (d > 0) TheaterPlayer.seek(d * s.progress / 1000L)
-                    seekTracking = false
-                    parkCtrl()
-                }
-            })
-        }
-        seekBar = sb
-        ctrl.addView(sb)
-        root.addView(ctrl)
-
-        /* 角键：✕ 左上 / ⤢ 右上，**跟控制层同进同出**（2026-10-05 用户拍板：
-           常显太抢画面 —— 收着时只有干净的画面，轻点唤出控制层时才一起出现，
-           再点一下画面就收）。放进顶部 topRow（自带一层极淡的顶渐变，
-           亮画面上键也看得清），topRow 的显隐由 hideBarRun 统一管。
-           ✕ = **只收小窗**（2026-10-04 拍板 B）：放映照旧在后台播，不碰播放器、
-           不跳页面 —— 给一句提示，免得人收完找不着画面入口。
-           ⤢ = 收小窗 + 跳回放映页（竖屏，画面回全屏）。
-           两颗键同尺寸同字号：原来 ⤢ 用 13f、× 用 16f，右上那颗在真机上
-           明显小一圈（用户截图反馈"大小异常"）。 */
-        val closeKey = cornerKey("×", 16f).apply {
-            layoutParams = FrameLayout.LayoutParams(dp(26), dp(26), Gravity.TOP or Gravity.START)
-                .apply { leftMargin = dp(7); topMargin = dp(7) }
-            setOnClickListener {
+            },
+            onSeek = { ms -> TheaterPlayer.seek(ms) },
+            durMs = { TheaterPlayer.state.value.durMs },
+            onClose = {
                 teardown()
                 stopSelf()
                 android.widget.Toast.makeText(
@@ -1038,50 +1013,9 @@ class FloatPlayerService : android.app.Service() {
                     "小窗已收起，放映继续 —— 首页圆钮回放映厅",
                     android.widget.Toast.LENGTH_SHORT,
                 ).show()
-            }
-        }
-        val expandKey = cornerKey("⤢", 16f).apply {
-            layoutParams = FrameLayout.LayoutParams(dp(26), dp(26), Gravity.TOP or Gravity.END)
-                .apply { rightMargin = dp(7); topMargin = dp(7) }
-            setOnClickListener { teardown(); stopSelf(); openCinema() }
-        }
-        val topRow = android.widget.FrameLayout(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, dp(40), Gravity.TOP,
-            )
-            // 顶部向下的淡黑渐变：键压在亮画面上也看得清（与底部 ctrl 的渐变镜像）
-            background = android.graphics.drawable.GradientDrawable().apply {
-                colors = intArrayOf(0x7A000000, 0x00000000)
-                orientation = android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM
-            }
-            addView(closeKey)
-            addView(expandKey)
-            visibility = View.GONE
-        }
-        relayTop = topRow
-        root.addView(topRow)
-
-        /* HUD 闪现：快进快退给个"⟲ 15 秒"的落点反馈（与全屏播放器手势同语言）。 */
-        val hudTv = TextView(this).apply {
-            visibility = View.GONE
-            setTextColor(0xFFFFFFFF.toInt())
-            textSize = 12.5f
-            gravity = Gravity.CENTER
-            setPadding(dp(13), dp(6), dp(13), dp(6))
-            background = android.graphics.drawable.GradientDrawable().apply {
-                setColor(0x99101216.toInt())
-                cornerRadius = dp(14).toFloat()
-            }
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.CENTER,
-            )
-            isClickable = false
-            isFocusable = false
-        }
-        hud = hudTv
-        root.addView(hudTv)
+            },
+            onExpand = { teardown(); stopSelf(); openCinema() },
+        )
 
         // 手势：照播放窗 —— 拖动挪窗、单击唤控制条（3s 自收）、双击调大小
         val lp = WindowManager.LayoutParams(
@@ -1111,7 +1045,7 @@ class FloatPlayerService : android.app.Service() {
             } else {
                 b.visibility = View.VISIBLE
                 b.alpha = 1f
-                relayTop?.let { it.visibility = View.VISIBLE; it.alpha = 1f }
+                topRowView?.let { it.visibility = View.VISIBLE; it.alpha = 1f }
                 b.postDelayed(hideBarRun, 3_000)
             }
         }
@@ -1176,11 +1110,9 @@ class FloatPlayerService : android.app.Service() {
         inPrewarm = false
         bar = null
         seekBar = null
-        timeView = null
-        titleView = null
         toggle = null
         hud = null
-        relayTop = null
+        topRowView = null
         seekTracking = false
         videoView = null
         placeholder = null
