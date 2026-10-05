@@ -36,6 +36,10 @@ object TheaterPlayer {
         val durMs: Long = 0L,
         val ready: Boolean = false,
         val error: String? = null,
+        /** 视频真实尺寸（**显示方向**，rotation 已折算）。0 = 还没探到。
+         *  竖屏片修复（2026-10-06）：布局与转播帧桥都按它走，不再猜 16:9。 */
+        val videoW: Int = 0,
+        val videoH: Int = 0,
     )
 
     private val _state = kotlinx.coroutines.flow.MutableStateFlow(State())
@@ -62,6 +66,14 @@ object TheaterPlayer {
             else surface?.let { p.setVideoTextureView(it) } ?: p.setVideoSurface(null)
         }
     }
+    /**
+     * 视频尺寸变化出口：转播帧桥据此**跟着改缓冲尺寸**（[PlayerShareController] 挂上）。
+     * 不挂的话帧桥永远是建轨时那份尺寸 —— 竖屏帧被拉伸进横屏缓冲，观众从源头收到
+     * 变形画面（2026-10-06 用户实测，放映端本地回显同源同病）。
+     */
+    @Volatile
+    var sizeSink: ((w: Int, h: Int) -> Unit)? = null
+
     private var startMs = 0L
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -142,6 +154,24 @@ object TheaterPlayer {
                         "TheaterPlay",
                         "+${android.os.SystemClock.uptimeMillis() - startMs}ms 首帧（画面出现）",
                     )
+                }
+
+                override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                    /* 记**显示方向**的尺寸：rotation 90/270 时宽高互换 —— 布局盒与
+                       转播帧桥要的都是"观众看到的比例"，不是解码顺序的宽高。 */
+                    val rot = videoSize.unappliedRotationDegrees
+                    val w: Int
+                    val h: Int
+                    if (rot == 90 || rot == 270) {
+                        w = videoSize.height; h = videoSize.width
+                    } else {
+                        w = videoSize.width; h = videoSize.height
+                    }
+                    if (w > 0 && h > 0) {
+                        Log.i("TheaterPlay", "视频尺寸 $w×$h rot=$rot")
+                        _state.value = _state.value.copy(videoW = w, videoH = h)
+                        sizeSink?.invoke(w, h)
+                    }
                 }
             })
             if (_state.value.error != null) {       // 起播途中已出错

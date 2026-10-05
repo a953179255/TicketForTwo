@@ -84,6 +84,7 @@ import com.ticketfortwo.app.ui.theme.Ink
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.shape.CircleShape
@@ -1849,14 +1850,24 @@ fun CinemaScreen(
                用户反馈"背景变白闪烁一下"——深色厅里白闪一记很扎眼）。
                高度：常规放映态**按视频比例收紧到视频盒高** —— 否则"吃满剩余"
                的画面区里 contain 居中的视频上下各留一大块黑（用户反馈"上下
-               黑边严重且多余"，2026-10-01 截图实测）。浏览/全屏态仍吃满剩余
-               （全屏黑边无妨、浏览态保持原布局）。ar 未探到时按 16:9 兜底。 */
-            val videoBoxH = (LocalConfiguration.current.screenWidthDp / videoRatio()).dp
+               黑边严重且多余"，2026-10-01 截图实测）。
+               比例来源（2026-10-06 竖屏修复）：**自播播放器的真实尺寸优先**
+               （ExoPlayer onVideoSizeChanged），网页探针只是兜底 —— 探针读到
+               的是网页 video 元素，自播播的是嗅探直链，两者经常不是一回事；
+               竖屏片按 16:9 兜底就把竖屏帧拉扁进横条（用户实测变形）。
+               **竖屏片（ratio<1）不再按"屏宽/比例"算盒高** —— 那会算出 640dp+
+               把甲板整个挤出屏（用户实测"功能面板被挡"）：竖屏片视频盒改
+               weight(1f) 吃剩余，画面在盒内等比居中（见 TextureView 分支）。 */
+            val playerRatio = if (tp.videoW > 0 && tp.videoH > 0) {
+                tp.videoW.toFloat() / tp.videoH
+            } else videoRatio()
+            val videoBoxH = (LocalConfiguration.current.screenWidthDp / playerRatio).dp
             Box(
                 Modifier
                     .then(
-                        if (theater && !deckHidden.value) Modifier.height(videoBoxH)
-                        else Modifier.weight(1f),
+                        if (theater && !deckHidden.value && playerRatio >= 1f) {
+                            Modifier.height(videoBoxH)
+                        } else Modifier.weight(1f),
                     )
                     .background(Color.Black),
             ) {
@@ -1892,8 +1903,12 @@ fun CinemaScreen(
                        （原"轻点弹控制条 showTctl"已删：方案 C 手势层统一接管，
                        单击出 HUD、双击三区，不再有第二套控制条。）
                        **ready 才接管画面**（2026-10-01）：起播要拉流 2-3 秒，
-                       未 ready 时落到底下的网页钉屏分支，首帧一到无缝切换。 */
-                    Box(Modifier.fillMaxSize()) {
+                       未 ready 时落到底下的网页钉屏分支，首帧一到无缝切换。
+                       **等比居中（2026-10-06 竖屏修复）**：ExoPlayer 对 TextureView
+                       是"拉伸填满"——盒比例≠帧比例就变形。盒比例一致（横屏片的
+                       常规放映态，盒高按同比例算的）直接铺满；竖屏片/全屏态盒比例
+                       对不上，包一层 aspectRatio 等比居中，宁留边不拉伸。 */
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         AndroidView(
                             factory = {
                                 android.view.TextureView(it).also { tv ->
@@ -1909,7 +1924,9 @@ fun CinemaScreen(
                             },
                             update = { tv -> TheaterPlayer.attach(tv) },
                             onRelease = { TheaterPlayer.detach() },
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = if (deckHidden.value || playerRatio < 1f) {
+                                Modifier.fillMaxSize().aspectRatio(playerRatio)
+                            } else Modifier.fillMaxSize(),
                         )
                     }
                 } else key(webGen) {
@@ -1956,7 +1973,7 @@ fun CinemaScreen(
                                 restoreOrientation()   // 全屏控件里的 ⛶：退出全屏回放映界面
                             } else {
                                 deckHidden.value = true
-                                if (videoRatio() >= 1f) {
+                                if (playerRatio >= 1f) {
                                     (context as? android.app.Activity)?.requestedOrientation =
                                         android.content.pm.ActivityInfo
                                             .SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -2164,7 +2181,7 @@ fun CinemaScreen(
                        交还系统（restoreOrientation）。 */
                     DockBtn("全屏", backdrop, Modifier.weight(1f)) {
                         deckHidden.value = true
-                        if (videoRatio() >= 1f) {
+                        if (playerRatio >= 1f) {
                             (context as? android.app.Activity)?.requestedOrientation =
                                 android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                         }

@@ -49,7 +49,16 @@ class PlayerShareController(private val context: Context) {
             )
             val cap = PlayerCapturer()
             cap.initialize(helper, context, source.capturerObserver)
-            cap.startCapture(1920, 1080, fps)
+            /* 帧桥缓冲按**视频真实尺寸**建（2026-10-06 竖屏修复）：以前写死
+               1920×1080 —— 竖屏帧被 MediaCodec 拉伸进横屏缓冲，观众端和本地
+               回显从源头就是变形画面，网页端 contain 救不回来。
+               起轨时视频多半已在播（尺寸已知）；还没探到就按 16:9 起，
+               onVideoSizeChanged 一到立即换（sizeSink → adjustSize）。 */
+            val vs = TheaterPlayer.state.value
+            val w0 = vs.videoW.takeIf { it > 0 } ?: 1920
+            val h0 = vs.videoH.takeIf { it > 0 } ?: 1080
+            cap.startCapture(w0, h0, fps)
+            TheaterPlayer.sizeSink = { w, h -> cap.adjustSize(w, h) }
             val track = RtcEngine.factory.createVideoTrack("theater", source)
             videoSource = source
             videoTrack = track
@@ -70,6 +79,7 @@ class PlayerShareController(private val context: Context) {
 
     /** 整体释放（收厅/会话结束）。帧停、播放器解绑、helper 释放。 */
     fun release() {
+        TheaterPlayer.sizeSink = null
         stopCapture()
         TheaterPlayer.relaying = false
         runCatching { videoTrack?.dispose() }
@@ -132,6 +142,21 @@ class PlayerShareController(private val context: Context) {
         }
 
         override fun changeCaptureFormat(width: Int, height: Int, fps: Int) = Unit
+
+        /**
+         * 放映中视频换尺寸（竖屏片首探 / 换清晰度档）：帧桥缓冲跟着换。
+         * 两个口都要动（见 startCapture 注释）：setDefaultBufferSize 管解码器
+         * 投帧的缓冲，setTextureSize 管 helper 打包 VideoFrame 时报的尺寸。
+         * WebRTC 编码器收到新尺寸的帧会自行重新协商 —— 单轨中途变分辨率是
+         * libwebrtc 支持的路径（屏幕分享旋转横竖屏走的就是它）。
+         */
+        fun adjustSize(w: Int, h: Int) {
+            if (w <= 0 || h <= 0) return
+            helper?.surfaceTexture?.setDefaultBufferSize(w, h)
+            runCatching { helper?.setTextureSize(w, h) }
+            Log.i("PlayerShare", "帧桥缓冲跟随视频 ${w}×$h")
+        }
+
         override fun dispose() { stopCapture() }
         override fun isScreencast(): Boolean = true
     }
