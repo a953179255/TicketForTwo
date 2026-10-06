@@ -1877,60 +1877,74 @@ fun CinemaScreen(
                     else "输入网址就能一起看；上面有「粘贴 / 上次 / 收藏夹」",
                     Modifier.fillMaxSize(),
                 )
-                else if (TheaterPlayer.relaying && localVt != null) {
-                    /* B 方案转播中：自播的帧已交给帧桥推给观众，本地看这条轨的回显。
-                       **首帧门（2026-10-01）**：回环首帧要等 1-3 秒，窗口期显示
-                       网页钉屏（在播/暂停帧）顶着 —— 否则"开始放映"黑屏比较久，
-                       而右上角切放映（无回显）却无缝。VideoLayer 常挂（SurfaceView
-                       在 View 之下照常收帧，onFirstFrameRendered 才能触发），
-                       首帧一到就撤掉网页、露出回显。 */
-                    Box(Modifier.fillMaxSize()) {
-                        if (!relayFirstFrame) {
-                            key(webGen) {
-                                AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
-                            }
-                        }
+                else {
+                    /* 结构修正（2026-10-06 用户实测两个问题，一次修掉）：
+                       ① 切回浏览只剩定格画面、网页不见了 —— 回显/自播**接管画面**
+                          原来没判 theater：B 档下 relaying 一直为 true，切浏览后
+                          VideoLayer 仍顶在网页上（且把网页整个撤走），看到的就是
+                          "挂了一张静止图片"（自播已停、不再出帧，最后一帧冻在那）。
+                          接管分支全部加 theater 闸门：浏览态永远只露网页。
+                       ② 进放映闪屏 —— 原来三种画面各挂一个 AndroidView(webView)，
+                          分支一切换 WebView 整棵 detach/reattach，Chromium 重挂
+                          黑闪一两帧（2026-10-05 注释已点过同一病灶，这次连放映
+                          分支一起并掉）。现在网页节点**常挂不撤**，被接管时只置
+                          INVISIBLE（不脱离绘制树，切回即显，无重挂闪）。
+                       转播回显的**首帧门**保留：回环首帧要等 1-3 秒，窗口期网页
+                       钉屏（在播/暂停帧）照常可见顶着，首帧一到盖上去。 */
+                    val relayOn = theater && TheaterPlayer.relaying && localVt != null
+                    val tpOn = theater && !relayOn && tp.active && tp.ready
+                    val webVisible = if (relayOn) !relayFirstFrame else !tpOn
+                    key(webGen) {
+                        AndroidView(
+                            factory = { webView },
+                            update = {
+                                it.visibility = if (webVisible) android.view.View.VISIBLE
+                                    else android.view.View.INVISIBLE
+                            },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                    if (relayOn) {
+                        /* B 方案转播中：自播的帧已交给帧桥推给观众，本地看这条轨的回显。
+                           VideoLayer 常挂（SurfaceView 在 View 之下照常收帧，
+                           onFirstFrameRendered 才能触发），首帧一到盖住网页。 */
                         VideoLayer(
                             track = localVt,
                             modifier = Modifier.fillMaxSize(),
                             onLabel = "theater-relay",
                             onFirstFrame = { if (it) relayFirstFrame = true },
                         )
-                    }
-                } else if (tp.active && tp.ready) {
-                    /* 画面自播视图（2B）：画面是 TextureView —— 点击**进不到网页**，
-                       广告/整块画面跳转没有 DOM 可跳。
-                       （原"轻点弹控制条 showTctl"已删：方案 C 手势层统一接管，
-                       单击出 HUD、双击三区，不再有第二套控制条。）
-                       **ready 才接管画面**（2026-10-01）：起播要拉流 2-3 秒，
-                       未 ready 时落到底下的网页钉屏分支，首帧一到无缝切换。
-                       **等比居中（2026-10-06 竖屏修复）**：ExoPlayer 对 TextureView
-                       是"拉伸填满"——盒比例≠帧比例就变形。盒比例一致（横屏片的
-                       常规放映态，盒高按同比例算的）直接铺满；竖屏片/全屏态盒比例
-                       对不上，包一层 aspectRatio 等比居中，宁留边不拉伸。 */
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        AndroidView(
-                            factory = {
-                                android.view.TextureView(it).also { tv ->
-                                    TheaterPlayer.attach(tv)
-                                    /* 自播画面自己消费 touch（2026-10-01 复测穿透修复）：
-                                       TextureView 默认不消费，touch 穿到底下 WebView →
-                                       网页收点击 → 跳广告。拦下来（交互由上面的手势层做）。 */
-                                    tv.setOnTouchListener { _, _ ->
-                                        android.util.Log.i("Cinema", "TOUCH: 自播 TextureView 消费")
-                                        true
+                    } else if (tpOn) {
+                        /* 画面自播视图（2B）：画面是 TextureView —— 点击**进不到网页**，
+                           广告/整块画面跳转没有 DOM 可跳。
+                           **ready 才接管画面**（2026-10-01）：起播要拉流 2-3 秒，
+                           未 ready 时网页钉屏顶着，首帧一到无缝切换。
+                           **等比居中（2026-10-06 竖屏修复）**：ExoPlayer 对 TextureView
+                           是"拉伸填满"——盒比例≠帧比例就变形。盒比例一致（横屏片的
+                           常规放映态，盒高按同比例算的）直接铺满；竖屏片/全屏态盒比例
+                           对不上，包一层 aspectRatio 等比居中，宁留边不拉伸。 */
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            AndroidView(
+                                factory = {
+                                    android.view.TextureView(it).also { tv ->
+                                        TheaterPlayer.attach(tv)
+                                        /* 自播画面自己消费 touch（2026-10-01 复测穿透修复）：
+                                           TextureView 默认不消费，touch 穿到底下 WebView →
+                                           网页收点击 → 跳广告。拦下来（交互由上面的手势层做）。 */
+                                        tv.setOnTouchListener { _, _ ->
+                                            android.util.Log.i("Cinema", "TOUCH: 自播 TextureView 消费")
+                                            true
+                                        }
                                     }
-                                }
-                            },
-                            update = { tv -> TheaterPlayer.attach(tv) },
-                            onRelease = { TheaterPlayer.detach() },
-                            modifier = if (deckHidden.value || playerRatio < 1f) {
-                                Modifier.fillMaxSize().aspectRatio(playerRatio)
-                            } else Modifier.fillMaxSize(),
-                        )
+                                },
+                                update = { tv -> TheaterPlayer.attach(tv) },
+                                onRelease = { TheaterPlayer.detach() },
+                                modifier = if (deckHidden.value || playerRatio < 1f) {
+                                    Modifier.fillMaxSize().aspectRatio(playerRatio)
+                                } else Modifier.fillMaxSize(),
+                            )
+                        }
                     }
-                } else key(webGen) {
-                    AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
                 }
                 /* 手势层（方案 C，2026-10-02 按用户雨见截图升级）：三态之上、
                    放映态常挂。单击 = 雨见式控制层（中央三键/进度条/时间/⛶/✕）；

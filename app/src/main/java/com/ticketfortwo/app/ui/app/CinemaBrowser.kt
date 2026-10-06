@@ -375,16 +375,40 @@ internal const val PIN_VIDEO_JS =
         var v=vs.sort(function(a,b){var A=a.getBoundingClientRect(),B=b.getBoundingClientRect();
           return B.width*B.height-A.width*A.height;})[0];
         if(v.dataset.t2saved!==undefined){
-          var rr=v.getBoundingClientRect(), vw2=window.innerWidth, vh2=window.innerHeight;
-          // 盒子尺寸**且位置**都对才算钉住 —— 只查 height/width 会漏掉
-          // "尺寸拉满但整体被 transform 祖先推偏"的假 ok（fixed 在 transform
-          // 祖先里会相对祖先定位），偏移后每次 2 秒重放都早退、错位永远不自愈
-          // （2026-10-02 用户实测"上半黑屏视频偏下持续不恢复"）。
-          if(rr.height>0 && Math.abs(rr.height-vh2)<4 && Math.abs(rr.width-vw2)<4 &&
-             rr.top<6 && rr.left<6)
+          /* **幂等早退：当前盒 == 目标盒就不再重写样式**（2026-10-06 用户实测
+             "放映界面视频抽搐"）。旧判据只认"铺满视口"的全屏盒（width≈vw、
+             height≈vh、top/left≈0）—— 竖屏片的 contain 盒宽 < 视口宽，永远
+             不满足 → 探针每 2 秒都走完整钉屏路径重写 video 样式 → 网页反复
+             重排 → 放映画面抽搐。本地 mp4 直开页 DOM 极简扛得住所以从没暴露，
+             真网站（长页面/广告/复杂样式）扛不住。
+             现在先按下方同一公式算出目标盒，与当前 rect 逐项比对（尺寸+位置
+             4px 容差、黑垫层还在）才早退；比例变了（metadata 迟到/换清晰度）
+             目标盒跟着变，比对不上自动重钉一次，之后又早退 —— 自愈路径不变
+             （transform 祖先推偏时 rect 对不上目标盒，照常走下面的拔出逻辑）。 */
+          var vw2=window.innerWidth||372, vh2=window.innerHeight||0;
+          var ratio2=(v.videoWidth&&v.videoHeight)?(v.videoWidth/v.videoHeight):(16/9);
+          if(!isFinite(ratio2)||ratio2<=0) ratio2=16/9;
+          var w2=vw2, h2=vw2/ratio2;
+          if(vh2>0&&h2>vh2){ h2=vh2; w2=vh2*ratio2; }
+          var el2=Math.max(0,(vw2-w2)/2), et2=Math.max(0,(vh2-h2)/2);
+          var rr=v.getBoundingClientRect();
+          if(rr.height>0 && Math.abs(rr.width-w2)<4 && Math.abs(rr.height-h2)<4 &&
+             Math.abs(rr.left-el2)<4 && Math.abs(rr.top-et2)<4 &&
+             document.getElementById('__t2pinbg'))
             return 'ok|vp='+vw2+'x'+vh2+'|rs='+(window.__t2pinResizeCount||0);
         }
-        if(v.dataset.t2saved===undefined) v.dataset.t2saved=v.style.cssText;
+        if(v.dataset.t2saved===undefined){
+          v.dataset.t2saved=v.style.cssText;
+          /* **记下钉屏前的滚动位置**（2026-10-06 用户实测"切回浏览网页会重新
+             滚动一次"）：钉屏把 video 抽成 position:fixed（脱离文档流）→ 页面
+             变矮 → 浏览器把 scrollY 夹到新的最大滚动值；解钉时长回来但被夹掉的
+             量回不来，用户回浏览页发现位置被甩。这里存一份，UNPIN 精确还原。
+             只在首次钉（t2saved 未定义）存，resize/重钉不覆盖；换片重建 video
+             元素再进这里时，已存过就不覆盖 —— 钉屏中途页面被压矮，此刻的
+             scrollY 是被夹过的值，盖上去会把还原目标弄错（UNPIN 末尾会删掉
+             这个键，下一轮放映重新存干净的）。 */
+          try{ if(window.__t2scrollY==null) window.__t2scrollY = window.scrollY || window.pageYOffset || 0; }catch(e){}
+        }
         /* **禁用网页播放器原生控制条**（2026-10-01 用户反馈"投屏时呼出一下进度条"）：
            界面重建（投屏连/断）时 WebView 重挂，Chromium 对 video 重新合成，
            原生控制条跟着闪现一下 —— 看起来就像"点击触发了播放器"。放映中控制
@@ -436,6 +460,13 @@ internal const val PIN_VIDEO_JS =
         v.style.setProperty('object-fit','contain','important');
         v.style.setProperty('background','#000','important');
         v.style.setProperty('z-index','2147483647','important');
+        /* **margin 清零**（2026-10-06 抽搐根因）：fixed 定位的盒子 margin 仍
+           会叠加生效（top:0 + margin-top:40 → 实际 top=40），带 margin 的站点
+           上 rect 永远对不上目标盒 —— 旧判据（top<6）与新幂等判据都被这 40px
+           卡死，每 2 秒重钉一次 = 网页反复重排 = 放映画面抽搐。清零后
+           位置严格等于 el/et，幂等早退才能成立。UNPIN 还原 cssText 时 margin
+           跟着页面原样回来，不伤浏览态。 */
+        v.style.setProperty('margin','0','important');
         var r=v.getBoundingClientRect();
         /* **钉完复查处点**：fixed 只有在"无 transform 祖先"时才相对视口 ——
            页面里一旦有 transform/filter/contain 容器装着这个 video，
@@ -489,6 +520,8 @@ internal const val PIN_VIDEO_JS =
 
 internal const val UNPIN_VIDEO_JS =
     """(function(){
+      var savedY = window.__t2scrollY;
+      var broke = false;   // 有 video 原始样式就是坏的（零尺寸/隐藏）→ 需兜底滚
       [].slice.call(document.querySelectorAll('video')).forEach(function(v){
         if(v.dataset.t2saved===undefined) return;
         v.style.cssText=v.dataset.t2saved; delete v.dataset.t2saved;
@@ -497,7 +530,7 @@ internal const val UNPIN_VIDEO_JS =
            模拟器 probe 实锤：video paused=false 在走 t=24.6→26.6，但屏上 y400-1600
            纯黑）：页面原始样式可能本来就是隐藏/零尺寸（HLS 播放库动态控制），
            或还原后元素落在视口外 —— 钉屏期间它是全屏 fixed，一还原就"消失"。
-           探测 rect，不可见就强制拉回文档流可见状态 + 滚进视口。 */
+           探测 rect，不可见就强制拉回文档流可见状态（滚动位置交末尾统一处理）。 */
         try{
           var r=v.getBoundingClientRect();
           var invisible = !r || r.width<40 || r.height<40 ||
@@ -510,8 +543,8 @@ internal const val UNPIN_VIDEO_JS =
             v.style.setProperty('display','block','important');
             v.style.setProperty('object-fit','contain','important');
             v.style.setProperty('margin','0 auto','important');
+            broke = true;
           }
-          if(v.scrollIntoView) v.scrollIntoView({block:'center'});
         }catch(e){}
       });
       /* 黑底垫层与点击拦截层一并拆掉，页面恢复原样 */
@@ -519,6 +552,24 @@ internal const val UNPIN_VIDEO_JS =
         var el=document.getElementById(id);
         if(el&&el.parentNode) el.parentNode.removeChild(el);
       });
+      /* **精确还原滚动位置**（2026-10-06 用户实测"切回浏览网页会重新滚动一次"）：
+         钉屏把 video 抽成 fixed 脱离文档流 → 页面变矮 → 浏览器把 scrollY 夹到
+         新的最大值；解钉后 video 回文档流、页面长回来，但被夹掉的滚动量回不来，
+         用户回浏览页发现位置被甩。这里在样式全还原、布局重排后 scrollTo 回钉屏
+         前记的 savedY。只在"页面没坏"（!broke）时还原；broke 时视频原始布局就
+         是坏的，还原到旧位置多半也看不见它，退回 scrollIntoView 保证视频可见
+         （保住 2026-10-02 的修复意图）。void scrollHeight 强制同步重排再读，
+         否则 scrollTo 作用在还没长回来的矮页面上又被夹一次。 */
+      try{
+        void document.documentElement.scrollHeight;
+        if(broke){
+          var vv=document.querySelector('video');
+          if(vv && vv.scrollIntoView) vv.scrollIntoView({block:'center'});
+        } else if(savedY!=null){
+          window.scrollTo(0, savedY);
+        }
+        delete window.__t2scrollY;
+      }catch(e){}
       return 'ok';})()"""
 
 /** 从一段文本里抽出第一条 http(s) 链接（粘贴芯片 / 首页剪贴板浮卡共用）。 */
