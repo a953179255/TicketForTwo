@@ -748,15 +748,18 @@ class FloatPlayerService : android.app.Service() {
         ctrl.addView(sb)
         root.addView(ctrl)
 
-        /* 角键 ✕/ 随控制层同进同出（常显太抢画面）。两颗键同尺寸同字号。 */
+        /* 角键 ✕/ 随控制层同进同出（常显太抢画面）。两颗键同尺寸同字号。
+           内缩 12dp（原 7dp）：窗圆角 radius=14dp，7dp 时按钮（26dp 圆）右上角
+           伸进圆角裁切带、被 outline 削掉一块 —— 看着像键歪进角里没居中
+           （2026-10-06 用户实测反馈）。12dp 让整颗按钮完全落在圆角带外。 */
         val closeKey = cornerKey("×", 16f).apply {
             layoutParams = FrameLayout.LayoutParams(dp(26), dp(26), Gravity.TOP or Gravity.START)
-                .apply { leftMargin = dp(7); topMargin = dp(7) }
+                .apply { leftMargin = dp(12); topMargin = dp(12) }
             setOnClickListener { onClose() }
         }
         val expandKey = cornerKey("⤢", 16f).apply {
             layoutParams = FrameLayout.LayoutParams(dp(26), dp(26), Gravity.TOP or Gravity.END)
-                .apply { rightMargin = dp(7); topMargin = dp(7) }
+                .apply { rightMargin = dp(12); topMargin = dp(12) }
             setOnClickListener { onExpand() }
         }
         val topRow = android.widget.FrameLayout(this).apply {
