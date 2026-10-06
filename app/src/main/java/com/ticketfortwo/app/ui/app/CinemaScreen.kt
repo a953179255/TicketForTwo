@@ -201,16 +201,10 @@ fun CinemaScreen(
     var hits by remember { mutableStateOf<List<MediaSniffer.Hit>>(emptyList()) }
     var probe by remember { mutableStateOf<MediaSniffer.PageProbe?>(null) }
     var eme by remember { mutableStateOf<CinemaProbe.EmeReport?>(null) }
-    /**
-     * 量具（嗅探候选 / 页面读数 / EME）默认**收着**。
-     *
-     * 这张卡是房主全程盯着的那一块，而放映时他真正要看的只有三件事：
-     * 对方在不在放、放到哪、方向盘给不给。把 P0 的读数常驻在上面，
-     * 等于让量具抢了界面的位置（实测：放映中的卡有六成行数是嗅探日志）。
-     * 需要挑候选、查为什么嗅不到时，点「展开嗅探」即可 —— 它没有消失，只是不再常驻。
-     */
-    var showPanel by remember { mutableStateOf(false) }
-    var note by remember { mutableStateOf("把这一页当成浏览器用；嗅到的地址在「展开嗅探」里面") }
+    /* 量具开关（2026-10-06 A v3）：原「展开嗅探」按钮已并入「换片 N」——
+       askPickList（换片弹窗）打开即量具激活（时长/EME 探测、读数显示在弹窗里），
+       关掉就停，不再单独一个 showPanel。 */
+    var note by remember { mutableStateOf("把这一页当成浏览器用；嗅到的地址在「换片」里面") }
     var fullScreenView by remember { mutableStateOf<View?>(null) }
     /* callback 必须存下来并调用：WebView 文档要求 App 主动退出全屏时调
        onCustomViewHidden()，丢了它页面侧的全屏状态出不来（REVIEW-2026-09-27 P1）。 */
@@ -364,20 +358,24 @@ fun CinemaScreen(
             wv?.post {
                 wv?.evaluateJavascript(UNPIN_VIDEO_JS, null)
             }
-            /* **网页无条件恢复播放**（2026-10-02 用户实测"放映中点浏览，视频卡住、
-               网页界面不见了只剩视频"）：模拟器复现帧差=0（完全静止），日志显示
-               自播已停、UNPIN 也返回 ok，但网页仍冻结 —— 网页可能被交棒暂停过、
-               也可能指挥权时序差没收到恢复指令（1069 那条按 commander 条件发，
-               条件不满足就永远没人播）。不再赌时序：切浏览=回页面看它播，
-               这里直接无条件 Play 一次（用户要停再点一下即可）。 */
+            /* **暂停跟随**（2026-10-06 用户拍板，替代 10-02 的"无条件恢复播放"）：
+               放映端暂停着切浏览，网页就该同样暂停着 —— 原来这里无条件 Play
+               是当年修"切浏览卡死"的过激兜底，现在接管分支已按 theater 闸门
+               收干净（浏览态网页恒可见），不再需要拿"帮你播"来遮丑。
+               判据：自播曾激活且当前暂停 → Pause；其余（自播没开过/正在播）
+               → Play（保住 10-02 场景：网页被交棒暂停过、切回来要能续上）。
+               读的是本 effect 里 stop 之前的最后状态（1114 的 stop 声明在后，
+               同一帧重启时这里先跑）。**同步捕获**在 post 之前 —— post 排队
+               期间 1114 的 stop 会把 active 翻回 false，届时判据就失真了。 */
+            val followPause = TheaterPlayer.state.value.let { it.active && !it.playing }
             wv?.post {
-                // Play 的 JS 分支不消费 pos/dur（就是一句 v.play()），传 0 无副作用；
-                // 这里还读不到 player（它声明在本 effect 之后）。
                 wv?.evaluateJavascript(
                     com.ticketfortwo.app.watch.WatchSync.jsFor(
-                        com.ticketfortwo.app.watch.WatchCmd.Play, 0L, 0L,
+                        if (followPause) com.ticketfortwo.app.watch.WatchCmd.Pause
+                        else com.ticketfortwo.app.watch.WatchCmd.Play,
+                        0L, 0L,
                     ),
-                ) { r -> android.util.Log.i("Cinema", "BROWSE_PLAY -> $r") }
+                ) { r -> android.util.Log.i("Cinema", "BROWSE_FOLLOW ${if (followPause) "PAUSE" else "PLAY"} -> $r") }
             }
             /* 诊断（2026-10-02 切浏览卡死排查）：Play 后连拍两次 video 状态，
                paused/readyState/时间戳一次看清 —— 判断是"没播"还是"流死了"。 */
@@ -418,14 +416,47 @@ fun CinemaScreen(
     var favs by remember { mutableStateOf<List<String>>(emptyList()) }
     /* 首次读收藏必须挪到 IO：SharedPreferences 首次访问会在调用线程同步等磁盘，
        组合发生在主线程 —— 本仓 lastConnected/quality 已经踩过同款（双人票 ANR 注释）。 */
+    var showFavs by remember { mutableStateOf(false) }
+    var hist by remember { mutableStateOf<List<String>>(emptyList()) }
+    var showHist by remember { mutableStateOf(false) }
+    /** 浏览工具条「⤴ 邀请」的小面板（2026-10-06 A v3：复制/分享两条通道）。 */
+    var showInvite by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         val loaded = withContext(Dispatchers.IO) {
             favPrefs.getStringSet("set", emptySet())!!.toList() to favPrefs.getString("recent", null)
         }
         favs = loaded.first
         recentUrl = loaded.second
+        hist = withContext(Dispatchers.IO) {
+            favPrefs.getString("hist", "")!!.split('\n').filter { it.isNotBlank() }
+        }
     }
-    var showFavs by remember { mutableStateOf(false) }
+    /* ── 浏览历史（2026-10-06 用户要求"像浏览器一样"）──
+       条目 = "时间␟url␟标题"，新条目插最前、同 url 去重（保留最新时间）、上限 100。
+       记录点 = 换页 effect 里（和"上次"同处：只记程序化打开，站内点跳/广告不算）。 */
+    fun recordHist(u: String, t: String) {
+        if (u.isBlank() || u.startsWith("file://")) return
+        val entry = "${System.currentTimeMillis()}␟$u␟${t.takeIf { x -> x.isNotBlank() } ?: shortSite(u)}"
+        val next = (listOf(entry) + hist.filter { it.substringAfter('␟').substringBefore('␟') != u })
+            .take(100)
+        hist = next
+        favPrefs.edit().putString("hist", next.joinToString("\n")).apply()
+    }
+    fun openHist(u: String) {
+        showHist = false
+        val norm = normalizeUrl(u)
+        if (norm != pageUrl) {
+            inputUrl = norm
+            pageUrl = norm
+        } else {
+            reloadSeq++
+        }
+        note = "打开历史"
+    }
+    /** 可播候选条数（与面板 playable 同口径：滤掉 file:// 与不可播类型）。 */
+    val playableCount = hits.count {
+        MediaSniffer.playable(it.kind) && it.url.startsWith("http", ignoreCase = true)
+    }
     /* 「收厅」的二次确认。它是这一屏**唯一会中断放映**的动作，原来跟「收藏夹」
        这类无害按钮平铺在同一排、一点就生效 —— 误触的代价是把对方直接踢回等候屏
        （2026-09-29 用户拍板要加确认）。 */
@@ -815,6 +846,8 @@ fun CinemaScreen(
     // 弹层比页面更"深"：后注册优先级更高 —— 收藏夹开着时返回先关它，
     // 否则会隔着遮罩退网页/离厅（审查 A3-5）
     BackHandler(enabled = showFavs) { showFavs = false }
+    BackHandler(enabled = showHist) { showHist = false }
+    BackHandler(enabled = showInvite) { showInvite = false }
     BackHandler(enabled = askCloseRoom) { askCloseRoom = false }
     BackHandler(enabled = askPickList) { askPickList = false }
     BackHandler(enabled = pickTarget != null) { pickTarget = null }
@@ -871,6 +904,24 @@ fun CinemaScreen(
         // 「上次一起看」落盘（方案A 的"上次"芯片）：进程重启也在。只记程序化打开
         // 这一下（地址栏/芯片/递链接）—— 站内点跳不算，用户语义是"我上次开的站"。
         favPrefs.edit().putString("recent", pageUrl).apply()
+        // 历史与"上次"同口径（2026-10-06）：只记程序化打开；标题先给站点名，
+        // 页面真 title 探针回来后由下面的补名 effect 刷新。
+        recordHist(pageUrl, "")
+    }
+
+    /* 历史补名（2026-10-06）：探针拿到页面真标题后，若历史最新条还是站点名占位
+       且地址对得上，就替换成真实标题（只补最新一条，旧条目落定不再动）。 */
+    LaunchedEffect(player?.title) {
+        val t = player?.title?.takeIf { it.isNotBlank() && !it.startsWith("http", true) }
+            ?: return@LaunchedEffect
+        val cur = cinemaLastPageUrl ?: return@LaunchedEffect
+        val top = hist.firstOrNull() ?: return@LaunchedEffect
+        val topUrl = top.substringAfter('␟').substringBefore('␟')
+        if (topUrl == cur && top.substringAfterLast('␟') != t) {
+            val fixed = "${top.substringBeforeLast('␟')}␟$t"
+            hist = listOf(fixed) + hist.drop(1)
+            favPrefs.edit().putString("hist", hist.joinToString("\n")).apply()
+        }
     }
 
     // 厅已经开着的时候又来了一条分享（singleTop + onNewIntent）：换片，不重开 Activity。
@@ -918,10 +969,11 @@ fun CinemaScreen(
     }
 
     // EME 探测：先发起（结果写到 window 上），再轮询读 —— 不赌 WebView 会不会 await Promise
-    // showPanel 进 key：量具默认收着，面板没开就别探 —— 换页即注入 + 最长 16 秒轮询
-    // 而读数只在「展开嗅探」里才显示，从没打开过也白付这笔开销（REVIEW P3）。
-    LaunchedEffect(pageUrl, webGen, showPanel) {
-        if (!showPanel) return@LaunchedEffect
+    // askPickList 进 key（原 showPanel，2026-10-06 并入换片弹窗）：弹窗没开就别探 ——
+    // 换页即注入 + 最长 16 秒轮询，而读数只在「换片」弹窗里才显示，
+    // 从没打开过也白付这笔开销（REVIEW P3）。
+    LaunchedEffect(pageUrl, webGen, askPickList) {
+        if (!askPickList) return@LaunchedEffect
         webView.post { webView.evaluateJavascript(MediaSniffer.emeStartJs(), null) }
         var tries = 0
         while (tries < 20) {
@@ -1114,14 +1166,18 @@ fun CinemaScreen(
     LaunchedEffect(theater, cinema?.version, hits.size) {
         if (!theater || cinema == null) {
             if (TheaterPlayer.state.value.active) {
+                /* 交还给网页时**跟随放映端状态**（2026-10-06 用户拍板，与 343 的
+                   BROWSE_FOLLOW 同规则）：放映端暂停着退出 → 网页也 Pause，
+                   在播 → Play。stop 之后 active/playing 就清零了，必须在 stop 前读。 */
+                val wasPlaying = TheaterPlayer.state.value.playing
                 TheaterPlayer.stop()
                 if (commander == Commander.Theater) {
                     commander = Commander.Page
-                    // 网页此前被交棒暂停了 —— 退出放映要把它放回来
                     webView.post {
                         webView.evaluateJavascript(
                             WatchSync.jsFor(
-                                WatchCmd.Play, player?.posMs ?: 0L, player?.durMs ?: 0L,
+                                if (wasPlaying) WatchCmd.Play else WatchCmd.Pause,
+                                player?.posMs ?: 0L, player?.durMs ?: 0L,
                             ),
                             null,
                         )
@@ -1305,8 +1361,8 @@ fun CinemaScreen(
        （2026-09-30 用户要求，对标雨见的候选列表）。探测要联网，所以：
         - 每条只探一次，结果按 URL 记住（状态在上面与 float 一起声明），重进不重复问；
         - 拿不到就是拿不到，界面显示"未知"，不编数字。 */
-    LaunchedEffect(showPanel, hits.size) {
-        if (!showPanel) return@LaunchedEffect
+    LaunchedEffect(askPickList, hits.size) {
+        if (!askPickList) return@LaunchedEffect
         val todo = hits
             .filter { MediaSniffer.playable(it.kind) && it.url.startsWith("http", true) }
             .filter { !durations.containsKey(it.url) }
@@ -1555,9 +1611,16 @@ fun CinemaScreen(
             enabled = canGoBack || CinemaBrowser.navStack.size >= 2)
         // 收藏夹：存过的网站一键回来（参考雨见「书签收藏」；本地存储，无服务器）
         GlassTextButton("收藏夹", onClick = { showFavs = true }, backdrop)
-        GlassTextButton(if (showPanel) "收起嗅探" else "展开嗅探", onClick = {
-            showPanel = !showPanel
-        }, backdrop)
+        // 历史：像浏览器一样记浏览轨迹（2026-10-06 用户要求；去重、上限 100）
+        GlassTextButton("历史", onClick = { showHist = true }, backdrop,
+            enabled = hist.isNotEmpty())
+        /* 「展开嗅探」→「换片 N」（2026-10-06 方案 A v3 定稿）：与放映甲板的
+           「换片」键同名同弹窗，数字=可播条数一眼可见；量具读数（页面 video
+           探针/EME/测试流）并入弹窗底部，不再占常驻位置。 */
+        GlassTextButton(
+            if (playableCount > 0) "换片 $playableCount" else "换片",
+            onClick = { askPickList = true }, backdrop,
+        )
     }
     }
 
@@ -1593,7 +1656,6 @@ fun CinemaScreen(
         },
         hits = hits,
         note = note,
-        showSniffer = showPanel,
         probe = probe,
         eme = eme,
         inviteUrl = inviteUrl,
@@ -2361,12 +2423,38 @@ fun CinemaScreen(
                 }
             }
             } else {
-                /* 这张卡**一直在**：它是厅的控制面（邀请、放映状态、方向盘开关），
-                   「收起嗅探」收的只是量具那几行，不是整张卡。
-                   原来写成 `if (showPanel || cinema != null)`，于是"默认收着量具 + 还没选片"
-                   这两个条件一叠加，整张卡直接消失，屏幕上只剩一块黑 —— 量具默认收起之后
-                   第一时间就踩到了（截图实测）。 */
-                panel(Modifier)
+                /* 浏览态底部（2026-10-06 方案 A v3 定稿）：原来整张 CinemaPanel
+                   （动作行+邀请行+长说明+note）收成一排工具条 —— 网页多吃 ~100dp。
+                   信息去向：可播条数 → 动作行「换片 N」芯片；邀请 → ⤴ 键弹面板；
+                   量具读数 → 换片弹窗底部；两句教学文案删除（点了都有反馈）。
+                   放映态信息（进度/方向盘/回执）在甲板上看，这里不重复。
+                   横屏 wide 分支仍用全量 CinemaPanel（右栏空间大，信息有地方放）。 */
+                Column(Modifier.padding(horizontal = 12.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        DockBtn(
+                            if (cinema == null) "▶ 开始放映" else "收厅",
+                            backdrop, Modifier.weight(1.6f),
+                        ) { startOrAskClose() }
+                        // 厅没开就没有链接可邀 —— 不显示比灰着更干净（原面板同款门禁）
+                        if (inviteUrl != null) {
+                            DockBtn("⤴ 邀请", backdrop, Modifier.weight(1f)) { showInvite = true }
+                        }
+                        DockBtn(
+                            if (float.active || float.prewarm) "收起浮窗" else "浮窗",
+                            backdrop, Modifier.weight(1f),
+                        ) { toggleFloat() }
+                        if (!screenShared) {
+                            DockBtn("分享屏幕", backdrop, Modifier.weight(1f)) { onStartShare() }
+                        }
+                    }
+                    Text(
+                        note, fontSize = 10.5.sp, color = Ink.TextLow,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                    )
+                }
             }
             /* 甲板后的旧 Spacer 已删除（2026-10-05）：它的位置在甲板**后面**，
                效果是"甲板贴视频下沿、底部填空" —— 与甲板**前面**新加的那条
@@ -2460,7 +2548,11 @@ fun CinemaScreen(
         }
     }
 
-    /* 「换片」候选列表：全列 + 标时长（浮窗上点换片、或主动手挑时弹）。 */
+    /* 「换片」弹窗（2026-10-06 A v3 定稿：三处入口一个窗 —— 浏览动作行「换片 N」、
+       放映甲板「换片」、浮窗换片请求全走这里）。
+       候选 = 雨见式双动作卡：主键「放映」递给对方（放映中=换片），副键「浮窗」自己看；
+       量具读数（页面 video 探针 / EME / debug 测试流）从底部面板搬进弹窗底部 ——
+       平时不占界面，点开就能查"为什么嗅不到"。 */
     if (askPickList) {
         val ranked = rankedCandidates(hits, probe?.currentSrc, durations)
         Box(
@@ -2477,7 +2569,10 @@ fun CinemaScreen(
                     .padding(horizontal = 24.dp)
                     .clickable { },
             ) {
-                Column(Modifier.padding(16.dp)) {
+                Column(
+                    Modifier.padding(16.dp).heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
                     Text("换到哪个？", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextHi)
                     Box(Modifier.height(4.dp))
                     Text(
@@ -2501,9 +2596,37 @@ fun CinemaScreen(
                             durMs = durations[h.url],
                             current = h.url == probe?.currentSrc,
                             longest = durations[h.url] != null && durations[h.url] == maxDur,
-                            action = if (float.active) "换它" else "播它",
-                            onClick = { askPickList = false; requestPlay(h) },
+                            action = "放映",
+                            onClick = { askPickList = false; screen(h) },
+                            secondaryAction = "浮窗",
+                            onSecondary = { askPickList = false; requestPlay(h) },
                         )
+                    }
+                    // 量具读数：出问题时要一眼能看到（原「展开嗅探」面板的三行搬进来）
+                    Text(
+                        probe?.let {
+                            val sz = if (it.videoWidth > 0) "${it.videoWidth}×${it.videoHeight}" else "未出画面"
+                            "页面 <video>：$sz · ${it.durationSec.toInt()}s · " +
+                                (if (it.isBlob) "blob:（MSE）" else "直链")
+                        } ?: "还没问到页面",
+                        fontSize = 10.5.sp,
+                        color = if (probe?.isBlob == true) Ink.Warn else Ink.TextLow,
+                    )
+                    Text(
+                        CinemaProbe.describeEme(eme),
+                        fontSize = 10.5.sp,
+                        color = Ink.TextLow,
+                    )
+                    if (com.ticketfortwo.app.BuildConfig.DEBUG) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 4.dp)
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            GlassTextButton("换一条流", onClick = { askPickList = false; testUrl(CINEMA_TEST_HLS_2) }, backdrop)
+                            GlassTextButton("本地测试页", onClick = { askPickList = false; testUrl(CINEMA_TEST_LOCAL) }, backdrop)
+                            GlassTextButton("HLS 测试流", onClick = { askPickList = false; testUrl(CINEMA_TEST_HLS) }, backdrop)
+                        }
                     }
                     Box(Modifier.height(8.dp))
                     Text(
@@ -2669,6 +2792,134 @@ fun CinemaScreen(
         }
     }
 
+    /* 浏览历史（2026-10-06 用户要求"像浏览器一样"）：条目=时间␟url␟标题，
+       新在前、同 url 去重、上限 100。点条目即打开；可单删、可清空。 */
+    if (showHist) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color(0xA6000000))
+                .clickable { showHist = false },
+            contentAlignment = Alignment.Center,
+        ) {
+            GlassCardPanel(
+                backdrop,
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 28.dp)
+                    .clickable { },
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "历史",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Ink.TextHi,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (hist.isNotEmpty()) {
+                            GlassTextButton("清空", onClick = {
+                                hist = emptyList()
+                                favPrefs.edit().remove("hist").apply()
+                            }, backdrop)
+                            Box(Modifier.width(6.dp))
+                        }
+                        GlassTextButton("关闭", onClick = { showHist = false }, backdrop)
+                    }
+                    Box(Modifier.height(8.dp))
+                    if (hist.isEmpty()) {
+                        Text(
+                            "还没有浏览记录。用地址栏打开过的网站会出现在这里。",
+                            fontSize = 12.5.sp,
+                            color = Ink.TextMid,
+                            lineHeight = 18.sp,
+                        )
+                    } else {
+                        Column(
+                            Modifier
+                                .heightIn(max = 400.dp)
+                                .verticalScroll(rememberScrollState()),
+                        ) {
+                            hist.forEach { entry ->
+                                val ts = entry.substringBefore('␟').toLongOrNull() ?: 0L
+                                val u = entry.substringAfter('␟').substringBefore('␟')
+                                val t = entry.substringAfterLast('␟')
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+                                ) {
+                                    Column(
+                                        Modifier
+                                            .weight(1f)
+                                            .clickable { openHist(u) },
+                                    ) {
+                                        Text(t, fontSize = 13.5.sp, color = Ink.TextHi, maxLines = 1)
+                                        Text(
+                                            "${MediaSniffer.shorten(u, 30)} · ${histTimeLabel(ts)}",
+                                            fontSize = 11.sp, color = Ink.TextMid, maxLines = 1,
+                                        )
+                                    }
+                                    GlassTextButton("打开", onClick = { openHist(u) }, backdrop)
+                                    Box(Modifier.width(6.dp))
+                                    GlassTextButton("删除", onClick = {
+                                        hist = hist - entry
+                                        favPrefs.edit().putString("hist", hist.joinToString("\n")).apply()
+                                    }, backdrop)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* 邀请小面板（2026-10-06 A v3）：浏览工具条「⤴ 邀请」弹出 —— 链接文本可点即复制，
+       下面复制/分享两条通道（与甲板邀请行同一组动作）。 */
+    if (showInvite && inviteUrl != null) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color(0xA6000000))
+                .clickable { showInvite = false },
+            contentAlignment = Alignment.Center,
+        ) {
+            GlassCardPanel(
+                backdrop,
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 28.dp)
+                    .clickable { },
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text(
+                        "把链接发给对方",
+                        fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Ink.TextHi,
+                    )
+                    Box(Modifier.height(6.dp))
+                    Text(
+                        inviteUrl,
+                        fontSize = 12.sp, color = Ink.TextMid, maxLines = 2,
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            copyInvite(); showInvite = false
+                        },
+                    )
+                    Box(Modifier.height(12.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        GlassTextButton("复制邀请", onClick = { copyInvite(); showInvite = false }, backdrop)
+                        GlassTextButton("分享", onClick = { shareInviteAction(); showInvite = false }, backdrop)
+                        Box(Modifier.weight(1f))
+                        GlassTextButton("关闭", onClick = { showInvite = false }, backdrop)
+                    }
+                }
+            }
+        }
+    }
+
     if (fullScreenView != null) {
         Box(Modifier.fillMaxSize()) {
             AndroidView(factory = { fullScreenView!! }, modifier = Modifier.fillMaxSize())
@@ -2694,7 +2945,6 @@ private fun CinemaPanel(
     onAllowChange: (Boolean) -> Unit,
     hits: List<MediaSniffer.Hit>,
     note: String,
-    showSniffer: Boolean,
     probe: MediaSniffer.PageProbe?,
     eme: CinemaProbe.EmeReport?,
     inviteUrl: String?,
@@ -2774,16 +3024,9 @@ private fun CinemaPanel(
                     // （实测：标题被截在上缘、最后一行 URL 被切一半），
                     // 内容短时又该收起来，不该撑着一块空玻璃。
                     //
-                    // 横屏时这张卡拿到的是分栏剩下的那点高度，所以**不管收没收量具都要能滚**，
-                    // 否则最后一行被栏底切掉（竖屏沿用原来的规则：只有展开量具才限高）。
-                    .then(
-                        if (wide) Modifier.verticalScroll(rememberScrollState())
-                        else if (showSniffer) {
-                            Modifier.heightIn(max = 236.dp).verticalScroll(rememberScrollState())
-                        } else {
-                            Modifier
-                        },
-                    )
+                    // 2026-10-06 A v3：这张卡现在**只有横屏在用**（竖屏浏览底部
+                    // 已收成一排工具条），分栏里那点高度必须可滚。
+                    .then(Modifier.verticalScroll(rememberScrollState()))
                     .padding(horizontal = 16.dp, vertical = 10.dp),
             ) {
                 /* 厅的动作行（2026-09-30 定稿）：开始放映 / 分享我的屏幕 / 浮窗播。
@@ -2900,7 +3143,7 @@ private fun CinemaPanel(
                         )
                     }
                 } else {
-                    // 还没选片
+                    // 还没选片（横屏右栏才走到这里；竖屏浏览的信息在「换片 N」芯片上）
                     Text(
                         if (playable.isEmpty()) "厅里还没选片" else "嗅到 ${playable.size} 条可播地址",
                         fontSize = 12.5.sp,
@@ -2908,84 +3151,17 @@ private fun CinemaPanel(
                         color = Ink.TextHi,
                     )
                     Text(
-                        /* 这句话原来写死"对方现在看到的是你的屏幕" —— 可厅先开这条路
-                           **根本不投屏**（只起信令 + 语音），观众看到的是一块等候屏。
-                           措辞跟着事实走：有没有在分享画面，是问出来的不是假设的。
-                           横屏时压成一句：这张卡在分栏里只有几百 dp 高，
-                           四行教学文案会把"放映状态"那几行挤出卡外（用户说的"有效信息太少"）。 */
-                        if (wide) {
-                            if (screenShared) "按「开始放映」他就改成自己播这条流（原生画质）"
-                            else "按「开始放映」，他那边本地播这条流；你的屏幕不用分享出去"
-                        } else if (screenShared)
-                            "对方现在看到的是你的屏幕。按「开始放映」，他就改成自己播这条流 " +
-                                "—— 画质原生，也不再压两层控件。要手挑候选就点「展开嗅探」。"
-                        else
-                            "厅里现在只有语音：对方看到的是一块等候屏。按「开始放映」，" +
-                                "他那边就本地播这条流 —— 画质原生，你的屏幕也不用分享出去。" +
-                                "要手挑候选就点「展开嗅探」。",
+                        /* 措辞跟着事实走：有没有在分享画面，是问出来的不是假设的
+                           （厅先开这条路根本不投屏，观众看到的是等候屏）。 */
+                        if (screenShared) "按「开始放映」他就改成自己播这条流（原生画质）"
+                        else "按「开始放映」，他那边本地播这条流；你的屏幕不用分享出去",
                         fontSize = 11.sp,
                         color = Ink.TextMid,
                         lineHeight = 16.sp,
                     )
                 }
-                if (showSniffer) {
-                    /* 三颗测试胶囊从主操作行搬到这里（见 CinemaScreen 的排布注释）：
-                       它们是量具，不该和「开始放映」抢同一行。 */
-                    Row(
-                        Modifier.fillMaxWidth().padding(bottom = 4.dp)
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        GlassTextButton("换一条流", onClick = { onTestUrl(CINEMA_TEST_HLS_2) }, backdrop)
-                        GlassTextButton("本地测试页", onClick = { onTestUrl(CINEMA_TEST_LOCAL) }, backdrop)
-                        GlassTextButton("HLS 测试流", onClick = { onTestUrl(CINEMA_TEST_HLS) }, backdrop)
-                    }
-                    Text(
-                        "点一条就放给对方（放映中点另一条 = 换片，不用先收厅）",
-                        fontSize = 10.sp,
-                        color = Ink.TextLow,
-                    )
-                    // 下面是 P0 那两条量具读数：平时收着，出问题时要一眼能看到。
-                    Text(
-                        probe?.let {
-                            val sz = if (it.videoWidth > 0) "${it.videoWidth}×${it.videoHeight}" else "未出画面"
-                            "页面 <video>：$sz · ${it.durationSec.toInt()}s · " +
-                                (if (it.isBlob) "blob:（MSE）" else "直链")
-                        } ?: "还没问到页面",
-                        fontSize = 10.5.sp,
-                        color = if (probe?.isBlob == true) Ink.Warn else Ink.TextLow,
-                    )
-                    Text(
-                        CinemaProbe.describeEme(eme),
-                        fontSize = 10.5.sp,
-                        color = Ink.TextLow,
-                    )
-                    /* 候选列表（雨见式卡片，2026-10-01 定稿）：类型徽标 + 时长大字 +
-                       疑似标签 + 正在播绿框高亮 + 「放映」/「浮窗」双动作。
-                       正在播的置顶、其余按时长降序；时长异步回填，没回来前显示"探测中"。 */
-                    val ranked = rankedCandidates(hits, playingUrl, durations)
-                    if (ranked.isNotEmpty()) {
-                        Text(
-                            "🔍 检测到 ${ranked.size} 条可播 · 最长的多半是正片，十几秒的基本是广告",
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Ink.TextMid,
-                        )
-                    }
-                    val maxDur = ranked.mapNotNull { durations[it.url] }.maxOrNull()
-                    ranked.forEach { h ->
-                        CandidateCard(
-                            hit = h,
-                            durMs = durations[h.url],
-                            current = h.url == playingUrl,
-                            longest = durations[h.url] != null && durations[h.url] == maxDur,
-                            action = "放映",
-                            onClick = { onPick(h) },
-                            secondaryAction = "浮窗",
-                            onSecondary = { onFloatPick(h) },
-                        )
-                    }
-                }
+                /* 量具段（测试流/探针读数/EME/候选列表）已搬进「换片」弹窗
+                   （2026-10-06 A v3：「展开嗅探」并入「换片 N」，弹窗=候选+读数）。 */
                 Text(note, fontSize = 10.5.sp, color = Ink.TextLow)
             }
         }
@@ -3046,9 +3222,26 @@ private fun androidx.compose.foundation.layout.BoxScope.FullscreenHint(text: Str
  */
 private enum class Commander { Page, Float, Theater }
 
+/** 历史条目的时间标签：今天只给钟点，昨天/更早带日期（浏览器习惯）。 */
+private fun histTimeLabel(ms: Long): String {
+    if (ms <= 0L) return ""
+    val now = java.util.Calendar.getInstance()
+    val c = java.util.Calendar.getInstance().apply { timeInMillis = ms }
+    val sameDay = now.get(java.util.Calendar.YEAR) == c.get(java.util.Calendar.YEAR) &&
+        now.get(java.util.Calendar.DAY_OF_YEAR) == c.get(java.util.Calendar.DAY_OF_YEAR)
+    val hm = String.format(
+        java.util.Locale.CHINA, "%02d:%02d",
+        c.get(java.util.Calendar.HOUR_OF_DAY), c.get(java.util.Calendar.MINUTE),
+    )
+    return if (sameDay) hm else String.format(
+        java.util.Locale.CHINA, "%d/%02d/%02d %s",
+        c.get(java.util.Calendar.YEAR) % 100, c.get(java.util.Calendar.MONTH) + 1,
+        c.get(java.util.Calendar.DAY_OF_MONTH), hm,
+    )
+}
+
 /** 毫秒 → "1:52:30" / "1:24" / "未知"。拿不到就老实说未知，不编数字。 */
-private fun fmtDuration(ms: Long?): String {
-    if (ms == null || ms <= 0) return "未知"
+private fun fmtDuration(ms: Long?): String {    if (ms == null || ms <= 0) return "未知"
     val total = ms / 1000
     val h = total / 3600
     val m = (total % 3600) / 60

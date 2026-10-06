@@ -475,19 +475,8 @@ fun ShareKindScreen(
                     screenCard()
                 }
             }
-            // 声音档放在这一屏说一次：它决定"对方听不听得到你说话"，
-            // 而多数人是在这里才第一次意识到"原来默认不连麦"。
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(
-                    "声音：${VoiceMode.label(quality.voiceMode)}",
-                    fontSize = 12.sp, color = Ink.TextMid, modifier = Modifier.weight(1f),
-                )
-                GlassTextButton("去改", onClick = onSettings, backdrop = backdrop)
-            }
+            /* 「声音：画面+连麦 · 去改」整行已删（2026-10-06 用户拍板"没必要了"）：
+               声音档在设置页「声音与画面」照样能改，分享画面页不再重复露出入口。 */
             }
         }
     }
