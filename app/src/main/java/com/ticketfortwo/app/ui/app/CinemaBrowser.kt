@@ -399,6 +399,12 @@ internal const val PIN_VIDEO_JS =
         }
         if(v.dataset.t2saved===undefined){
           v.dataset.t2saved=v.style.cssText;
+          /* **记钉屏前可见性**（2026-10-06 真网站"切回浏览还是滚动"根因）：
+             有的站 video 是 max-height:0 的占位壳（播放器库自己渲染，浏览态就
+             看不见它）。这种解钉后本就该隐身，若按"看不见就 scrollIntoView 找
+             视频"会把用户滚到占位壳位置 = 重新滚动。只有钉屏前**本来就可见**、
+             解钉却看不见的，才需要拉回来（2026-10-02 那个真视频场景）。 */
+          try{ var br=v.getBoundingClientRect(); v.dataset.t2wasvis=(br.width>=40&&br.height>=40)?'1':'0'; }catch(e){}
           /* **记下钉屏前的滚动位置**（2026-10-06 用户实测"切回浏览网页会重新
              滚动一次"）：钉屏把 video 抽成 position:fixed（脱离文档流）→ 页面
              变矮 → 浏览器把 scrollY 夹到新的最大滚动值；解钉时长回来但被夹掉的
@@ -456,6 +462,13 @@ internal const val PIN_VIDEO_JS =
         v.style.setProperty('top',et+'px','important');
         v.style.setProperty('width',w+'px','important');
         v.style.setProperty('height',h+'px','important');
+        /* **max-height 解锁**（2026-10-06 真网站抽搐根因）：height 与 max-height
+           是两个属性，站点 CSS 的 max-height:0（播放器库收着 video、用时才展开的
+           占位壳）会把我们 !important 的 height 也夹成 0 —— 钉完 rect 高度仍 0，
+           幂等比对永远对不上 → 每 2 秒重写一轮样式 → 网页反复重排 → 放映画面抽搐
+           （模拟器 GPU 转译放大成肉眼可见，真机快所以不明显）。 */
+        v.style.setProperty('max-height','none','important');
+        v.style.setProperty('min-height','0','important');
         v.style.setProperty('display','block','important');
         v.style.setProperty('object-fit','contain','important');
         v.style.setProperty('background','#000','important');
@@ -551,7 +564,10 @@ internal const val UNPIN_VIDEO_JS =
           var r=v.getBoundingClientRect();
           var invisible = !r || r.width<40 || r.height<40 ||
                           r.bottom<0 || r.top>window.innerHeight;
-          if(invisible){
+          /* **钉屏前就隐身的（占位壳）不算坏**（配合 PIN 的 t2wasvis）：强拉它
+             可见 + scrollIntoView 反而是"切回浏览网页乱滚"的来源。它回原样隐身，
+             页面滚回钉屏前的位置才是用户要的。 */
+          if(invisible && v.dataset.t2wasvis!=='0'){
             v.style.setProperty('position','static','important');
             v.style.setProperty('width','100%','important');
             v.style.setProperty('height','auto','important');
@@ -561,6 +577,7 @@ internal const val UNPIN_VIDEO_JS =
             v.style.setProperty('margin','0 auto','important');
             broke = true;
           }
+          delete v.dataset.t2wasvis;
         }catch(e){}
       });
       /* 黑底垫层与点击拦截层一并拆掉，页面恢复原样 */
