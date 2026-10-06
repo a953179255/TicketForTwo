@@ -473,9 +473,18 @@ internal const val PIN_VIDEO_JS =
            写进去的 top 会相对祖先生效，结果"尺寸全对、整体偏下"（假 ok 的另一半）。
            检测到偏移就把 video **拔到文档顶层**（脱离 transform 祖先），fixed
            立刻恢复视口语义。拔出只发生在放映钉屏期间，UNPIN 还原样式后页面
-           本来就被黑垫盖着/会重新导航，代价可控；不拔则错位永不自愈。 */
+           本来就被黑垫盖着/会重新导航，代价可控；不拔则错位永不自愈。
+           **拔出前记下原位置**（2026-10-06 真网站"切回浏览还是滚动"根因）：
+           原来只还原样式不还原位置 —— video 永远留在 <html> 末尾，解钉后页面
+           布局整个乱掉，invisible 兜底再把用户滚到页尾找视频。本地 mp4 页没有
+           transform 祖先从不触发拔出，所以从没暴露。WeakMap 存 {父,下一个兄弟}，
+           UNPIN 先插回原位再还原样式。 */
         if(Math.abs(r.top-et)>8 || Math.abs(r.left-el)>8){
-          try{ document.documentElement.appendChild(v); }catch(e){}
+          try{
+            if(!window.__t2home) window.__t2home=new WeakMap();
+            if(!window.__t2home.has(v)) window.__t2home.set(v,{p:v.parentNode,n:v.nextSibling});
+            document.documentElement.appendChild(v);
+          }catch(e){}
           r=v.getBoundingClientRect();
         }
         return 'fix|vp='+vw+'x'+vh+'|ar='+ratio.toFixed(3)+
@@ -524,6 +533,13 @@ internal const val UNPIN_VIDEO_JS =
       var broke = false;   // 有 video 原始样式就是坏的（零尺寸/隐藏）→ 需兜底滚
       [].slice.call(document.querySelectorAll('video')).forEach(function(v){
         if(v.dataset.t2saved===undefined) return;
+        /* **先插回钉屏前的原位**（配合 PIN 的 __t2home 记账）：被拔到 <html>
+           末尾的 video 只还原样式不回原位，页面布局就永久乱了。 */
+        try{
+          var home=window.__t2home && window.__t2home.get(v);
+          if(home && home.p && home.p.contains(v)!==true){ home.p.insertBefore(v, home.n||null); }
+          if(window.__t2home) window.__t2home.delete(v);
+        }catch(e){}
         v.style.cssText=v.dataset.t2saved; delete v.dataset.t2saved;
         if(v.dataset.t2ctrl!==undefined){ v.controls=v.dataset.t2ctrl==='1'; delete v.dataset.t2ctrl; }
         /* **还原 ≠ 可见**（2026-10-02 用户实测"切浏览网页只剩黑、视频不见" +
@@ -562,6 +578,7 @@ internal const val UNPIN_VIDEO_JS =
          否则 scrollTo 作用在还没长回来的矮页面上又被夹一次。 */
       try{
         void document.documentElement.scrollHeight;
+        var preY = Math.round(window.scrollY||window.pageYOffset||0);
         if(broke){
           var vv=document.querySelector('video');
           if(vv && vv.scrollIntoView) vv.scrollIntoView({block:'center'});
@@ -569,6 +586,10 @@ internal const val UNPIN_VIDEO_JS =
           window.scrollTo(0, savedY);
         }
         delete window.__t2scrollY;
+        /* 诊断（2026-10-06 真网站"切回浏览还是滚动"排查）：还原前后各读一次，
+           带 broke 标志 —— 定位是"没还原"还是"还原后又被别人滚走"。 */
+        return 'ok|pre='+preY+'|post='+Math.round(window.scrollY||0)+
+          '|saved='+(savedY==null?'-':Math.round(savedY))+'|broke='+broke;
       }catch(e){}
       return 'ok';})()"""
 
