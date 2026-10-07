@@ -13,8 +13,14 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.layout.layout
+import kotlin.math.roundToInt
 import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -1942,21 +1948,34 @@ fun CinemaScreen(
                约束（300dp ↔ 填满），视口变化由页内 resize 重钉兜底；节点不动，画面就不闪。 */
             /* 读网页时把这两行收起来（chromeHidden）—— 只有地址行+动作行跟着躲，
                **顶栏不躲**：它装着唯一的「返回」和「放映/浏览」开关，躲了进得去出不来。
-               收起是"不布局"而不是"变透明"：不布局网页才真的多吃到这块高度。 */
-            if (!theater && !chromeHidden) {
-                addressRow(Modifier)
-                actionRow()
-                /* 方案A：空厅的快捷芯片行 —— 粘贴 / 上次一起看 / 收藏夹。
-                   引导页删掉后，原来那两张操作卡的目的全压进这一行：
-                   每颗都是一下就到位，不存在"先撤引导再聚焦"的中间步。 */
-                if (pageUrl.isEmpty()) {
-                    RoomShortcuts(
-                        backdrop = backdrop,
-                        recentUrl = recentUrl,
-                        onPaste = { pasteFromClip() },
-                        onRecent = { openRecent(it) },
-                        onFavorites = { showFavs = true },
-                    )
+               收起是"不布局"而不是"变透明"：不布局网页才真的多吃到这块高度。
+
+               过渡动画（2026-10-08 用户反馈"收放太生硬"）：高度平滑收放 + 淡入淡出，
+               网页的高度跟着一帧帧变，不会"啪"一下跳一段。方向**朝顶栏那一侧**
+               （anchor = Top）：视觉上是"缩进顶栏里 / 从顶栏里滑下来"。
+               收比放快一点（160/200）：收的动作要利落，放的动作可以软一些。
+               为什么不用 AnimatedVisibility 的 expandVertically：实测（2026-10-08）
+               同一组里 fadeIn 正常走、尺寸变换却瞬跳（内容全是 drawBackdrop 玻璃
+               组件，疑与其测量路径相互作用）；改用下面的 VerticalReveal 自绘
+               layout，不依赖库内部行为，滑动手感也更贴。 */
+            if (!theater) {
+                VerticalReveal(visible = !chromeHidden, anchor = Alignment.Top) {
+                    Column {
+                        addressRow(Modifier)
+                        actionRow()
+                        /* 方案A：空厅的快捷芯片行 —— 粘贴 / 上次一起看 / 收藏夹。
+                           引导页删掉后，原来那两张操作卡的目的全压进这一行：
+                           每颗都是一下就到位，不存在"先撤引导再聚焦"的中间步。 */
+                        if (pageUrl.isEmpty()) {
+                            RoomShortcuts(
+                                backdrop = backdrop,
+                                recentUrl = recentUrl,
+                                onPaste = { pasteFromClip() },
+                                onRecent = { openRecent(it) },
+                                onFavorites = { showFavs = true },
+                            )
+                        }
+                    }
                 }
             }
             /* 2026-09-30 结构修正（三案公共前提）：视频区**吃剩余**（weight），
@@ -2477,7 +2496,7 @@ fun CinemaScreen(
                 }
                 }
             }
-            } else if (!chromeHidden) {
+            } else {
                 /* 浏览态底部（2026-10-06 方案 A v3 定稿）：原来整张 CinemaPanel
                    （动作行+邀请行+长说明+note）收成一排工具条 —— 网页多吃 ~100dp。
                    信息去向：可播条数 → 动作行「换片 N」芯片；邀请 → ⤴ 键弹面板；
@@ -2486,7 +2505,11 @@ fun CinemaScreen(
                    横屏 wide 分支仍用全量 CinemaPanel（右栏空间大，信息有地方放）。
                    与顶部同规则跟着滚动收放（2026-10-06 用户问到底部要不要一样躲 ——
                    要：目的就是"读网页时网页最大"，只收顶部等于只有一半的效果；
-                   往回滑一下两排一起回来，主动作不会失联）。 */
+                   往回滑一下两排一起回来，主动作不会失联）。
+                   过渡动画与顶部同一套（2026-10-08）：淡入淡出 + 高度平滑收放，
+                   方向**朝屏幕底那一侧**（anchor = Bottom）—— 视觉上
+                   "从底下滑上来 / 缩回底下去"，跟手指的方向对得上。 */
+                VerticalReveal(visible = !chromeHidden, anchor = Alignment.Bottom) {
                 Column(
                     Modifier
                         .padding(horizontal = 12.dp)
@@ -2520,6 +2543,7 @@ fun CinemaScreen(
                         note, fontSize = 10.5.sp, color = Ink.TextLow,
                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
                     )
+                }
                 }
             }
             /* 甲板后的旧 Spacer 已删除（2026-10-05）：它的位置在甲板**后面**，
@@ -3576,6 +3600,55 @@ private fun SegCell(label: String, on: Boolean, backdrop: LayerBackdrop, click: 
     }
 }
 
+
+/**
+ * 竖直方向的"抽屉"收放（2026-10-08 浏览页工具条专用，也可复用）：
+ * [visible] = false 时高度收到 0，true 时长回原高，同时淡入淡出。
+ *
+ * 为什么自己画而不 AnimatedVisibility.expandVertically/shrinkVertically：
+ * 实测同一组过渡里 fadeIn 正常走、尺寸变换瞬跳（2026-10-08 模拟器，内容全是
+ * drawBackdrop 液态玻璃组件，疑与库的测量路径相互作用）。自绘 layout 只依赖
+ * 最基础的测量/摆放，行为完全可控 —— 而且内容按**原尺寸**测量、只动裁切窗口，
+ * 收放过程中按钮不会被压扁、文字不会重排，手感是"整块滑走/滑入"。
+ *
+ * [anchor] = 收起时内容钉住的那条边，决定滑动方向：
+ *   Alignment.Top    —— 顶部工具条：钉住窗口底缘，收 = 整块向上滑进顶栏里；
+ *   Alignment.Bottom —— 底部工具条：钉住窗口顶缘，收 = 整块向下滑进屏底。
+ *
+ * 时长：收 160 / 放 200 —— 收要利落，放可以软一点（FastOutSlowIn 通用曲线）。
+ */
+@Composable
+private fun VerticalReveal(
+    visible: Boolean,
+    anchor: Alignment.Vertical,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    /* animateFloatAsState 首次组合直接落位（进屏不播动画），之后 visible 一变就动。 */
+    val frac by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(if (visible) 200 else 160, easing = FastOutSlowInEasing),
+        label = "verticalReveal",
+    )
+    /* 收到底就不布局了：省一帧是一帧，网页也真正拿到全部高度。 */
+    if (frac > 0.001f) {
+        Box(
+            modifier
+                .alpha(frac)
+                .clipToBounds()
+                .layout { measurable, constraints ->
+                    val p = measurable.measure(constraints)
+                    val h = (p.height * frac).roundToInt()
+                    val shift = p.height - h
+                    layout(p.width, h) {
+                        // Top：内容整体上移 shift，可见的是它的下段（贴着顶栏滑）；
+                        // Bottom：内容钉在窗口顶缘（窗口顶缘随高度下移 = 整块下滑）。
+                        p.placeRelative(0, if (anchor == Alignment.Top) -shift else 0)
+                    }
+                },
+        ) { content() }
+    }
+}
 
 /** 甲板底坞的一格（收厅 / 分享我的屏幕 / 后退）：液态玻璃；hot = 收厅的绿染。 */
 @Composable
