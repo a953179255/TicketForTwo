@@ -621,6 +621,30 @@ fun CinemaScreen(
         if (float.active) pickTarget = h else openFloat(h)
     }
 
+    /* ══ 浏览页"读网页时收起工具条"（2026-10-06 用户要求）══
+       规矩与 Chrome / 微信文章同款：
+       · 页面往下走（手指上滑、继续往下读）→ 攒够一小段就把上下工具条收起来，
+         网页多吃 ~140dp（地址行 56 + 动作行 40 + 底排 50+间距）；
+       · 往回（上）滑 → 立刻唤回，不用攒；
+       · 回到页顶 → 恒显示（页顶是"出发点"，控件本来就该在手边）；
+       · 放映态不参与 —— 甲板是遥控器，躲了就没法操作了（见 host.onWebScroll 闸门）。
+
+       为什么用"累计量+静默期"而不是"一有滚动就收"：
+       ① 一有滚动就收会让"手指抖一下/惯性回弹"闪来闪去，攒够 12dp 才收更稳；
+       ② 收起/唤回会**改变 WebView 的高度**，Chromium 会顺手把 scrollY 夹到新范围、
+          又抛一次 onScrollChanged —— 那一次是尺寸变化造成的假滚动，不设静默期就会
+          "刚收起又被自己的假滚动判定成继续往下读"（或反过来），看着像抽搐。 */
+    var chromeHidden by remember { mutableStateOf(false) }
+    /** 同方向滚动累计量（dp），换方向即清零。 */
+    var scrollAccDp by remember { mutableStateOf(0f) }
+    /** 静默期截止时刻（uptimeMillis）：这段时间内忽略滚动回调。 */
+    var scrollQuietUntil by remember { mutableStateOf(0L) }
+    /* 模式一变就把工具条放回来：躲起来的状态只属于"正在读这一页"，
+       进放映/回浏览都不该沿用上一次的隐藏（否则回浏览上下全空，得滑一下才出现）。 */
+    LaunchedEffect(theater) { chromeHidden = false }
+    /** dp↔px：滚动回调给的是 px，阈值按 dp 写才不会在高 dpi 机上缩水。 */
+    val pxPerDp = context.resources.displayMetrics.density
+
     /* WebView 从 CinemaBrowser 领取（进程级存活），但 **clients 每次进屏都重装**：
        它们闭包引用的这一屏组合状态（inputUrl/hits/player/…）是组合态 —— 重进后
        还挂着上一屏的闭包就会写进死状态。宿主对象内联创建（不 remember），
@@ -629,6 +653,10 @@ fun CinemaScreen(
         val host = object : CinemaBrowserHost {
             override fun onPageStarted(url: String?, backAvailable: Boolean) {
                 canGoBack = backAvailable
+                /* 换页 = 新的一段阅读：工具条回到"在手边"的默认态
+                   （沿用上一页的隐藏会让人以为控件坏了）。 */
+                chromeHidden = false
+                scrollAccDp = 0f
                 if (url != null) {
                     inputUrl = url
                     cinemaLastPageUrl = url
@@ -665,6 +693,30 @@ fun CinemaScreen(
                     )
                 }
                 webGen += 1
+            }
+            /* 网页滚动 → 收/放工具条（规矩见上面 chromeHidden 的注释）。
+               回调在主线程、滚动期间高频，所以这里只做加减法，不碰任何重活。 */
+            override fun onWebScroll(dyPx: Int, scrollY: Int) {
+                if (theater) return                       // 放映态甲板常驻
+                val now = android.os.SystemClock.uptimeMillis()
+                if (now < scrollQuietUntil) return        // 尺寸变化引发的假滚动
+                if (scrollY <= 8f * pxPerDp) {            // 回到页顶：恒显示
+                    scrollAccDp = 0f
+                    if (chromeHidden) { chromeHidden = false; scrollQuietUntil = now + 300L }
+                    return
+                }
+                val d = dyPx / pxPerDp
+                if (d > 0f) {                              // 继续往下读 → 攒够 12dp 收起
+                    scrollAccDp += d
+                    if (scrollAccDp >= 12f && !chromeHidden) {
+                        chromeHidden = true
+                        scrollAccDp = 0f
+                        scrollQuietUntil = now + 300L
+                    }
+                } else if (d < 0f) {                       // 往回滑 → 立刻唤回
+                    scrollAccDp = 0f
+                    if (chromeHidden) { chromeHidden = false; scrollQuietUntil = now + 300L }
+                }
             }
             override fun interceptRequest(request: WebResourceRequest): Boolean {
                 val isNew = sniffer.observe(request)
@@ -1888,7 +1940,10 @@ fun CinemaScreen(
                每次切换 AndroidView 都整棵 detach/reattach，Chromium 重挂黑闪一两帧、
                再叠加页面重排 = 用户实测的"切换闪烁"。切模式只改这一份节点的布局
                约束（300dp ↔ 填满），视口变化由页内 resize 重钉兜底；节点不动，画面就不闪。 */
-            if (!theater) {
+            /* 读网页时把这两行收起来（chromeHidden）—— 只有地址行+动作行跟着躲，
+               **顶栏不躲**：它装着唯一的「返回」和「放映/浏览」开关，躲了进得去出不来。
+               收起是"不布局"而不是"变透明"：不布局网页才真的多吃到这块高度。 */
+            if (!theater && !chromeHidden) {
                 addressRow(Modifier)
                 actionRow()
                 /* 方案A：空厅的快捷芯片行 —— 粘贴 / 上次一起看 / 收藏夹。
@@ -2422,16 +2477,27 @@ fun CinemaScreen(
                 }
                 }
             }
-            } else {
+            } else if (!chromeHidden) {
                 /* 浏览态底部（2026-10-06 方案 A v3 定稿）：原来整张 CinemaPanel
                    （动作行+邀请行+长说明+note）收成一排工具条 —— 网页多吃 ~100dp。
                    信息去向：可播条数 → 动作行「换片 N」芯片；邀请 → ⤴ 键弹面板；
                    量具读数 → 换片弹窗底部；两句教学文案删除（点了都有反馈）。
                    放映态信息（进度/方向盘/回执）在甲板上看，这里不重复。
-                   横屏 wide 分支仍用全量 CinemaPanel（右栏空间大，信息有地方放）。 */
-                Column(Modifier.padding(horizontal = 12.dp)) {
+                   横屏 wide 分支仍用全量 CinemaPanel（右栏空间大，信息有地方放）。
+                   与顶部同规则跟着滚动收放（2026-10-06 用户问到底部要不要一样躲 ——
+                   要：目的就是"读网页时网页最大"，只收顶部等于只有一半的效果；
+                   往回滑一下两排一起回来，主动作不会失联）。 */
+                Column(
+                    Modifier
+                        .padding(horizontal = 12.dp)
+                        /* 与网页之间留一口气（2026-10-06 用户反馈"下方和网页几乎合并
+                           在一起"）：原来这排上下都没有纵向间距，玻璃键直接压在网页
+                           下沿，看着像网页的一部分。上 10dp 是"网页到此结束"，
+                           下 8dp 是手势条前的收尾。 */
+                        .padding(top = 10.dp, bottom = 8.dp),
+                ) {
                     Row(
-                        Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                        Modifier.fillMaxWidth().padding(bottom = 4.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         DockBtn(

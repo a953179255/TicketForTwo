@@ -113,6 +113,21 @@ android {
     }
 }
 
+/* ★ 调试构建必须关掉 Compose 源信息（2026-10-07 实测，血的教训）
+   调试构建默认给每个可组合调用前后插 traceEventStart/End + 一串常量（给布局检查器
+   定位源码用）。放映厅那个 CinemaScreen 是 3600 行的巨型可组合，实测：
+     · 开着源信息 → 这一个方法 261 个寄存器、44KB 字节码
+     · 关掉       → 169 个寄存器、32KB
+   ART 的校验器对方法寄存器数有硬上限（就在 256 附近）：261 直接被拒收 ——
+   运行期抛 `VerifyError: register v3 has type Reference: Composer but expected Integer`，
+   一进放映厅就崩（不是代码逻辑错，编译期完全看不出来）。原版本就已经顶在 255，
+   再加三五个状态变量就爆。
+   关掉后余量回到 ~87 个寄存器，后面还能正常加功能。
+   代价：布局检查器/预览看不到源码位置 —— 本 App 用不到这些。 */
+composeCompiler {
+    includeSourceInformation = false
+}
+
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)

@@ -62,6 +62,37 @@ import androidx.compose.runtime.setValue
      * 重定向都得自己实现），那是 A 档中继该做的事。
      */
     fun interceptRequest(request: WebResourceRequest): Boolean
+
+    /**
+     * 网页滚动（**主线程**）：[dyPx] > 0 = 页面往下走（手指上滑、继续往下读），
+     * < 0 = 往回（上）滑；[scrollY] 是当前滚动量（px，页顶为 0）。
+     *
+     * 用途：浏览页"读网页时把上下工具条收起来"（2026-10-06 用户要求）。
+     * 默认空实现 —— 只有关心滚动的宿主才覆写。
+     */
+    fun onWebScroll(dyPx: Int, scrollY: Int) {}
+}
+
+/**
+ * 会往外报滚动的 WebView。
+ *
+ * 为什么要这个子类：网页的滚动发生在 WebView 自己的合成器里，外面拿不到任何信号 ——
+ * `onScrollChanged` 是 protected，Compose 的嵌套滚动也接不到网页内部的手势。
+ * 想让界面知道"人在滚网页"，只能由子类把这一次回调转出来。
+ *
+ * 出口挂在 [CinemaBrowserHost.onWebScroll] 上：**每次进屏重装 clients 时重挂**
+ * （见 [CinemaBrowser.install]），闭包绑的永远是这一屏的组合状态，跟其余
+ * clients 同一条规矩 —— 不这么做就会写进上一屏的死状态。
+ */
+internal class ScrollWebView(context: Context) : WebView(context) {
+    /** 滚动出口：null = 还没接线（此时滚动被丢弃，不报错）。 */
+    var scrollSink: ((dyPx: Int, scrollY: Int) -> Unit)? = null
+
+    override fun onScrollChanged(l: Int, t: Int, oldl: Int, oldt: Int) {
+        super.onScrollChanged(l, t, oldl, oldt)
+        val dy = t - oldt
+        if (dy != 0) scrollSink?.invoke(dy, t)
+    }
 }
 
 /** 试嗅探用的公开 HLS 测试流（Mux 官方测试台，无需登录、无 DRM）。 */
@@ -131,13 +162,17 @@ internal object CinemaBrowser {
             (kept.context as? MutableContextWrapper)?.setBaseContext(context)
             return kept
         }
-        return WebView(MutableContextWrapper(context)).also { webView = it }
+        /* 用会报滚动的那只（ScrollWebView），否则界面永远不知道人在滚网页。 */
+        return ScrollWebView(MutableContextWrapper(context)).also { webView = it }
     }
 
     /** 装上设置与 clients。宿主回调里只动宿主状态；历史/劫持全在本对象内部运算。
      * **每次进屏都会重装一遍** —— clients 闭包绑的是宿主的组合态，重挂旧闭包会写进死状态。 */
     @SuppressLint("SetJavaScriptEnabled")
     fun install(webView: WebView, host: CinemaBrowserHost) {
+        /* 滚动出口接线：宿主每次进屏重装 clients，这里跟着重挂 ——
+           host 是本次组合建的对象，闭包绑的是这一屏的状态。 */
+        (webView as? ScrollWebView)?.scrollSink = { dy, y -> host.onWebScroll(dy, y) }
         webView.apply {
             settings.javaScriptEnabled = true
             // 只记不消费：网页内的触摸时间戳，供退回窗口判"这跳是用户点的还是页面自己跳的"
